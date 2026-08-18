@@ -47,7 +47,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
@@ -69,7 +69,7 @@ jobs:
     env:
       ALLOW_SMOKE_DB_WIPE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Copy env vars
         run: cp .env.example .env
       - name: Start docker-compose stack
