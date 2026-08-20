@@ -16,9 +16,25 @@ services:
       redis:
         condition: service_healthy
 
-  worker:
+  worker-light:
     build: .
-    command: uv run celery -A app.tasks worker --loglevel=info
+    command: uv run rq worker --url redis://redis:6379/0 light
+    environment:
+      - POSTGRES_USER=veditor
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=veditor
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-heavy:
+    build: .
+    command: uv run rq worker --url redis://redis:6379/0 heavy
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password

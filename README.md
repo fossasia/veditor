@@ -1,6 +1,6 @@
 # VEditor
 
-Standalone, reusable video-review/transcode pipeline using FastAPI and Celery.
+Standalone, reusable video-review/transcode pipeline using FastAPI and RQ.
 
 ## Development Setup
 
@@ -65,9 +65,9 @@ If you prefer to run the entire stack locally without Docker (for faster reloadi
    uv run uvicorn app.main:app --reload
    ```
 
-7. Start the Celery worker natively (in a separate terminal):
+7. Start the RQ worker natively (in a separate terminal):
    ```bash
-   uv run celery -A app.tasks worker --loglevel=info
+   uv run rq worker -u redis://localhost:6379/0 light heavy
    ```
 
 8. Run the tests natively:

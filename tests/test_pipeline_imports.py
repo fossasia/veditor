@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-FORBIDDEN_PREFIXES = ("fastapi", "celery", "sqlalchemy", "app.db")
+FORBIDDEN_PREFIXES = ("fastapi", "rq", "sqlalchemy", "app.db")
 
 
 def is_forbidden(module_name: str | None) -> bool:
@@ -16,7 +16,7 @@ def is_forbidden(module_name: str | None) -> bool:
 def test_pipeline_imports():
     """
     Ensure that no file inside app/pipeline imports from forbidden modules:
-    fastapi, celery, sqlalchemy, or app.db.
+    fastapi, rq, sqlalchemy, or app.db.
     """
     project_root = Path(__file__).parent.parent
     pipeline_dir = project_root / "app" / "pipeline"

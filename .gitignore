@@ -45,9 +45,6 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
 
 # Environments
 .env
