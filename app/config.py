@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
 
     data_dir: str = "data"
     storage_backend: Literal["local"] = "local"
+    ingest_roots: list[Path] = []
 
     @property
     def database_url(self) -> str:

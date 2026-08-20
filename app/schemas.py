@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class EventBase(BaseModel):
@@ -81,3 +81,14 @@ class ReviewRead(ReviewBase):
 
 class TalkWithJobsRead(TalkRead):
     jobs: list[JobRead] = []
+
+
+class RecordingIngestRequest(BaseModel):
+    source_path: str | None = None
+    relative_key: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_path(self):
+        if bool(self.source_path) == bool(self.relative_key):
+            raise ValueError("exactly one of source_path or relative_key is required")
+        return self
