@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.141.1",
     "uvicorn>=0.52.3",
-    "celery>=5.6.3",
+    "rq>=2.11.0",
     "redis>=8.1.0",
     "sqlalchemy>=2.0.52",
     "alembic>=1.19.1",
