@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.19.1",
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
+    "av>=18.1.0",
 ]
 
 [project.scripts]
@@ -24,6 +25,7 @@ dev = [
     "httpx>=0.28.1",
     "ruff>=0.16.3",
     "pre-commit>=4.6.2",
+    "numpy>=2.5.2",
 ]
 
 [build-system]
