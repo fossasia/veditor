@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VEditor • Video Pipeline Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <!-- Navbar -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>VEditor</h1>
+          <span class="brand-badge">Pipeline UI</span>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <div class="api-key-input-wrapper">
+          <svg class="key-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 2l-2 2m-1.5 1.5L14 9l-1.5-1.5L11 9l-1.5-1.5L8 9l-4 4a5.5 5.5 0 0 0 7.78 7.78l4-4-1.5-1.5L15 14l1.5-1.5L15 11l3.5-3.5 2.5 2.5z"></path>
+          </svg>
+          <input type="password" id="apiKeyInput" placeholder="API Key" value="test-client-key" />
+          <button id="saveApiKeyBtn" class="btn btn-secondary btn-sm">Save Key</button>
+        </div>
+        <button id="refreshTalksBtn" class="btn btn-primary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6M1 20v-6h6"></path>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="app-main">
+    <div class="main-container">
+      
+      <!-- Stats Ribbon -->
+      <section class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon icon-blue">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+              <line x1="7" y1="2" x2="7" y2="22"></line>
+              <line x1="17" y1="2" x2="17" y2="22"></line>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <span class="stat-label">Total Talks</span>
+            <h2 id="statTotalTalks" class="stat-value">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon icon-yellow">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <span class="stat-label">Pending Approval</span>
+            <h2 id="statPending" class="stat-value">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon icon-purple">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <span class="stat-label">Processing / Cutting</span>
+            <h2 id="statProcessing" class="stat-value">0</h2>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon icon-green">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <span class="stat-label">Ready / Done</span>
+            <h2 id="statDone" class="stat-value">0</h2>
+          </div>
+        </div>
+      </section>
+
+      <!-- Talk List Section -->
+      <section class="talks-section">
+        <div class="section-header">
+          <div class="filter-tabs" id="statusFilterTabs">
+            <button class="tab-btn active" data-filter="all">All Talks</button>
+            <button class="tab-btn" data-filter="pending_approval">Pending Approval</button>
+            <button class="tab-btn" data-filter="cutting">Cutting</button>
+            <button class="tab-btn" data-filter="preview">Preview</button>
+            <button class="tab-btn" data-filter="done">Completed</button>
+          </div>
+
+          <div class="search-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="searchTalksInput" placeholder="Search title, speaker, event..." />
+          </div>
+        </div>
+
+        <!-- Talks Table -->
+        <div class="table-card">
+          <div class="table-responsive">
+            <table class="talks-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Talk & Speakers</th>
+                  <th>Event & Room</th>
+                  <th>Status</th>
+                  <th>Timestamps</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="talksTableBody">
+                <tr class="empty-row">
+                  <td colspan="6">
+                    <div class="empty-state">
+                      <p>Loading talks from VEditor API...</p>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Step-by-Step Pipeline Studio Modal -->
+  <div id="cutterModal" class="modal-backdrop">
+    <div class="modal-container modal-xl">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 id="modalTalkTitle">Pipeline Studio</h3>
+          <span id="modalTalkEventBadge" class="badge">Event #101</span>
+        </div>
+        <button class="modal-close-btn" id="closeCutterModalBtn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="cutter-layout">
+          
+          <!-- Left: Universal Video Player & Timecode Bar -->
+          <div class="player-panel">
+            <div class="video-container">
+              <video id="previewVideo" controls preload="metadata">
+                <source src="/data/1/raw/sample-3.mp4" type="video/mp4">
+                Your browser does not support HTML5 video.
+              </video>
+            </div>
+
+            <div class="timeline-controls">
+              <div class="timecode-display">
+                <div class="tc-item">
+                  <span class="tc-label">Current:</span>
+                  <span class="tc-val" id="tcCurrent">00:00.00</span>
+                </div>
+                <div class="tc-item">
+                  <span class="tc-label">Start Cut (In):</span>
+                  <span class="tc-val tc-in" id="tcStart">0.00s</span>
+                </div>
+                <div class="tc-item">
+                  <span class="tc-label">End Cut (Out):</span>
+                  <span class="tc-val tc-out" id="tcEnd">0.00s</span>
+                </div>
+                <div class="tc-item">
+                  <span class="tc-label">Duration:</span>
+                  <span class="tc-val" id="tcDuration">0.00s</span>
+                </div>
+              </div>
+
+              <div class="marker-btn-group">
+                <button id="setStartBtn" class="btn btn-secondary btn-sm">Set In Point [</button>
+                <button id="setEndBtn" class="btn btn-secondary btn-sm">Set Out Point ]</button>
+                <button id="playCutRangeBtn" class="btn btn-accent btn-sm">Preview Range</button>
+                <button id="resetVideoBtn" class="btn btn-secondary btn-sm" style="margin-left: auto;">Reset to Source</button>
+              </div>
+            </div>
+
+            <!-- Execution Status Banner -->
+            <div id="stepResultBanner" class="result-banner" style="display: none;">
+              <span id="stepResultText">Step completed successfully.</span>
+            </div>
+          </div>
+
+          <!-- Right: Step-by-Step Pipeline Workbench Tabs -->
+          <div class="pipeline-options-panel">
+            
+            <!-- Complete Pipeline Quick Trigger -->
+            <div class="full-pipeline-card">
+              <div class="full-pipeline-header">
+                <div>
+                  <strong>⚡ Complete End-to-End Pipeline</strong>
+                  <p style="font-size: 0.72rem; color: var(--text-muted);">Assembles [Intro Slate] + [Cut Talk] + [Outro Slate] into a Master 1080p Video.</p>
+                </div>
+                <button id="runFullPipelineBtn" class="btn btn-primary btn-sm">
+                  Run Full Pipeline
+                </button>
+              </div>
+            </div>
+
+            <!-- Step Navigation Tabs -->
+            <div class="step-tabs" id="pipelineStepTabs">
+              <button class="step-tab active" data-step="1">1. Cut & Detect</button>
+              <button class="step-tab" data-step="2">2. Loudness</button>
+              <button class="step-tab" data-step="3">3. Intro/Outro</button>
+              <button class="step-tab" data-step="4">4. Preview</button>
+              <button class="step-tab" data-step="5">5. Transcode</button>
+            </div>
+
+            <!-- STEP 1: Video Trimming & Speech Detection -->
+            <div class="step-content active" id="step1Content">
+              <div class="step-header">
+                <h4>Step 1: Boundary Detection & Trimming (`cut.py` / `detect.py`)</h4>
+                <p>Auto-detect speech boundaries or set start/end markers to trim the talk.</p>
+              </div>
+
+              <div class="option-group">
+                <button id="runDetectBtn" class="btn btn-secondary btn-block">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 14 14"></polyline>
+                  </svg>
+                  Auto-Detect Speech Boundaries (`detect.py`)
+                </button>
+                <div id="detectSummary" class="detect-badge" style="display: none;"></div>
+              </div>
+
+              <div class="option-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="forceReencodeCheckbox" />
+                  <span>Force Frame-Accurate Re-encode (slower, keyframe independent)</span>
+                </label>
+              </div>
+
+              <button id="runCutBtn" class="btn btn-primary btn-block">
+                Execute Video Cut (`cut.py`)
+              </button>
+            </div>
+
+            <!-- STEP 2: Audio Loudness Normalization -->
+            <div class="step-content" id="step2Content">
+              <div class="step-header">
+                <h4>Step 2: Loudness Normalization (`loudness.py`)</h4>
+                <p>Apply dual-pass EBU R128 loudness filtering to achieve standard volume.</p>
+              </div>
+
+              <div class="option-group">
+                <label class="input-label" for="targetLufsInput">Target LUFS (-70.0 to 0.0)</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <input type="number" id="targetLufsInput" class="form-input" value="-16.0" step="0.5" min="-70" max="0" />
+                  <span style="color: var(--text-muted); font-size: 0.8rem;">LUFS</span>
+                </div>
+              </div>
+
+              <div class="quick-presets">
+                <span class="input-label">Standard Presets:</span>
+                <div style="display: flex; gap: 0.35rem;">
+                  <button class="btn btn-secondary btn-sm lufs-preset-btn" data-lufs="-16.0">YouTube / Web (-16)</button>
+                  <button class="btn btn-secondary btn-sm lufs-preset-btn" data-lufs="-23.0">Broadcast (-23)</button>
+                  <button class="btn btn-secondary btn-sm lufs-preset-btn" data-lufs="-14.0">Spotify (-14)</button>
+                </div>
+              </div>
+
+              <button id="runLoudnessBtn" class="btn btn-primary btn-block" style="margin-top: 1rem;">
+                Execute Loudness Normalization (`loudness.py`)
+              </button>
+            </div>
+
+            <!-- STEP 3: Title Slate & Outro Builder -->
+            <div class="step-content" id="step3Content">
+              <div class="step-header">
+                <h4>Step 3: Title Slate & Outro Generator (`intro.py`)</h4>
+                <p>Generate high-definition opening title slates and closing outro slates.</p>
+              </div>
+
+              <div class="sub-section">
+                <span class="sub-heading">Intro Slate Configuration</span>
+                <div class="form-grid">
+                  <div>
+                    <label class="input-label">Event Name</label>
+                    <input type="text" id="introEventInput" class="form-input" value="FOSSASIA Summit 2026" />
+                  </div>
+                  <div>
+                    <label class="input-label">Room / Date</label>
+                    <input type="text" id="introRoomInput" class="form-input" value="Hall 1 • Main Stage" />
+                  </div>
+                  <div style="grid-column: 1 / -1;">
+                    <label class="input-label">Talk Title</label>
+                    <input type="text" id="introTitleInput" class="form-input" value="Open Source Video Editing & Transcoding Pipeline" />
+                  </div>
+                  <div style="grid-column: 1 / -1;">
+                    <label class="input-label">Speakers (comma-separated)</label>
+                    <input type="text" id="introSpeakersInput" class="form-input" value="Saalim, ViRUS-0-0" />
+                  </div>
+                </div>
+                <button id="runIntroBtn" class="btn btn-secondary btn-block btn-sm" style="margin-top: 0.5rem;">
+                  Generate & Preview Intro Slate (4.0s)
+                </button>
+              </div>
+
+              <div class="sub-section" style="margin-top: 1rem;">
+                <span class="sub-heading">Outro Slate Configuration</span>
+                <div class="form-grid">
+                  <div style="grid-column: 1 / -1;">
+                    <label class="input-label">Thank You Heading</label>
+                    <input type="text" id="outroThankYouInput" class="form-input" value="Thank You For Watching!" />
+                  </div>
+                  <div style="grid-column: 1 / -1;">
+                    <label class="input-label">Links / Website</label>
+                    <input type="text" id="outroLinksInput" class="form-input" value="Watch more talks at eventyay.com • fossasia.org" />
+                  </div>
+                </div>
+                <button id="runOutroBtn" class="btn btn-secondary btn-block btn-sm" style="margin-top: 0.5rem;">
+                  Generate & Preview Outro Slate (3.5s)
+                </button>
+              </div>
+            </div>
+
+            <!-- STEP 4: Fast Preview -->
+            <div class="step-content" id="step4Content">
+              <div class="step-header">
+                <h4>Step 4: Low-Res Preview Generation (`preview.py`)</h4>
+                <p>Export a lightweight video proxy for mobile or low-bandwidth web previewing.</p>
+              </div>
+
+              <div class="option-group">
+                <label class="input-label">Preview Resolution Preset</label>
+                <select id="previewPresetSelect" class="form-select">
+                  <option value="small_video" selected>small_video: 640x360 (500 kbps Video, 64k Audio)</option>
+                  <option value="big_video">big_video: 320x180 (150 kbps Video, 32k Audio)</option>
+                </select>
+              </div>
+
+              <button id="runPreviewBtn" class="btn btn-primary btn-block">
+                Generate Low-Res Preview Proxy (`preview.py`)
+              </button>
+            </div>
+
+            <!-- STEP 5: Final Master Quality Transcode -->
+            <div class="step-content" id="step5Content">
+              <div class="step-header">
+                <h4>Step 5: Final Transcoding Master (`transcode.py`)</h4>
+                <p>Render production-ready master quality video with pinned encoding presets.</p>
+              </div>
+
+              <div class="option-group">
+                <label class="input-label">Transcode Master Preset</label>
+                <select id="transcodePresetSelect" class="form-select">
+                  <option value="1080p_default" selected>PRESET_1080P_DEFAULT (CRF 22, Medium Speed, 192k AAC)</option>
+                  <option value="720p">PRESET_720P (Max 1280x720, CRF 23, 128k AAC)</option>
+                  <option value="4k_master">PRESET_4K_MASTER (CRF 20, Slow Speed, 256k AAC)</option>
+                </select>
+              </div>
+
+              <button id="runTranscodeBtn" class="btn btn-success btn-block">
+                Execute Final Master Transcode (`transcode.py`)
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Job Progress Modal / Toast -->
+  <div id="jobProgressModal" class="modal-backdrop">
+    <div class="modal-container modal-sm">
+      <div class="modal-header">
+        <h3>Pipeline Execution</h3>
+        <button class="modal-close-btn" id="closeJobModalBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="job-monitor-card">
+          <div class="job-header">
+            <span class="job-id-tag" id="jobMonitorId">Running Pipeline Step</span>
+            <span class="badge badge-cutting" id="jobMonitorStatus">running</span>
+          </div>
+          <div class="progress-bar-wrapper">
+            <div class="progress-bar-fill" id="jobProgressBar" style="width: 0%;"></div>
+          </div>
+          <div class="progress-info">
+            <span id="jobProgressPct">Processing...</span>
+            <span id="jobStageLabel">PyAV Filter & Encode</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

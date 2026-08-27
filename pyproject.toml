@@ -14,6 +14,7 @@ dependencies = [
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
     "av>=18.1.0",
+    "pillow>=12.3.0",
 ]
 
 [project.scripts]

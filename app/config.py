@@ -1,8 +1,34 @@
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
+
+
+@dataclass(frozen=True)
+class PreviewPreset:
+    name: str
+    resolution: tuple[int, int]
+    video_bitrate: int
+    audio_bitrate: int = 64_000
+    crf: int | None = None
+
+
+PREVIEW_PRESETS: dict[str, PreviewPreset] = {
+    "small_video": PreviewPreset(
+        name="small_video",
+        resolution=(640, 360),
+        video_bitrate=500_000,
+        audio_bitrate=64_000,
+    ),
+    "big_video": PreviewPreset(
+        name="big_video",
+        resolution=(320, 180),
+        video_bitrate=150_000,
+        audio_bitrate=32_000,
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -17,6 +43,7 @@ class Settings(BaseSettings):
     data_dir: str = "data"
     storage_backend: Literal["local"] = "local"
     ingest_roots: list[Path] = []
+    preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
 
     @field_validator("ingest_roots", mode="after")
     @classmethod
