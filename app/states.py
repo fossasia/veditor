@@ -12,7 +12,7 @@ TRANSITIONS = {
     "pending_bounds": ["cutting", "broken"],
     "cutting": ["generating_previews", "broken"],
     "generating_previews": ["preview", "broken"],
-    "preview": ["transcoding", "needs_work", "rejected", "pending_bounds", "broken"],
+    "preview": ["transcoding", "needs_work", "pending_bounds", "broken"],
     "transcoding": ["uploading", "broken"],
     "uploading": ["done", "broken"],
     "needs_work": ["cutting", "broken"],

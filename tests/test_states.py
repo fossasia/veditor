@@ -26,7 +26,7 @@ def test_advance_illegal_transitions():
         "pending_bounds": "pending_approval",
         "cutting": "needs_work",
         "generating_previews": "transcoding",
-        "preview": "done",
+        "preview": "rejected",  # rejection at preview gate resets to pending_bounds; direct rejection is illegal
         "transcoding": "done",
         "uploading": "rejected",
         "needs_work": "preview",

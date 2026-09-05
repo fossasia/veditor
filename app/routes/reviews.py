@@ -7,6 +7,7 @@ from app import models, schemas
 from app.auth import get_client, verify_event_access
 from app.db import get_db
 from app.review_handlers import DECISION_HANDLERS
+from app.storage import StorageBackend, get_storage_backend
 
 router = APIRouter(
     prefix="/talks",
@@ -25,6 +26,7 @@ def review_talk(
     payload: schemas.ReviewRequest,
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
     talk = (
         db.query(models.Talk)
@@ -47,4 +49,4 @@ def review_talk(
         )
 
     handler = DECISION_HANDLERS[payload.decision]
-    return handler(talk, payload, db)
+    return handler(talk, payload, db, storage=storage)
