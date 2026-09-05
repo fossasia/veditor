@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -44,6 +45,14 @@ class Settings(BaseSettings):
     storage_backend: Literal["local"] = "local"
     ingest_roots: list[Path] = []
     preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
+    disk_guard_multiplier: float = 3.0
+
+    @field_validator("disk_guard_multiplier", mode="after")
+    @classmethod
+    def validate_disk_guard_multiplier(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("disk_guard_multiplier must be a finite positive number")
+        return value
 
     @field_validator("ingest_roots", mode="after")
     @classmethod

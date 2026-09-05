@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 from unittest.mock import Mock
@@ -7,7 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import settings
-from app.ingest import IngestPathRejectedError, stage_recording
+from app.ingest import (
+    IngestPathRejectedError,
+    InsufficientStorageError,
+    stage_recording,
+)
 from app.schemas import RecordingIngestRequest
 
 
@@ -39,7 +44,9 @@ def ingest_root(tmp_path):
 
 @pytest.fixture
 def mock_backend():
-    return Mock()
+    backend = Mock()
+    backend.free_bytes.return_value = 1024 * 1024 * 1024 * 100
+    return backend
 
 
 def test_schema_validation_exactly_one():
@@ -301,3 +308,72 @@ def test_audio_only_file_rejected(ingest_root, mock_backend):
         stage_recording(1, payload, mock_backend)
 
     mock_backend.put.assert_not_called()
+
+
+def test_stage_recording_insufficient_storage_rejected(ingest_root, mock_backend):
+    target = ingest_root / "video.mp4"
+    create_test_video(target)
+    file_size = target.stat().st_size
+    required_bytes = math.ceil(file_size * settings.disk_guard_multiplier)
+
+    # Set free bytes to less than required
+    mock_backend.free_bytes.return_value = required_bytes - 1
+
+    payload = RecordingIngestRequest(relative_key="video.mp4")
+    with pytest.raises(InsufficientStorageError) as exc_info:
+        stage_recording(1, payload, mock_backend)
+
+    err = exc_info.value
+    assert err.required_bytes == required_bytes
+    assert err.available_bytes == required_bytes - 1
+    assert str(required_bytes) in str(err)
+    assert str(required_bytes - 1) in str(err)
+    mock_backend.put.assert_not_called()
+
+
+def test_stage_recording_custom_disk_guard_multiplier(ingest_root, mock_backend):
+    target = ingest_root / "video.mp4"
+    create_test_video(target)
+    file_size = target.stat().st_size
+
+    original_multiplier = settings.disk_guard_multiplier
+    try:
+        settings.disk_guard_multiplier = 5.0
+        required_bytes = math.ceil(file_size * 5.0)
+
+        # 4x is enough for default (3x) but not for 5x
+        mock_backend.free_bytes.return_value = math.ceil(file_size * 4.0)
+
+        payload = RecordingIngestRequest(relative_key="video.mp4")
+        with pytest.raises(InsufficientStorageError) as exc_info:
+            stage_recording(1, payload, mock_backend)
+
+        assert exc_info.value.required_bytes == required_bytes
+        mock_backend.put.assert_not_called()
+
+        # Exactly 5x is sufficient
+        mock_backend.free_bytes.return_value = required_bytes
+        key = stage_recording(1, payload, mock_backend)
+        assert key == "1/raw/video.mp4"
+        mock_backend.put.assert_called_once()
+    finally:
+        settings.disk_guard_multiplier = original_multiplier
+
+
+def test_disk_guard_multiplier_validation():
+    from app.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(disk_guard_multiplier=-1.0)
+
+    with pytest.raises(ValidationError):
+        Settings(disk_guard_multiplier=0.0)
+
+    with pytest.raises(ValidationError):
+        Settings(disk_guard_multiplier=float("nan"))
+
+    with pytest.raises(ValidationError):
+        Settings(disk_guard_multiplier=float("inf"))
+
+    s = Settings(disk_guard_multiplier=2.5)
+    assert s.disk_guard_multiplier == 2.5
