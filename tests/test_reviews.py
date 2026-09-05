@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
+from unittest.mock import call as mock_call
 
 import pytest
 from fastapi.testclient import TestClient
@@ -362,6 +363,54 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
 
         mock_light_enqueue.assert_not_called()
         mock_heavy_enqueue.assert_not_called()
+
+
+def test_handle_reject_storage_delete_error_resilient(mock_db):
+    """Storage deletion errors in handle_reject do not crash endpoint (returns 200) and both targets are attempted."""
+    talk = models.Talk(
+        id=42,
+        event_id=1,
+        title="Reject Error Resilience Talk",
+        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
+        status="preview",
+        cut_start=25.5,
+        cut_end=85.0,
+        raw_duration_seconds=120.0,
+    )
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_db.query.return_value.filter.return_value.first.return_value = talk
+
+    mock_storage = MagicMock()
+    mock_storage.delete.side_effect = [
+        RuntimeError("Storage connection failed"),
+        None,
+    ]
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: mock_storage
+
+    response = client.post(
+        "/talks/42/review",
+        json={"decision": "reject", "note": "Failed cut deletion shouldn't 500"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["talk"]["status"] == "pending_bounds"
+    assert data["talk"]["cut_start"] is None
+    assert data["talk"]["cut_end"] is None
+    assert data["review"]["decision"] == "reject"
+    assert talk.status == "pending_bounds"
+    assert talk.cut_start is None
+    assert talk.cut_end is None
+
+    assert mock_storage.delete.call_count == 2
+    assert mock_storage.delete.call_args_list == [
+        mock_call("42/cut"),
+        mock_call("42/preview"),
+    ]
 
 
 def test_simulated_commit_failure_rolls_back_review_insert(preview_talk, mock_db):

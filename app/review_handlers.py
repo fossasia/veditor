@@ -1,5 +1,6 @@
 """Review decision handlers."""
 
+import logging
 from collections.abc import Callable
 
 from sqlalchemy.orm import Session
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.states import advance
 from app.storage import StorageBackend
+
+logger = logging.getLogger(__name__)
 
 
 def _record_review_and_advance(
@@ -63,8 +66,16 @@ def handle_reject(
     talk.cut_end = None
     response = _record_review_and_advance(talk, payload, "pending_bounds", db)
     if storage is not None:
-        storage.delete(f"{talk.id}/cut")
-        storage.delete(f"{talk.id}/preview")
+        for target in ("cut", "preview"):
+            try:
+                storage.delete(f"{talk.id}/{target}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to delete %s storage for talk %s: %s",
+                    target,
+                    talk.id,
+                    exc,
+                )
     return response
 
 
