@@ -1,0 +1,128 @@
+/* ================================================================
+   VEditor Design Tokens & Theming System
+   Supports Light Mode (Default) and Dark Mode via [data-theme]
+   ================================================================ */
+
+/* ── Light Mode (Default) ─────────────────────────────────────── */
+:root,
+html[data-theme="light"] {
+  /* ── Canvas & Surface Backgrounds ── */
+  --v-bg-canvas:        #f6f8fa;
+  --v-bg-surface:       #ffffff;
+  --v-bg-surface-hover: #f1f5f9;
+  --v-bg-subtle:        #f3f4f6;
+  --v-bg-overlay:       rgba(255, 255, 255, 0.9);
+
+  /* ── Borders & Dividers ── */
+  --v-border-subtle:    #e5e7eb;
+  --v-border:           #d1d5db;
+  --v-border-strong:    #9ca3af;
+  --v-border-focus:     #2563eb;
+
+  /* ── Typography & Text ── */
+  --v-font-sans:        'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --v-font-mono:        'JetBrains Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --v-text-primary:     #111827;
+  --v-text-secondary:   #4b5563;
+  --v-text-muted:       #6b7280;
+  --v-text-inverse:     #ffffff;
+
+  /* ── Brand Primary & Accents ── */
+  --v-primary:          #2563eb;
+  --v-primary-hover:    #1d4ed8;
+  --v-primary-subtle:   #eff6ff;
+  --v-primary-border:   #bfdbfe;
+
+  /* ── Solid Semantic Status Colors (Light Mode) ── */
+  --v-status-waiting-bg:     #f3f4f6;
+  --v-status-waiting-text:   #4b5563;
+  --v-status-waiting-border: #d1d5db;
+
+  --v-status-pending-bg:     #fffbeb;
+  --v-status-pending-text:   #b45309;
+  --v-status-pending-border: #fde68a;
+
+  --v-status-active-bg:      #f0f9ff;
+  --v-status-active-text:    #0369a1;
+  --v-status-active-border:  #bae6fd;
+
+  --v-status-preview-bg:     #f0fdfa;
+  --v-status-preview-text:   #0f766e;
+  --v-status-preview-border: #99f6e4;
+
+  --v-status-success-bg:     #f0fdf4;
+  --v-status-success-text:   #15803d;
+  --v-status-success-border: #bbf7d0;
+
+  --v-status-danger-bg:      #fef2f2;
+  --v-status-danger-text:    #b91c1c;
+  --v-status-danger-border:  #fecaca;
+
+  /* Player canvas */
+  --v-player-bg:             #000000;
+
+  /* ── Layout Dimensions ── */
+  --v-sidebar-width:    230px;
+  --v-topbar-height:    54px;
+  --v-radius-xs:        4px;
+  --v-radius-sm:        6px;
+  --v-radius-md:        8px;
+  --v-radius-lg:        12px;
+}
+
+/* ── Dark Mode ────────────────────────────────────────────────── */
+html[data-theme="dark"] {
+  /* ── Canvas & Surface Backgrounds ── */
+  --v-bg-canvas:        #0c0e14;
+  --v-bg-surface:       #151922;
+  --v-bg-surface-hover: #1c2230;
+  --v-bg-subtle:        #12151e;
+  --v-bg-overlay:       rgba(12, 14, 20, 0.85);
+
+  /* ── Borders & Dividers ── */
+  --v-border-subtle:    #202636;
+  --v-border:           #283144;
+  --v-border-strong:    #3b4863;
+  --v-border-focus:     #4d78ff;
+
+  /* ── Typography & Text ── */
+  --v-text-primary:     #f0f3fa;
+  --v-text-secondary:   #9aa3ba;
+  --v-text-muted:       #5c667e;
+  --v-text-inverse:     #0c0e14;
+
+  /* ── Brand Primary & Accents ── */
+  --v-primary:          #3d6bff;
+  --v-primary-hover:    #5580ff;
+  --v-primary-subtle:   rgba(61, 107, 255, 0.12);
+  --v-primary-border:   rgba(61, 107, 255, 0.35);
+
+  /* ── Solid Semantic Status Colors (Dark Mode) ── */
+  --v-status-waiting-bg:     #1c202a;
+  --v-status-waiting-text:   #8a94a6;
+  --v-status-waiting-border: #2c3344;
+
+  --v-status-pending-bg:     #2c1f10;
+  --v-status-pending-text:   #f59e0b;
+  --v-status-pending-border: #78350f;
+
+  --v-status-active-bg:      #0f223d;
+  --v-status-active-text:    #38bdf8;
+  --v-status-active-border:  #0369a1;
+
+  --v-status-preview-bg:     #0b2926;
+  --v-status-preview-text:   #14b8a6;
+  --v-status-preview-border: #0f766e;
+
+  --v-status-success-bg:     #0c2718;
+  --v-status-success-text:   #22c55e;
+  --v-status-success-border: #15803d;
+
+  --v-status-danger-bg:      #2c1214;
+  --v-status-danger-text:    #f43f5e;
+  --v-status-danger-border:  #be123c;
+
+  /* Player canvas */
+  --v-player-bg:             #000000;
+}

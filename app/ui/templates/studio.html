@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+{% block title %}{{ talk.title[:40] }}{% endblock %}
+
+{% macro status_badge(status) %}
+  {% if status == 'waiting_for_files' %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>
+  {% elif status == 'detecting' %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
+  {% elif status in ['pending_approval', 'pending_bounds'] %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review (Gate 1)</span>
+  {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
+  {% elif status == 'preview' %}
+    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready (Gate 2)</span>
+  {% elif status == 'needs_work' %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
+  {% elif status == 'done' %}
+    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+  {% elif status in ['rejected', 'broken'] %}
+    <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
+  {% else %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>{{ status }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% block breadcrumb %}
+  <a href="/studio">Talks</a>
+  <span class="sep">/</span>
+  <span class="current">{{ talk.title | truncate(45) }}</span>
+{% endblock %}
+
+{% block topbar_actions %}
+  <span style="font-size:0.8rem;color:var(--v-text-muted);">Talk #{{ talk.id }}</span>
+  {{ status_badge(talk.status) }}
+{% endblock %}
+
+{% block content %}
+<div class="studio-shell">
+
+  <!-- ── LEFT: Talk Metadata Panel ───────────────────────────── -->
+  <div class="studio-panel">
+    <div class="studio-panel-header">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+      </svg>
+      <span class="studio-panel-title">Talk Metadata</span>
+    </div>
+    <div class="studio-panel-body">
+
+      <div class="meta-group">
+        <div class="meta-label">Title</div>
+        <div class="meta-value">{{ talk.title }}</div>
+      </div>
+
+      <div class="meta-group">
+        <div class="meta-label">Event</div>
+        <div class="meta-value">Event #{{ talk.event_id }}</div>
+      </div>
+
+      <div class="meta-group">
+        <div class="meta-label">Room</div>
+        <div class="meta-value">{{ talk.room or '—' }}</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="meta-group">
+        <div class="meta-label">Scheduled Start</div>
+        <div class="meta-value mono">
+          {{ talk.start.strftime('%a, %b %d %Y  %H:%M UTC') if talk.start else '—' }}
+        </div>
+      </div>
+
+      <div class="meta-group">
+        <div class="meta-label">Scheduled End</div>
+        <div class="meta-value mono">
+          {{ talk.end.strftime('%H:%M UTC') if talk.end else '—' }}
+        </div>
+      </div>
+
+      <div class="meta-group">
+        <div class="meta-label">Scheduled Duration</div>
+        <div class="meta-value mono">
+          {% if duration_seconds is not none %}
+            {% set h = duration_seconds // 3600 %}
+            {% set m = (duration_seconds % 3600) // 60 %}
+            {% set s = duration_seconds % 60 %}
+            {{ '%d:%02d:%02d' | format(h, m, s) }}
+          {% else %}—{% endif %}
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Generated Media Assets (RAW, Intro, Outro, Preview, Final) -->
+      <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--v-text-muted);margin-bottom:8px;">
+        Generated Media Assets
+      </div>
+
+      <div id="media-assets-list" style="display:flex;flex-direction:column;gap:6px;">
+        {% if media_assets %}
+          {% for asset in media_assets %}
+          <div class="media-asset-row" data-asset-url="{{ asset.url }}" style="display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:var(--v-bg-subtle);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-xs);transition:all 0.15s ease;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="badge {% if asset.category == 'intro' or asset.category == 'outro' %}badge-pending{% elif asset.category == 'final' %}badge-done{% elif asset.category == 'raw' %}badge-waiting{% else %}badge-preview{% endif %}" style="font-size:0.65rem;padding:1px 5px;">
+                {{ asset.category | upper }}
+              </span>
+              <a href="{{ asset.url }}" target="_blank" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:0.68rem;" title="Download file">
+                Download
+              </a>
+            </div>
+            <div style="font-size:0.78rem;font-weight:500;color:var(--v-text-primary);line-height:1.2;">
+              {{ asset.label }}
+            </div>
+            <button class="btn btn-primary btn-sm btn-play-asset" data-asset-url="{{ asset.url }}" style="width:100%;padding:3px 8px;font-size:0.72rem;margin-top:2px;">
+              Play in Studio
+            </button>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="font-size:0.75rem;color:var(--v-text-muted);">No pipeline media generated yet.</div>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── CENTER: Video Player, Big Seeks, Timeline ───────────── -->
+  <div class="player-panel">
+
+    <!-- Video Viewport -->
+    <div class="player-viewport">
+      <video id="main-video" preload="metadata" style="width:100%;max-height:420px;background:#000;display:none;">
+        Your browser does not support HTML5 video.
+      </video>
+      <div class="player-no-preview" id="no-preview-msg" style="cursor:pointer;padding:36px 20px;" onclick="document.getElementById('video-file-input').click()">
+        <input type="file" id="video-file-input" accept="video/mp4,video/mkv,video/webm,video/quicktime,video/*" style="display:none;" onchange="handleVideoFileUpload(event, {{ talk.id }})">
+        <svg width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="color:var(--v-primary);margin-bottom:8px;">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span style="font-size:0.95rem;font-weight:600;color:var(--v-text-primary);margin-bottom:4px;">
+          Attach Recording Video
+        </span>
+        <span style="font-size:0.76rem;color:var(--v-text-muted);max-width:320px;margin-bottom:12px;text-align:center;">
+          Drag & drop raw conference video file here, or click to browse (MP4, MKV, MOV, WebM).
+        </span>
+        <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); document.getElementById('video-file-input').click();">
+          Browse Video File
+        </button>
+        <div id="upload-progress-wrap" style="display:none;margin-top:12px;text-align:center;">
+          <span class="spinner spinner-sm" style="margin-right:6px;"></span>
+          <span style="font-size:0.75rem;color:var(--v-text-muted);" id="upload-progress-text">Uploading & validating video streams...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timecode & Jump Bar -->
+    <div class="timecode-bar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="timecode" id="timecode-display">00:00:00.00</span>
+        <span style="font-size:0.75rem;color:var(--v-text-muted);" id="duration-display">/ 00:00:00.00</span>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;">
+        <!-- Jump directly to timecode -->
+        <div style="display:flex;align-items:center;gap:6px;">
+          <label for="jump-time-input" style="font-size:0.72rem;color:var(--v-text-muted);">Jump to:</label>
+          <input type="text" id="jump-time-input" placeholder="MM:SS" class="input-field" style="width:75px;padding:2px 6px;font-family:var(--v-font-mono);font-size:0.75rem;text-align:center;">
+        </div>
+
+        <div style="display:flex;align-items:center;gap:4px;">
+          <label for="speed-select" style="font-size:0.72rem;color:var(--v-text-muted);">Speed:</label>
+          <select id="speed-select" class="select-field" style="padding:2px 6px;font-size:0.75rem;">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Coarse, Fine & Big Seek Controls -->
+    <div class="player-controls">
+      <button class="ctrl-btn" id="btn-seek-mega-back" title="Rewind 5 minutes (-5m)">-5m</button>
+      <button class="ctrl-btn" id="btn-seek-big-back" title="Rewind 1 minute (-1m)">-1m</button>
+      <button class="ctrl-btn" id="btn-skip-back" title="Back 5s (-5s)">-5s</button>
+      <button class="ctrl-btn" id="btn-prev-frame" title="Previous frame (←)">-1f</button>
+
+      <!-- Play / Pause -->
+      <button class="ctrl-btn play-btn" id="btn-play" title="Play / Pause (Space)">
+        <svg id="icon-play" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21"/></svg>
+        <svg id="icon-pause" width="16" height="16" fill="currentColor" viewBox="0 0 24 24" style="display:none;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
+
+      <!-- Fine, Big & Mega Seek Forward -->
+      <button class="ctrl-btn" id="btn-next-frame" title="Next frame (→)">+1f</button>
+      <button class="ctrl-btn" id="btn-skip-fwd" title="Forward 5s (+5s)">+5s</button>
+      <button class="ctrl-btn" id="btn-seek-big-fwd" title="Forward 1 minute (+1m)">+1m</button>
+      <button class="ctrl-btn" id="btn-seek-mega-fwd" title="Forward 5 minutes (+5m)">+5m</button>
+    </div>
+
+    <!-- Timeline Scrubber & Cut Bounds -->
+    <div class="timeline-section">
+      <div class="timeline-label">
+        <span>Timeline Scrubber</span>
+        <span id="tl-range-label" style="font-family:var(--v-font-mono);font-size:0.75rem;color:var(--v-text-secondary);"></span>
+      </div>
+
+      <div class="timeline-track" id="timeline-track" style="cursor:crosshair;">
+        <div class="tl-block tl-intro"  id="tl-intro"   style="left:0;width:5%;">INTRO</div>
+        <div class="tl-block tl-content" id="tl-content" style="left:5%;width:90%;">TALK BOUNDS</div>
+        <div class="tl-block tl-outro"  id="tl-outro"   style="right:0;width:5%;">OUTRO</div>
+        <div class="tl-marker" id="tl-start-marker" style="left:5%;cursor:ew-resize;" title="Drag Start Point (or press I)"></div>
+        <div class="tl-marker end-marker" id="tl-end-marker" style="left:95%;cursor:ew-resize;" title="Drag End Point (or press O)"></div>
+        <div id="tl-playhead" style="position:absolute;top:0;bottom:0;width:2px;background:var(--v-text-primary);left:0%;pointer-events:none;z-index:6;"></div>
+      </div>
+
+      <div class="timeline-range">
+        <input type="range" id="video-scrubber" min="0" max="1000" value="0">
+      </div>
+
+      <div class="timeline-ticks" id="timeline-ticks">
+        <span>0:00</span><span></span><span></span><span></span><span>—</span>
+      </div>
+
+      <!-- In/Out Bounds Setting Controls -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px solid var(--v-border-subtle);flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="btn btn-ghost btn-sm" id="btn-set-in" title="Set In-Point (I)">
+            Set In (I)
+          </button>
+          <input type="text" id="input-in-point" value="00:00:00.00" class="input-field" style="width:100px;padding:3px 6px;font-family:var(--v-font-mono);font-size:0.75rem;text-align:center;">
+
+          <span style="color:var(--v-text-muted);font-size:0.75rem;">to</span>
+
+          <input type="text" id="input-out-point" value="00:00:00.00" class="input-field" style="width:100px;padding:3px 6px;font-family:var(--v-font-mono);font-size:0.75rem;text-align:center;">
+          <button class="btn btn-ghost btn-sm" id="btn-set-out" title="Set Out-Point (O)">
+            Set Out (O)
+          </button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="btn btn-ghost btn-sm" id="btn-play-cut" title="Play trimmed range">
+            <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21"/></svg>
+            Play Cut Range
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── RIGHT: 4 Milestones & Review Actions ────────────────── -->
+  <div class="studio-panel">
+    <div class="studio-panel-header">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+      <span class="studio-panel-title">Workflow & Review</span>
+    </div>
+    <div class="studio-panel-body">
+
+      <!-- Action Panel for Human Review Gates -->
+      <div style="background:var(--v-bg-subtle);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-md);padding:14px;margin-bottom:16px;">
+        <div style="font-size:0.78rem;font-weight:600;color:var(--v-text-primary);margin-bottom:8px;">
+          Review Actions
+        </div>
+
+        <div style="margin-bottom:10px;">
+          <label for="review-notes-input" style="font-size:0.7rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Reviewer Notes</label>
+          <textarea id="review-notes-input" class="input-field" rows="2" placeholder="Optional notes for speaker or reviewer..." style="width:100%;font-size:0.78rem;resize:vertical;"></textarea>
+        </div>
+
+        <div class="action-btns" id="action-btns" style="display:flex;flex-direction:column;gap:6px;">
+          {% if talk.status == 'needs_work' %}
+            <button class="btn btn-primary w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Re-cut Timestamps & Regenerate Preview
+            </button>
+            <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
+              Reject Talk
+            </button>
+          {% elif talk.status in ['pending_approval', 'waiting_for_files', 'pending_bounds'] %}
+            <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Approve Timestamps (Start Processing)
+            </button>
+            <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
+              Reject Timestamps
+            </button>
+          {% elif talk.status == 'preview' %}
+            <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Approve Preview (Start Master Transcode)
+            </button>
+            <button class="btn btn-danger w-full" id="btn-needs-work" onclick="setTalkStatus({{ talk.id }}, 'needs_work')">
+              Request Changes (Needs Work)
+            </button>
+          {% elif talk.status in ['rejected', 'broken'] %}
+            <button class="btn btn-primary w-full" id="btn-retry" onclick="retryTalk({{ talk.id }})">
+              Retry Talk Lifecycle
+            </button>
+          {% elif talk.status == 'done' %}
+            <div class="badge badge-done" style="padding:8px 12px;width:100%;justify-content:center;">
+              Published & Complete
+            </div>
+          {% else %}
+            <button class="btn btn-primary w-full" onclick="approveTalk({{ talk.id }})">
+              Process Next Stage
+            </button>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 4 Lifecycle Milestones -->
+      <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--v-text-muted);margin-bottom:10px;">
+        Pipeline Milestones
+      </div>
+      <div class="milestones-stepper">
+        {% for m in milestones %}
+          <div class="milestone-card {% if m.state == 'active' %}active{% elif m.state == 'completed' %}completed{% elif m.state == 'failed' %}failed{% endif %}">
+            <div class="milestone-header">
+              <span class="milestone-title">
+                {% if m.state == 'completed' %}✓{% else %}{{ m.num }}.{% endif %} {{ m.title }}
+              </span>
+              {% if m.state == 'active' %}
+                <span class="badge badge-processing" style="font-size:0.65rem;padding:1px 5px;"><span class="spinner spinner-sm"></span>In Progress</span>
+              {% elif m.state == 'completed' %}
+                <span class="badge badge-done" style="font-size:0.65rem;padding:1px 5px;">Done</span>
+              {% elif m.state == 'failed' %}
+                <span class="badge badge-danger" style="font-size:0.65rem;padding:1px 5px;">Failed</span>
+              {% endif %}
+            </div>
+            <div class="milestone-substeps">
+              {{ m.desc }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Recent Jobs -->
+      <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--v-text-muted);margin-bottom:8px;">
+        Recent Jobs
+      </div>
+      {% if jobs %}
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        {% for job in jobs %}
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--v-bg-subtle);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-xs);font-size:0.75rem;">
+          <span style="font-family:var(--v-font-mono);">{{ job.kind }}</span>
+          <span class="badge {% if job.status == 'done' or job.status == 'success' %}badge-done{% elif job.status == 'running' %}badge-processing{% elif job.status == 'failed' %}badge-danger{% else %}badge-waiting{% endif %}" style="font-size:0.65rem;padding:1px 5px;">
+            {% if job.status == 'running' %}<span class="spinner spinner-sm"></span>{% endif %}{{ job.status }}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="font-size:0.75rem;color:var(--v-text-muted);">No pipeline jobs logged yet.</div>
+      {% endif %}
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const TALK_ID = {{ talk.id }};
+  const TALK_STATUS = "{{ talk.status }}";
+  const PREVIEW_URLS = {{ preview_urls | tojson }};
+</script>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/studio.js"></script>
+{% endblock %}

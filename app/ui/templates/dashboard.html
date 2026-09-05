@@ -1,0 +1,321 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% macro status_badge(status) %}
+  {% if status == 'waiting_for_files' %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>
+  {% elif status == 'detecting' %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
+  {% elif status in ['pending_approval', 'pending_bounds'] %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review (Gate 1)</span>
+  {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
+  {% elif status == 'preview' %}
+    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready (Gate 2)</span>
+  {% elif status == 'needs_work' %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
+  {% elif status == 'done' %}
+    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+  {% elif status in ['rejected', 'broken'] %}
+    <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
+  {% else %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>{{ status }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="page-body">
+
+  <!-- Stats Summary Row -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-label">Total Talks</span>
+      <span class="stat-value">{{ stats.total }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Pending Review</span>
+      <span class="stat-value amber">{{ stats.pending }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Processing</span>
+      <span class="stat-value blue">{{ stats.processing }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Preview Ready</span>
+      <span class="stat-value blue">{{ stats.preview }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Published</span>
+      <span class="stat-value green">{{ stats.done }}</span>
+    </div>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <form method="get" action="/studio" style="display:flex;gap:10px;flex-wrap:wrap;width:100%;">
+      <div class="search-wrap">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input
+          id="search-input"
+          class="input-field"
+          type="text"
+          name="q"
+          placeholder="Filter by talk title..."
+          value="{{ q }}"
+          autocomplete="off"
+        >
+      </div>
+
+      <select id="status-select" class="select-field" name="status_filter">
+        <option value="">All Statuses</option>
+        {% for s in all_statuses %}
+          <option value="{{ s }}" {% if s == status_filter %}selected{% endif %}>
+            {{ s | replace('_', ' ') | title }}
+          </option>
+        {% endfor %}
+      </select>
+
+      {% if event_id %}
+        <input type="hidden" name="event_id" value="{{ event_id }}">
+      {% endif %}
+
+      <button class="btn btn-primary" type="submit" id="filter-btn">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46"/>
+        </svg>
+        Filter
+      </button>
+
+      {% if q or status_filter %}
+        <a href="/studio" class="btn btn-ghost" id="clear-btn">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <!-- Bulk Actions Bar -->
+  <div id="bulk-actions-bar" style="display:none;background:var(--v-bg-surface);border:1px solid var(--v-border);border-radius:var(--v-radius-md);padding:10px 16px;margin-bottom:12px;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-size:0.85rem;font-weight:600;color:var(--v-text-primary);" id="selected-count-text">0 talks selected</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">Deselect All</button>
+      <button class="btn btn-ghost btn-sm" id="btn-bulk-delete" onclick="submitBulkDelete()" style="color:#ef4444;border-color:rgba(239,68,68,0.3);">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Delete Selected (<span id="bulk-delete-count">0</span>)
+      </button>
+    </div>
+  </div>
+
+  <!-- Talks Table -->
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span class="table-title">Conference Talks</span>
+        <span class="table-count" style="margin-left:8px;">{{ talks | length }} result{% if talks | length != 1 %}s{% endif %}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="openImportModal()" id="btn-open-import">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Import Schedule
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="openAttachRoomModal()" id="btn-open-room-attach">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
+          Attach Room Video
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="openQuickTalkModal()" id="btn-open-quick-talk">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          + New Talk
+        </button>
+      </div>
+    </div>
+
+    {% if talks %}
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px;padding-left:14px;">
+            <input type="checkbox" id="select-all-talks" onchange="toggleSelectAllTalks(this)" title="Select all talks">
+          </th>
+          <th>Talk Title</th>
+          <th>Room</th>
+          <th>Start Time</th>
+          <th>Duration</th>
+          <th>Status</th>
+          <th style="text-align:right;padding-right:16px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for talk in talks %}
+        <tr onclick="window.location='/studio/talks/{{ talk.id }}'" data-talk-id="{{ talk.id }}" data-status="{{ talk.status }}">
+          <td style="width:36px;padding-left:14px;" onclick="event.stopPropagation()">
+            <input type="checkbox" class="talk-checkbox" value="{{ talk.id }}" onchange="updateBulkSelectionUI()">
+          </td>
+          <td class="td-title">
+            <strong>{{ talk.title }}</strong>
+            <small>ID #{{ talk.id }} &bull; Event #{{ talk.event_id }}</small>
+          </td>
+          <td>{{ talk.room or '—' }}</td>
+          <td class="td-mono">{{ talk.start.strftime('%b %d, %H:%M') if talk.start else '—' }}</td>
+          <td class="td-mono">
+            {% if talk.start and talk.end %}
+              {% set dur = (talk.end - talk.start).total_seconds() | int %}
+              {% set m = dur // 60 %}
+              {% set s = dur % 60 %}
+              {{ '%d:%02d' | format(m, s) }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="status-cell" data-talk-id="{{ talk.id }}">
+            {{ status_badge(talk.status) }}
+          </td>
+          <td style="text-align:right;padding-right:16px;" onclick="event.stopPropagation()">
+            <div style="display:inline-flex;align-items:center;gap:6px;">
+              <a href="/studio/talks/{{ talk.id }}" class="btn btn-ghost btn-sm">
+                Open Studio
+              </a>
+              <button class="btn btn-ghost btn-sm btn-delete-talk" data-talk-id="{{ talk.id }}" data-talk-title="{{ talk.title }}" title="Delete Talk" style="color:#ef4444;padding:3px 7px;">
+                <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+        <tr id="no-client-matches-row" style="display:none;">
+          <td colspan="7" style="text-align:center;padding:40px 20px;color:var(--v-text-muted);">
+            <div style="font-weight:500;color:var(--v-text-primary);margin-bottom:4px;">No matching talks</div>
+            <div style="font-size:0.8rem;">No talks match the active search or filter.</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:48px 24px;text-align:center;color:var(--v-text-muted);">
+      {% if q or status_filter %}
+        <p style="font-size:0.95rem;font-weight:500;color:var(--v-text-primary);margin-bottom:6px;">No matching talks</p>
+        <p style="font-size:0.82rem;margin-bottom:14px;">No talks match your current filter or search criteria.</p>
+        <a href="/studio" class="btn btn-ghost btn-sm" style="border:1px solid var(--v-border);">Clear Filters</a>
+      {% else %}
+        <p style="font-size:0.95rem;font-weight:500;color:var(--v-text-primary);margin-bottom:6px;">No talks in workspace</p>
+        <p style="font-size:0.82rem;">Use the buttons above to import a conference schedule or add a talk.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── MODAL: Import Schedule ────────────────────────────────────── -->
+<div id="modal-import" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:var(--v-bg-surface);border:1px solid var(--v-border);border-radius:var(--v-radius-md);width:90%;max-width:520px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h3 style="font-size:1rem;font-weight:600;color:var(--v-text-primary);margin:0;">Import Schedule (JSON)</h3>
+      <button class="btn btn-ghost btn-sm" onclick="closeImportModal()" style="padding:2px 8px;">✕</button>
+    </div>
+
+    <p style="font-size:0.8rem;color:var(--v-text-muted);margin-bottom:12px;">
+      Upload a standard Pretalx/Frab schedule file, or paste a JSON array of sessions.
+    </p>
+
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:4px;">Schedule JSON File</label>
+      <input type="file" id="import-file-input" accept=".json,application/json" class="input-field" style="padding:6px;">
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:4px;">Or Paste JSON</label>
+      <textarea id="import-json-textarea" class="input-field" rows="4" placeholder='[{"title": "Keynote Speech", "room": "Main Stage"}]' style="font-family:var(--v-font-mono);font-size:0.75rem;"></textarea>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="closeImportModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="btn-submit-import" onclick="submitScheduleImport()">
+        Import Schedule
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Attach Room Video ─────────────────────────────────── -->
+<div id="modal-attach-room" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:var(--v-bg-surface);border:1px solid var(--v-border);border-radius:var(--v-radius-md);width:90%;max-width:480px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h3 style="font-size:1rem;font-weight:600;color:var(--v-text-primary);margin:0;">Attach Room Recording</h3>
+      <button class="btn btn-ghost btn-sm" onclick="closeAttachRoomModal()" style="padding:2px 8px;">✕</button>
+    </div>
+
+    <p style="font-size:0.8rem;color:var(--v-text-muted);margin-bottom:12px;">
+      Upload a single multi-hour room recording to attach it to all scheduled sessions in that room.
+    </p>
+
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Select Room</label>
+      <input type="text" id="attach-room-input" list="room-options" class="input-field" placeholder="e.g. Auditorium A" value="{% if all_rooms %}{{ all_rooms[0] }}{% endif %}">
+      <datalist id="room-options">
+        {% for r in all_rooms %}
+          <option value="{{ r }}">
+        {% endfor %}
+      </datalist>
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Room Recording Video File</label>
+      <input type="file" id="attach-room-file" accept="video/*" class="input-field" style="padding:6px;">
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="closeAttachRoomModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="btn-submit-attach-room" onclick="submitAttachRoomRecording()">
+        Attach to All Sessions in Room
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Quick Add Talk ────────────────────────────────────── -->
+<div id="modal-quick-talk" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;align-items:center;justify-content:center;">
+  <div style="background:var(--v-bg-surface);border:1px solid var(--v-border);border-radius:var(--v-radius-md);width:90%;max-width:440px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,0.3);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <h3 style="font-size:1rem;font-weight:600;color:var(--v-text-primary);margin:0;">Register New Talk</h3>
+      <button class="btn btn-ghost btn-sm" onclick="closeQuickTalkModal()" style="padding:2px 8px;">✕</button>
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Event Name</label>
+      <input type="text" id="quick-event-name" class="input-field" value="FOSSASIA Summit 2026">
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Talk Title</label>
+      <input type="text" id="quick-talk-title" class="input-field" placeholder="e.g. Building Open Video Systems">
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div>
+        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Room</label>
+        <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
+      </div>
+      <div>
+        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Duration (min)</label>
+        <input type="number" id="quick-talk-duration" class="input-field" value="45" min="5" max="480" step="5">
+      </div>
+    </div>
+
+    <div style="margin-bottom:16px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Start Time (Optional)</label>
+      <input type="datetime-local" id="quick-talk-start" class="input-field">
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="closeQuickTalkModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="btn-submit-quick-talk" onclick="submitQuickTalk()">
+        Create Talk
+      </button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}VEditor{% endblock %} — Production Console</title>
+  <meta name="description" content="VEditor — Automated conference video processing pipeline">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/theme.js"></script>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--v-primary)">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      <span class="logo-text" id="app-logo-text">VEditor</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <span class="nav-label">Workspace</span>
+      <a href="/studio" class="nav-item {% if request.url.path == '/studio' and not request.query_params.get('status_filter') %}active{% endif %}">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="7"/>
+          <rect x="14" y="3" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+        </svg>
+        All Talks
+      </a>
+      <a href="/studio?status_filter=pending_approval" class="nav-item {% if request.query_params.get('status_filter') == 'pending_approval' %}active{% endif %}">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Pending Review (Gate 1)
+      </a>
+      <a href="/studio?status_filter=preview" class="nav-item {% if request.query_params.get('status_filter') == 'preview' %}active{% endif %}">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+        Preview Ready (Gate 2)
+      </a>
+      <a href="/studio?status_filter=done" class="nav-item {% if request.query_params.get('status_filter') == 'done' %}active{% endif %}">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        Published
+      </a>
+      <a href="/studio?status_filter=broken" class="nav-item {% if request.query_params.get('status_filter') == 'broken' %}active{% endif %}">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Broken / Failed
+      </a>
+
+      <span class="nav-label">Documentation</span>
+      <a href="/docs" target="_blank" class="nav-item">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        REST API Docs
+      </a>
+    </nav>
+  </aside>
+
+  <!-- ── Main Content ─────────────────────────────────────────── -->
+  <div class="main-content">
+    <header class="topbar">
+      <div class="breadcrumb">
+        {% block breadcrumb %}
+          <span class="current">Talks Dashboard</span>
+        {% endblock %}
+      </div>
+      <div class="topbar-actions">
+        <div class="topbar-control-group">
+          <!-- Role Selector -->
+          <div class="role-badge-select">
+            <label for="user-role-select">Role</label>
+            <select id="user-role-select" onchange="window.setUserRole(this.value)">
+              <option value="admin">Admin</option>
+              <option value="reviewer">Reviewer</option>
+              <option value="speaker">Speaker</option>
+            </select>
+          </div>
+
+          <!-- API Key Manager -->
+          <button class="key-badge-btn" id="api-key-btn" onclick="window.promptApiKey()" title="Configure API Key">
+            <span class="key-dot" id="api-key-dot"></span>
+            <span id="api-key-indicator">API Key</span>
+          </button>
+
+          <!-- Theme Toggle Button -->
+          <button class="btn btn-ghost btn-sm" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme" style="padding:5px 8px; height:30px;">
+            <svg id="theme-icon-sun" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="display:none;">
+              <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+            <svg id="theme-icon-moon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </button>
+        </div>
+
+        {% block topbar_actions %}{% endblock %}
+      </div>
+    </header>
+
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-backdrop" id="modal-api-key" style="display:none;" onclick="if(event.target===this)window.closeApiKeyModal()">
+  <div class="modal-dialog" style="max-width:440px;">
+    <div class="modal-header">
+      <h3 class="modal-title">API Key Authentication</h3>
+      <button class="btn btn-ghost btn-sm" onclick="window.closeApiKeyModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px; color:var(--v-text-muted); margin-bottom:12px;">
+        Enter your VEditor API Key to authenticate mutations and access event-scoped talks.
+      </p>
+      <div class="form-group">
+        <label class="form-label" for="api-key-input">API Key</label>
+        <input type="password" id="api-key-input" class="form-control" placeholder="Enter API Key...">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="window.closeApiKeyModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="window.saveApiKeyFromModal()">Save & Connect</button>
+    </div>
+  </div>
+</div>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>
