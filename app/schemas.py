@@ -59,6 +59,7 @@ class JobBase(BaseModel):
     kind: str
     status: str
     log_path: str | None = None
+    progress_pct: float | None = None
 
 
 class JobCreate(JobBase):
