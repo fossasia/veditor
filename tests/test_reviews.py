@@ -1,6 +1,7 @@
 """Tests for speaker review endpoint (POST /talks/{talk_id}/review) and review handlers."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -174,8 +175,8 @@ def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status
     [
         ("approve", None, "transcoding"),
         ("approve", "Looks great!", "transcoding"),
-        ("needs_work", None, "needs_work"),
-        ("needs_work", "Audio is cut off at the start", "needs_work"),
+        ("needs_work", None, "pending_bounds"),
+        ("needs_work", "Audio is cut off at the start", "pending_bounds"),
         ("reject", None, "pending_bounds"),
         ("reject", "Not suitable for publication", "pending_bounds"),
     ],
@@ -280,7 +281,7 @@ def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
     )
     resp_work = handle_needs_work(preview_talk, req_work, mock_db)
     assert resp_work.talk.id == preview_talk.id
-    assert resp_work.talk.status == "needs_work"
+    assert resp_work.talk.status == "pending_bounds"
     assert resp_work.review is not None
     assert resp_work.review.decision == "needs_work"
     assert resp_work.review.note == "Fix cut"
@@ -480,7 +481,7 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         assert len(reviews) == 1
 
         final_talk = db.query(models.Talk).filter(models.Talk.id == talk_id).one()
-        assert final_talk.status in ("transcoding", "needs_work")
+        assert final_talk.status in ("transcoding", "pending_bounds")
         assert final_talk.status != "preview"
         assert reviews[0].decision in ("approve", "needs_work")
         db.close()
@@ -492,3 +493,200 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         clean_db.query(models.Event).filter(models.Event.id == event_id).delete()
         clean_db.commit()
         clean_db.close()
+
+
+def test_review_needs_work_transitions_to_pending_bounds_retains_offsets_and_no_job_enqueued(
+    mock_db, preview_talk
+):
+    """POST /talks/{id}/review with needs_work transitions talk to pending_bounds,
+
+    preserves existing cut_start and cut_end offsets intact, and enqueues zero jobs.
+    """
+    preview_talk.cut_start = 12.5
+    preview_talk.cut_end = 75.0
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    with (
+        patch("app.queue.light_queue.enqueue") as mock_light_enqueue,
+        patch("app.queue.heavy_queue.enqueue") as mock_heavy_enqueue,
+    ):
+        response = client.post(
+            "/talks/1/review",
+            json={"decision": "needs_work", "note": "Audio cut off at beginning"},
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["talk"]["status"] == "pending_bounds"
+        assert data["talk"]["cut_start"] == 12.5
+        assert data["talk"]["cut_end"] == 75.0
+        assert preview_talk.status == "pending_bounds"
+        assert preview_talk.cut_start == 12.5
+        assert preview_talk.cut_end == 75.0
+        assert data["review"]["decision"] == "needs_work"
+        assert data["review"]["note"] == "Audio cut off at beginning"
+
+        # Explicit invariant: no RQ jobs enqueued on needs_work transition
+        mock_light_enqueue.assert_not_called()
+        mock_heavy_enqueue.assert_not_called()
+
+
+def test_needs_work_subsequent_cut_overwrites_outputs():
+    """Verify that after needs_work transitions to pending_bounds with bounds intact:
+
+    1. Prior cut and preview artifacts remain in place.
+    2. Raw recording remains completely untouched.
+    3. Subsequent POST /cut with adjusted bounds transitions to cutting and enqueues cut.
+    4. Subsequent cut and preview runs overwrite previous outputs.
+    """
+    from app.storage import get_storage_backend
+    from tests.conftest import FakeStorageBackend
+
+    fake_storage = FakeStorageBackend()
+    fake_storage.put("1/raw/video.mp4", b"original raw video bytes")
+    fake_storage.put("1/cut/cut.mp4", b"old cut content v1")
+    fake_storage.put("1/preview/preview.mp4", b"old preview content v1")
+
+    mock_client = models.Client(id=1, event_ids=[1])
+    talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Needs Work E2E Talk",
+        room="Room 101",
+        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
+        status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
+        raw_duration_seconds=120.0,
+    )
+
+    mock_db = MagicMock()
+    mock_filter = mock_db.query.return_value.filter.return_value
+    mock_filter.with_for_update.return_value = mock_filter
+    mock_filter.first.return_value = talk
+
+    def fake_flush():
+        for call in mock_db.add.call_args_list:
+            obj = call[0][0]
+            if getattr(obj, "id", None) is None:
+                obj.id = 1
+            if getattr(obj, "created_at", None) is None:
+                obj.created_at = datetime.now(UTC)
+
+    mock_db.flush.side_effect = fake_flush
+
+    def fake_refresh(obj):
+        if getattr(obj, "id", None) is None:
+            obj.id = 1
+        if getattr(obj, "created_at", None) is None:
+            obj.created_at = datetime.now(UTC)
+
+    mock_db.refresh.side_effect = fake_refresh
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    # Step 1: Review decision 'needs_work'
+    with (
+        patch("app.queue.light_queue.enqueue") as mock_light_q,
+        patch("app.queue.heavy_queue.enqueue") as mock_heavy_q,
+    ):
+        resp_review = client.post(
+            "/talks/1/review",
+            json={"decision": "needs_work", "note": "Adjust start boundary"},
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert resp_review.status_code == 200
+        review_data = resp_review.json()
+        assert review_data["talk"]["status"] == "pending_bounds"
+        assert review_data["talk"]["cut_start"] == 10.0
+        assert review_data["talk"]["cut_end"] == 60.0
+        assert talk.status == "pending_bounds"
+        assert talk.cut_start == 10.0
+        assert talk.cut_end == 60.0
+
+        # No background jobs enqueued
+        mock_light_q.assert_not_called()
+        mock_heavy_q.assert_not_called()
+
+        # Prior artifacts still exist, raw untouched
+        assert fake_storage.get("1/raw/video.mp4").read_bytes() == (
+            b"original raw video bytes"
+        )
+        assert fake_storage.get("1/cut/cut.mp4").read_bytes() == b"old cut content v1"
+        assert fake_storage.get("1/preview/preview.mp4").read_bytes() == (
+            b"old preview content v1"
+        )
+
+    # Step 2: Speaker resubmits adjusted bounds via POST /talks/{id}/cut
+    with patch("app.routes.talks.light_queue.enqueue") as mock_cut_enqueue:
+        resp_cut = client.post(
+            "/talks/1/cut",
+            json={"cut_start": "00:00:20", "cut_end": "00:00:50"},
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert resp_cut.status_code == 202
+        cut_data = resp_cut.json()
+        assert cut_data["status"] == "cutting"
+        assert cut_data["cut_start"] == 20.0
+        assert cut_data["cut_end"] == 50.0
+        assert talk.status == "cutting"
+        assert talk.cut_start == 20.0
+        assert talk.cut_end == 50.0
+
+        # Verify job_cut was enqueued
+        mock_cut_enqueue.assert_called_once()
+        call_args = mock_cut_enqueue.call_args
+        queued_cut = call_args[0][0]
+        cut_args = call_args[0][1:]
+        assert call_args[0][1] == 1  # talk_id
+        assert call_args[0][2] == "1/raw/video.mp4"  # raw_key
+
+    # Step 3: Run queued cut and preview workers to overwrite artifacts
+    mock_db.__enter__.return_value = mock_db
+    mock_db.get.side_effect = lambda model, obj_id: (
+        talk if model == models.Talk else MagicMock()
+    )
+
+    with (
+        patch("app.tasks.SessionLocal", return_value=mock_db),
+        patch("app.tasks.get_storage_backend", return_value=fake_storage),
+        patch(
+            "app.tasks.cut",
+            side_effect=lambda inp, out, s, e: Path(out).write_bytes(
+                b"new cut content v2"
+            ),
+        ),
+        patch(
+            "app.tasks.generate_preview",
+            side_effect=lambda inp, out, preset: Path(out).write_bytes(
+                b"new preview content v2"
+            ),
+        ),
+        patch("app.tasks.light_queue.enqueue") as mock_preview_enqueue,
+    ):
+        queued_cut(*cut_args)
+        assert talk.status == "generating_previews"
+
+        mock_preview_enqueue.assert_called_once()
+        queued_preview = mock_preview_enqueue.call_args[0][0]
+        preview_args = mock_preview_enqueue.call_args[0][1:]
+
+        queued_preview(*preview_args)
+        assert talk.status == "preview"
+        assert mock_preview_enqueue.call_count == 1
+
+    assert fake_storage.get("1/cut/cut.mp4").read_bytes() == b"new cut content v2"
+    assert fake_storage.get("1/preview/preview.mp4").read_bytes() == (
+        b"new preview content v2"
+    )
+    # Raw recording is still untouched
+    assert fake_storage.get("1/raw/video.mp4").read_bytes() == (
+        b"original raw video bytes"
+    )

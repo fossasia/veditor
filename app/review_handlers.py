@@ -47,7 +47,7 @@ def handle_needs_work(
     payload: schemas.ReviewRequest,
     db: Session,
 ) -> schemas.ReviewResponse:
-    return _record_review_and_advance(talk, payload, "needs_work", db)
+    return _record_review_and_advance(talk, payload, "pending_bounds", db)
 
 
 def handle_reject(
