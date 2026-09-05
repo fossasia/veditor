@@ -98,7 +98,7 @@ def test_transcode_progress_callback(tmp_path: Path):
 
     intermediate_events = [val for val in progress_events if 0.0 < val < 1.0]
     assert all(
-        intermediate_events[i] - intermediate_events[i - 1] >= 0.015
+        intermediate_events[i] > intermediate_events[i - 1]
         for i in range(1, len(intermediate_events))
     )
 
@@ -209,3 +209,58 @@ def test_transcode_progress_with_offset_start(tmp_path: Path):
     assert len(progress_events) >= 1
     assert any(0.0 < val < 1.0 for val in progress_events)
     assert progress_events[-1] == 1.0
+
+
+def test_transcode_graceful_fallback_when_duration_unavailable(
+    tmp_path: Path, monkeypatch
+):
+    """Verify transcoding still completes without error when container duration is None."""
+    import av
+
+    source_clip = generate_clip(
+        2.0, has_video=True, has_audio=True, output_dir=tmp_path
+    )
+    output_clip = tmp_path / "transcoded_no_duration.mp4"
+
+    progress_events: list[float] = []
+
+    real_open = av.open
+
+    class ContainerProxy:
+        def __init__(self, real_container):
+            self._real = real_container
+
+        @property
+        def duration(self):
+            return None
+
+        def __getattr__(self, item):
+            return getattr(self._real, item)
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return self._real.__exit__(exc_type, exc_val, exc_tb)
+
+    def mocked_av_open(*args, **kwargs):
+        container = real_open(*args, **kwargs)
+        if "w" not in kwargs.get("mode", "r") and not str(args[0]).endswith(
+            "transcoded_no_duration.mp4"
+        ):
+            return ContainerProxy(container)
+        return container
+
+    monkeypatch.setattr(av, "open", mocked_av_open)
+
+    transcode(
+        source_clip,
+        output_clip,
+        on_progress=lambda p: progress_events.append(p),
+    )
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    # When duration is None, intermediate progress is skipped but final 1.0 is called
+    assert progress_events == [1.0]

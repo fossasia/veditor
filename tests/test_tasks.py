@@ -430,7 +430,7 @@ def test_transcode_enqueues_publish_on_light(dummy_talk, mock_storage):
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_transcode(input_path, output_path):
+    def fake_transcode(input_path, output_path, on_progress=None):
         assert db_ctx.open_sessions == 0, "DB session was open during transcode!"
 
     with (
@@ -444,12 +444,55 @@ def test_transcode_enqueues_publish_on_light(dummy_talk, mock_storage):
     assert dummy_talk.status == "uploading"
     job = next(iter(jobs.values()))
     assert job.status == "done"
+    assert job.progress_pct == 100.0
     mock_light_enqueue.assert_called_once_with(
         job_publish,
         1,
         "1/final/final.mp4",
         job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
     )
+
+
+def test_transcode_progress_callback_updates_job_progress(dummy_talk, mock_storage):
+    dummy_talk.status = "transcoding"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    progress_history: list[float] = []
+
+    def fake_transcode(input_path, output_path, on_progress=None):
+        assert db_ctx.open_sessions == 0, "DB session was open during transcode!"
+        if on_progress:
+            on_progress(0.25)
+            assert db_ctx.open_sessions == 0
+            job = next(iter(jobs.values()))
+            progress_history.append(job.progress_pct)
+            on_progress(0.60)
+            assert db_ctx.open_sessions == 0
+            progress_history.append(job.progress_pct)
+            on_progress(0.95)
+            assert db_ctx.open_sessions == 0
+            progress_history.append(job.progress_pct)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.transcode", side_effect=fake_transcode),
+        patch("app.tasks.light_queue.enqueue"),
+    ):
+        job_transcode(
+            1,
+            "1/cut/cut_loud.mp4",
+            "1/final/final.mp4",
+            progress_throttle_s=0.0,
+        )
+
+    job = next(iter(jobs.values()))
+    assert job.status == "done"
+    assert job.progress_pct == 100.0
+    assert 25.0 in progress_history
+    assert 60.0 in progress_history
+    assert 95.0 in progress_history
 
 
 def test_publish_advances_to_done_and_halts(dummy_talk, mock_storage):

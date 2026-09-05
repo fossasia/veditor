@@ -3,7 +3,7 @@ from datetime import datetime, time
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EventBase(BaseModel):
@@ -59,6 +59,7 @@ class JobBase(BaseModel):
     kind: str
     status: str
     log_path: str | None = None
+    progress_pct: float | None = Field(default=None, ge=0.0, le=100.0)
 
 
 class JobCreate(JobBase):

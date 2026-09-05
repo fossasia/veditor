@@ -73,6 +73,7 @@ class Job(Base):
     kind: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     log_path: Mapped[str | None] = mapped_column(Text)
+    progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     talk: Mapped[Talk] = relationship(back_populates="jobs")
 

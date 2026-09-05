@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -353,7 +354,12 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
         raise
 
 
-def job_transcode(talk_id: int, loud_key: str, final_key: str | None = None) -> None:
+def job_transcode(
+    talk_id: int,
+    loud_key: str,
+    final_key: str | None = None,
+    progress_throttle_s: float = 5.0,
+) -> None:
     final_key = final_key or f"{talk_id}/final/final.mp4"
     job_id = None
     storage = get_storage_backend()
@@ -362,17 +368,39 @@ def job_transcode(talk_id: int, loud_key: str, final_key: str | None = None) -> 
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="transcode", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="transcode",
+                status="running",
+                progress_pct=None,
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
             job_id = job.id
 
         loud_path = storage.get(loud_key)
+        last_update_time = [0.0]
+
+        def _on_progress(pct: float) -> None:
+            now = time.monotonic()
+            if 0.0 <= pct < 1.0 and (now - last_update_time[0]) >= progress_throttle_s:
+                last_update_time[0] = now
+                try:
+                    with SessionLocal() as progress_db:
+                        j = progress_db.get(Job, job_id)
+                        if j and j.status == "running":
+                            j.progress_pct = round(pct * 100.0, 2)
+                            progress_db.commit()
+                except Exception as progress_err:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to update transcode progress in DB: %s",
+                        progress_err,
+                    )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_out = Path(tmpdir) / "final.mp4"
-            transcode(loud_path, tmp_out)
+            transcode(loud_path, tmp_out, on_progress=_on_progress)
             storage.put(final_key, tmp_out)
 
         with SessionLocal() as db:
@@ -387,6 +415,7 @@ def job_transcode(talk_id: int, loud_key: str, final_key: str | None = None) -> 
                 return
             advance(talk, "uploading")
             job.status = "done"
+            job.progress_pct = 100.0
             db.commit()
 
         light_queue.enqueue(

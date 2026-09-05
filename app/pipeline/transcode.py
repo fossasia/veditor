@@ -227,9 +227,10 @@ def transcode(
                             0.0, current_ts_s - stream_first_pts[stream_idx]
                         )
                         pct = min(0.99, max(0.0, elapsed_s / in_duration_s))
-                        if pct - last_reported_pct >= 0.02:
-                            on_progress(round(pct, 4))
-                            last_reported_pct = pct
+                        reported_pct = round(pct, 4)
+                        if reported_pct > last_reported_pct:
+                            on_progress(reported_pct)
+                            last_reported_pct = reported_pct
 
                 if packet.stream.type == "video" and out_video is not None:
                     for frame in packet.decode():
