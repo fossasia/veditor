@@ -119,6 +119,7 @@ def test_end_to_end_smoke(clean_db):
         "cutting",
         "generating_previews",
         "preview",
+        "pending_intro_outro",
         "transcoding",
         "uploading",
         "done",

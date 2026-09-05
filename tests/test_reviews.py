@@ -147,6 +147,7 @@ def test_review_forbidden_event(mock_db, preview_talk):
         "rejected",
         "broken",
         "needs_work",
+        "pending_intro_outro",
     ],
 )
 def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status):
@@ -172,8 +173,8 @@ def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status
 @pytest.mark.parametrize(
     ("decision", "note", "expected_status"),
     [
-        ("approve", None, "transcoding"),
-        ("approve", "Looks great!", "transcoding"),
+        ("approve", None, "pending_intro_outro"),
+        ("approve", "Looks great!", "pending_intro_outro"),
         ("needs_work", None, "needs_work"),
         ("needs_work", "Audio is cut off at the start", "needs_work"),
         ("reject", None, "pending_bounds"),
@@ -262,13 +263,13 @@ def test_review_dispatch_invokes_correct_handler(
 
 def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
     """Directly test handle_approve, handle_needs_work, handle_reject with DB transaction."""
-    # Test handle_approve -> transcoding
+    # Test handle_approve -> pending_intro_outro
     req_approve = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.approve, note="Approve note"
     )
     resp_approve = handle_approve(preview_talk, req_approve, mock_db)
     assert resp_approve.talk.id == preview_talk.id
-    assert resp_approve.talk.status == "transcoding"
+    assert resp_approve.talk.status == "pending_intro_outro"
     assert resp_approve.review is not None
     assert resp_approve.review.decision == "approve"
     assert resp_approve.review.note == "Approve note"
@@ -480,7 +481,7 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         assert len(reviews) == 1
 
         final_talk = db.query(models.Talk).filter(models.Talk.id == talk_id).one()
-        assert final_talk.status in ("transcoding", "needs_work")
+        assert final_talk.status in ("pending_intro_outro", "needs_work")
         assert final_talk.status != "preview"
         assert reviews[0].decision in ("approve", "needs_work")
         db.close()
@@ -492,3 +493,47 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         clean_db.query(models.Event).filter(models.Event.id == event_id).delete()
         clean_db.commit()
         clean_db.close()
+
+
+def test_approve_blocks_at_pending_intro_outro_without_enqueuing_jobs(
+    mock_db, preview_talk
+):
+    """
+    Acceptance Criteria:
+    - POST /talks/{id}/review with approve transitions talk to 'pending_intro_outro'.
+    - No RQ job is enqueued as a direct result of this transition.
+    - No Job model record is created in the database.
+    - The talk remains parked in 'pending_intro_outro' without auto-advancing.
+    """
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    with (
+        patch("app.queue.light_queue.enqueue") as mock_light_enqueue,
+        patch("app.queue.heavy_queue.enqueue") as mock_heavy_enqueue,
+    ):
+        response = client.post(
+            f"/talks/{preview_talk.id}/review",
+            json={"decision": "approve", "note": "Approved by speaker"},
+            headers={"X-API-Key": "valid_key"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["talk"]["status"] == "pending_intro_outro"
+        assert preview_talk.status == "pending_intro_outro"
+
+        # Explicit non-enqueue on this path
+        mock_light_enqueue.assert_not_called()
+        mock_heavy_enqueue.assert_not_called()
+
+        # Verify only Review was added to db, no Job model was created
+        added_types = [type(call[0][0]) for call in mock_db.add.call_args_list]
+        assert models.Review in added_types
+        assert models.Job not in added_types
+
+        # Talk remains parked in pending_intro_outro without auto-progression
+        assert preview_talk.status == "pending_intro_outro"

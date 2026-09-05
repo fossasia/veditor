@@ -26,7 +26,8 @@ def test_advance_illegal_transitions():
         "pending_bounds": "pending_approval",
         "cutting": "needs_work",
         "generating_previews": "transcoding",
-        "preview": "done",
+        "preview": "transcoding",  # must go via pending_intro_outro now
+        "pending_intro_outro": "cutting",
         "transcoding": "done",
         "uploading": "rejected",
         "needs_work": "preview",
@@ -84,3 +85,10 @@ def test_explicit_paths_per_acceptance_criteria():
     talk_reset = DummyTalk("preview")
     advance(talk_reset, "pending_bounds")
     assert talk_reset.status == "pending_bounds"
+
+    # preview → pending_intro_outro → transcoding (Phase 5 blocking intro/outro gate)
+    talk_intro_outro = DummyTalk("preview")
+    advance(talk_intro_outro, "pending_intro_outro")
+    assert talk_intro_outro.status == "pending_intro_outro"
+    advance(talk_intro_outro, "transcoding")
+    assert talk_intro_outro.status == "transcoding"

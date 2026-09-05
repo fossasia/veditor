@@ -39,7 +39,7 @@ def handle_approve(
     payload: schemas.ReviewRequest,
     db: Session,
 ) -> schemas.ReviewResponse:
-    return _record_review_and_advance(talk, payload, "transcoding", db)
+    return _record_review_and_advance(talk, payload, "pending_intro_outro", db)
 
 
 def handle_needs_work(

@@ -97,6 +97,7 @@ def test_raw_preview_gated_before_pending_bounds(blocked_status):
         "generating_previews",
         "preview",
         "needs_work",
+        "pending_intro_outro",
         "transcoding",
         "uploading",
         "done",
