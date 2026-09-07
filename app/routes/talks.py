@@ -98,7 +98,7 @@ def create_or_update_talk(
         return talk
 
 
-@router.get("/{talk_id}", response_model=schemas.TalkRead)
+@router.get("/{talk_id}", response_model=schemas.TalkWithJobsRead)
 def get_talk(
     talk_id: int,
     client: Annotated[models.Client, Depends(get_client)],
@@ -106,7 +106,7 @@ def get_talk(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
     """
-    Retrieves talk metadata, current status, and preview URLs.
+    Retrieves talk metadata, current status, associated jobs with progress/timing, and preview URLs.
     Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
@@ -123,7 +123,7 @@ def get_talk(
     preview_urls = [storage.url(key) for key in candidate_keys if storage.exists(key)]
     preview_urls = list(dict.fromkeys(preview_urls))
 
-    talk_data = schemas.TalkRead.model_validate(talk)
+    talk_data = schemas.TalkWithJobsRead.model_validate(talk)
     talk_data.preview_urls = preview_urls
     return talk_data
 

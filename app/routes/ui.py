@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, schemas
 from app.auth import hash_api_key
 from app.config import PREVIEW_PRESETS
 from app.db import get_db
@@ -515,6 +515,26 @@ def _get_scoped_talk(talk_id: int, client: models.Client, db: Session) -> models
             detail="Talk not found",
         )
     return talk
+
+
+@router.get("/talks/{talk_id}/jobs", response_model=list[schemas.JobRead])
+def get_talk_jobs(
+    talk_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+):
+    """Returns the recent jobs and active progress for a talk."""
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or (client is not None and talk.event_id not in client.event_ids):
+        raise HTTPException(status_code=404, detail="Talk not found")
+    jobs = (
+        db.query(models.Job)
+        .filter(models.Job.talk_id == talk_id)
+        .order_by(models.Job.id.desc())
+        .limit(10)
+        .all()
+    )
+    return jobs
 
 
 @router.post("/talks/{talk_id}/status")

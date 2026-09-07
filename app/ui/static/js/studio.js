@@ -482,10 +482,99 @@ window.handleVideoFileUpload = async function(e, talkId) {
   }
 };
 
+// ── Real-time Recent Jobs Polling & Dynamic Rendering ─────────────
+function renderRecentJobs(jobs) {
+  const container = document.getElementById('jobs-container');
+  const empty = document.getElementById('jobs-empty');
+  if (!jobs || jobs.length === 0) {
+    if (container) container.style.display = 'none';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  if (!container) return;
+  container.style.display = 'flex';
+
+  container.innerHTML = jobs.map(job => {
+    const isRunning = job.status === 'running';
+    const isDone = job.status === 'done' || job.status === 'success';
+    const isFailed = job.status === 'failed';
+    const badgeClass = isDone ? 'badge-done' : (isRunning ? 'badge-processing' : (isFailed ? 'badge-danger' : 'badge-waiting'));
+
+    let progressBadge = '';
+    if (job.progress_pct !== null && job.progress_pct !== undefined && isRunning) {
+      progressBadge = `<span class="badge badge-info" style="font-size:0.65rem;padding:1px 5px;">${Math.round(job.progress_pct)}%</span>`;
+    }
+
+    let progressBar = '';
+    if (isRunning && job.progress_pct !== null && job.progress_pct !== undefined) {
+      progressBar = `
+        <div class="job-progress-track">
+          <div class="job-progress-fill animated" style="width: ${Math.min(100, Math.max(0, job.progress_pct))}%;"></div>
+        </div>`;
+    }
+
+    let timingHtml = '';
+    if (job.started_at) {
+      const d = new Date(job.started_at);
+      const timeStr = !isNaN(d.getTime()) ? d.toTimeString().slice(0, 8) : '';
+      let remainingOrElapsed = '';
+      if (isRunning && job.estimated_remaining !== null && job.estimated_remaining !== undefined) {
+        remainingOrElapsed = `<span>~${Math.round(job.estimated_remaining)}s remaining</span>`;
+      } else if (job.elapsed_time !== null && job.elapsed_time !== undefined) {
+        remainingOrElapsed = `<span>${Math.round(job.elapsed_time)}s elapsed</span>`;
+      }
+      timingHtml = `
+        <div class="job-timing-meta">
+          <span>Started ${timeStr}</span>
+          ${remainingOrElapsed}
+        </div>`;
+    }
+
+    return `
+      <div class="job-card" data-job-id="${job.id}">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-family:var(--v-font-mono);font-weight:600;">${job.kind}</span>
+          <div style="display:flex;align-items:center;gap:5px;">
+            ${progressBadge}
+            <span class="badge ${badgeClass}" style="font-size:0.65rem;padding:1px 5px;">
+              ${isRunning ? '<span class="spinner spinner-sm"></span>' : ''}${job.status}
+            </span>
+          </div>
+        </div>
+        ${progressBar}
+        ${timingHtml}
+      </div>`;
+  }).join('');
+}
+
+let studioPollInterval = null;
+async function pollStudioJobs() {
+  const talkId = (typeof TALK_ID !== 'undefined') ? TALK_ID : parseInt(window.location.pathname.split('/').filter(Boolean).pop(), 10);
+  if (!talkId || isNaN(talkId)) return;
+
+  try {
+    const key = (window.getApiKey && window.getApiKey()) || '';
+    const headers = key ? { 'X-API-Key': key } : {};
+    const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers });
+    if (!res.ok) return;
+    const jobs = await res.json();
+    renderRecentJobs(jobs);
+  } catch { /* skip */ }
+}
+
+function startStudioPolling() {
+  if (studioPollInterval) clearInterval(studioPollInterval);
+  studioPollInterval = setInterval(pollStudioJobs, 2500);
+}
+
 // ── Initial Setup & Drag-and-Drop ───────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initInitialVideo();
   updateCutMarkersUI();
+  pollStudioJobs();
+  startStudioPolling();
 
   const dropzone = document.getElementById('no-preview-msg');
   if (dropzone) {
