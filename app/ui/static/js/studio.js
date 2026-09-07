@@ -364,6 +364,36 @@ window.approveTalk = async function(id) {
   const btn = document.getElementById('btn-approve');
   const originalHtml = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Processing Pipeline...'; }
+
+  const progressWrap = document.getElementById('pipeline-progress-wrap');
+  const progressFill = document.getElementById('pipeline-progress-fill');
+  const progressPct = document.getElementById('pipeline-progress-pct');
+  const progressDesc = document.getElementById('pipeline-progress-desc');
+
+  if (progressWrap) progressWrap.style.display = 'block';
+
+  let currentPct = 10;
+  if (progressFill) progressFill.style.width = `${currentPct}%`;
+  if (progressPct) progressPct.textContent = `${currentPct}%`;
+
+  const stages = [
+    { pct: 25, desc: 'Rendering title intro and outro slates...' },
+    { pct: 55, desc: 'Cutting media clip to specified In/Out points...' },
+    { pct: 80, desc: 'Generating video preview & normalizing audio...' },
+    { pct: 95, desc: 'Finalizing pipeline and saving assets...' }
+  ];
+
+  let stageIndex = 0;
+  const timer = setInterval(() => {
+    if (stageIndex < stages.length) {
+      const s = stages[stageIndex];
+      if (progressFill) progressFill.style.width = `${s.pct}%`;
+      if (progressPct) progressPct.textContent = `${s.pct}%`;
+      if (progressDesc) progressDesc.textContent = s.desc;
+      stageIndex++;
+    }
+  }, 1200);
+
   try {
     await postUI(`/studio/talks/${id}/approve`, {
       decision: 'approved',
@@ -371,9 +401,15 @@ window.approveTalk = async function(id) {
       start_sec: inPointSec,
       end_sec: outPointSec,
     });
-    location.reload();
+    clearInterval(timer);
+    if (progressFill) progressFill.style.width = '100%';
+    if (progressPct) progressPct.textContent = '100%';
+    if (progressDesc) progressDesc.textContent = 'Pipeline complete! Reloading studio...';
+    setTimeout(() => location.reload(), 400);
   } catch (err) {
+    clearInterval(timer);
     alert(`Pipeline execution failed: ${err.message}`);
+    if (progressWrap) progressWrap.style.display = 'none';
     if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
   }
 };

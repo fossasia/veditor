@@ -49,14 +49,23 @@ def db_session():
     try:
         yield db
     finally:
-        for obj in reversed(created):
-            try:
-                db.delete(obj)
-                db.commit()
-            except Exception:  # noqa: BLE001
-                db.rollback()
-        app.dependency_overrides.pop(get_db, None)
-        db.close()
+        try:
+            for obj in created:
+                if isinstance(obj, models.Talk) and obj.id:
+                    db.query(models.Job).filter(models.Job.talk_id == obj.id).delete()
+                    db.query(models.Review).filter(
+                        models.Review.talk_id == obj.id
+                    ).delete()
+            db.commit()
+            for obj in reversed(created):
+                try:
+                    db.delete(obj)
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    db.rollback()
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            db.close()
 
 
 def test_dashboard_page(client: TestClient, db_session):

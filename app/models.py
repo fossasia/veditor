@@ -81,8 +81,47 @@ class Job(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     log_path: Mapped[str | None] = mapped_column(Text)
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=True,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=True,
+    )
 
     talk: Mapped[Talk] = relationship(back_populates="jobs")
+
+    @property
+    def elapsed_time(self) -> float | None:
+        if self.started_at is None:
+            return None
+        now = datetime.now(UTC)
+        started = (
+            self.started_at
+            if self.started_at.tzinfo is not None
+            else self.started_at.replace(tzinfo=UTC)
+        )
+        return max(0.0, round((now - started).total_seconds(), 2))
+
+    @property
+    def estimated_remaining(self) -> float | None:
+        if (
+            self.elapsed_time is None
+            or self.progress_pct is None
+            or self.progress_pct <= 0.0
+        ):
+            return None
+        if self.progress_pct >= 100.0:
+            return 0.0
+        pct_fraction = self.progress_pct / 100.0
+        remaining = (self.elapsed_time / pct_fraction) * (1.0 - pct_fraction)
+        return max(0.0, round(remaining, 2))
 
 
 class Review(Base):

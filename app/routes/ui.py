@@ -253,6 +253,9 @@ def _execute_full_processing_pipeline(
             kind=kind,
             status="done",
             log_path=f"{talk_id}/logs/{kind}.log",
+            progress_pct=100.0,
+            started_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         db.add(job)
 
@@ -293,6 +296,9 @@ def _execute_master_transcode_pipeline(
             kind=kind,
             status="done",
             log_path=f"{talk_id}/logs/{kind}.log",
+            progress_pct=100.0,
+            started_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         db.add(job)
 

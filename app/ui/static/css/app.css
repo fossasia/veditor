@@ -544,6 +544,55 @@ td {
 .badge-preview    { background: var(--v-status-preview-bg); color: var(--v-status-preview-text); border-color: var(--v-status-preview-border); }
 .badge-done       { background: var(--v-status-success-bg); color: var(--v-status-success-text); border-color: var(--v-status-success-border); }
 .badge-danger     { background: var(--v-status-danger-bg);  color: var(--v-status-danger-text);  border-color: var(--v-status-danger-border); }
+.badge-info       { background: var(--v-primary-subtle);   color: var(--v-primary);             border-color: var(--v-border-focus); font-variant-numeric: tabular-nums; }
+
+.job-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--v-bg-subtle);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-xs);
+  font-size: 0.75rem;
+  transition: all 0.2s ease;
+}
+
+.job-progress-track {
+  height: 4px;
+  background: var(--v-border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.job-progress-fill {
+  height: 100%;
+  background: var(--v-primary);
+  border-radius: 2px;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.job-progress-fill.animated {
+  background: linear-gradient(90deg, var(--v-primary) 0%, #38bdf8 50%, var(--v-primary) 100%);
+  background-size: 200% 100%;
+  animation: progress-shimmer 1.5s infinite linear;
+}
+
+@keyframes progress-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.job-timing-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--v-text-muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Studio 3-Panel Layout ────────────────────────────────────── */
 .studio-shell {

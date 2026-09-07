@@ -10,6 +10,7 @@ import logging
 import tempfile
 import time
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import PREVIEW_PRESETS, settings
@@ -59,6 +60,7 @@ def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -
                 return
             job.status = "failed"
             job.log_path = log_key
+            job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
         if talk and talk.status not in (
             "waiting_for_files",
@@ -555,6 +557,7 @@ def job_transcode(
                         j = progress_db.get(Job, job_id)
                         if j and j.status == "running":
                             j.progress_pct = round(pct * 100.0, 2)
+                            j.updated_at = datetime.now(UTC)
                             progress_db.commit()
                 except Exception as progress_err:  # noqa: BLE001
                     logger.warning(

@@ -313,6 +313,21 @@
             </button>
           {% endif %}
         </div>
+
+        <div id="pipeline-progress-wrap" style="display:none;margin-top:10px;padding:10px;background:var(--v-bg-surface);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-xs);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:0.75rem;font-weight:600;color:var(--v-primary);" id="pipeline-progress-status">
+              <span class="spinner spinner-sm"></span> Processing Pipeline...
+            </span>
+            <span class="badge badge-info" id="pipeline-progress-pct" style="font-size:0.65rem;padding:1px 5px;">0%</span>
+          </div>
+          <div class="job-progress-track" style="height:6px;">
+            <div id="pipeline-progress-fill" class="job-progress-fill animated" style="width: 15%;"></div>
+          </div>
+          <div style="font-size:0.7rem;color:var(--v-text-muted);margin-top:5px;" id="pipeline-progress-desc">
+            Generating title slates, cutting clip & creating preview...
+          </div>
+        </div>
       </div>
 
       <!-- 4 Lifecycle Milestones -->
@@ -348,18 +363,40 @@
         Recent Jobs
       </div>
       {% if jobs %}
-      <div style="display:flex;flex-direction:column;gap:4px;">
+      <div id="jobs-container" style="display:flex;flex-direction:column;gap:6px;">
         {% for job in jobs %}
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--v-bg-subtle);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-xs);font-size:0.75rem;">
-          <span style="font-family:var(--v-font-mono);">{{ job.kind }}</span>
-          <span class="badge {% if job.status == 'done' or job.status == 'success' %}badge-done{% elif job.status == 'running' %}badge-processing{% elif job.status == 'failed' %}badge-danger{% else %}badge-waiting{% endif %}" style="font-size:0.65rem;padding:1px 5px;">
-            {% if job.status == 'running' %}<span class="spinner spinner-sm"></span>{% endif %}{{ job.status }}
-          </span>
+        <div class="job-card" data-job-id="{{ job.id }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-family:var(--v-font-mono);font-weight:600;">{{ job.kind }}</span>
+            <div style="display:flex;align-items:center;gap:5px;">
+              {% if job.progress_pct is not none and job.status == 'running' %}
+                <span class="badge badge-info" style="font-size:0.65rem;padding:1px 5px;">{{ "%.0f"|format(job.progress_pct) }}%</span>
+              {% endif %}
+              <span class="badge {% if job.status == 'done' or job.status == 'success' %}badge-done{% elif job.status == 'running' %}badge-processing{% elif job.status == 'failed' %}badge-danger{% else %}badge-waiting{% endif %}" style="font-size:0.65rem;padding:1px 5px;">
+                {% if job.status == 'running' %}<span class="spinner spinner-sm"></span>{% endif %}{{ job.status }}
+              </span>
+            </div>
+          </div>
+          {% if job.status == 'running' and job.progress_pct is not none %}
+          <div class="job-progress-track">
+            <div class="job-progress-fill" style="width: {{ job.progress_pct }}%;"></div>
+          </div>
+          {% endif %}
+          {% if job.started_at %}
+          <div class="job-timing-meta">
+            <span>Started {{ job.started_at.strftime('%H:%M:%S') }}</span>
+            {% if job.estimated_remaining is not none and job.status == 'running' %}
+              <span>~{{ "%.0f"|format(job.estimated_remaining) }}s remaining</span>
+            {% elif job.elapsed_time is not none %}
+              <span>{{ "%.0f"|format(job.elapsed_time) }}s elapsed</span>
+            {% endif %}
+          </div>
+          {% endif %}
         </div>
         {% endfor %}
       </div>
       {% else %}
-      <div style="font-size:0.75rem;color:var(--v-text-muted);">No pipeline jobs logged yet.</div>
+      <div id="jobs-empty" style="font-size:0.75rem;color:var(--v-text-muted);">No pipeline jobs logged yet.</div>
       {% endif %}
 
     </div>

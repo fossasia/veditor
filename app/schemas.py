@@ -1,9 +1,16 @@
 import re
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 
 class EventBase(BaseModel):
@@ -71,6 +78,8 @@ class JobBase(BaseModel):
     status: str
     log_path: str | None = None
     progress_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class JobCreate(JobBase):
@@ -81,6 +90,40 @@ class JobRead(JobBase):
     id: int
     talk_id: int
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def elapsed_time(self) -> float | None:
+        """Computed elapsed runtime in seconds (now - started_at)."""
+        if self.started_at is None:
+            return None
+        now = datetime.now(UTC)
+        started = (
+            self.started_at
+            if self.started_at.tzinfo is not None
+            else self.started_at.replace(tzinfo=UTC)
+        )
+        return max(0.0, round((now - started).total_seconds(), 2))
+
+    @computed_field
+    @property
+    def estimated_remaining(self) -> float | None:
+        """
+        Linearly extrapolated remaining seconds based on progress_pct and elapsed_time.
+        Returns None if progress_pct is None or <= 0.
+        Returns 0.0 if progress_pct >= 100.0.
+        """
+        if (
+            self.elapsed_time is None
+            or self.progress_pct is None
+            or self.progress_pct <= 0.0
+        ):
+            return None
+        if self.progress_pct >= 100.0:
+            return 0.0
+        pct_fraction = self.progress_pct / 100.0
+        remaining = (self.elapsed_time / pct_fraction) * (1.0 - pct_fraction)
+        return max(0.0, round(remaining, 2))
 
 
 class ReviewBase(BaseModel):
