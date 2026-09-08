@@ -174,6 +174,12 @@ class TalkWithJobsRead(TalkRead):
     jobs: list[JobRead] = []
 
 
+class TalkJobsResponse(BaseModel):
+    status: str
+    jobs: list[JobRead] = []
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RecordingIngestRequest(BaseModel):
     source_path: str | None = None
     relative_key: str | None = None

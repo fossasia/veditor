@@ -549,13 +549,13 @@ def _get_scoped_talk(talk_id: int, client: models.Client, db: Session) -> models
     return talk
 
 
-@router.get("/talks/{talk_id}/jobs", response_model=list[schemas.JobRead])
+@router.get("/talks/{talk_id}/jobs", response_model=schemas.TalkJobsResponse)
 def get_talk_jobs(
     talk_id: int,
     db: Annotated[Session, Depends(get_db)],
     client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
 ):
-    """Returns the recent jobs and active progress for a talk."""
+    """Returns the current talk status along with recent jobs and active progress."""
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
     if not talk or (client is not None and talk.event_id not in client.event_ids):
         raise HTTPException(status_code=404, detail="Talk not found")
@@ -566,7 +566,7 @@ def get_talk_jobs(
         .limit(10)
         .all()
     )
-    return jobs
+    return {"status": talk.status, "jobs": jobs}
 
 
 @router.post("/talks/{talk_id}/status")

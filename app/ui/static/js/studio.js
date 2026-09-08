@@ -590,7 +590,8 @@ async function pollStudioJobs() {
     const headers = key ? { 'X-API-Key': key } : {};
     const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers });
     if (!res.ok) return;
-    const jobs = await res.json();
+    const data = await res.json();
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
     renderRecentJobs(jobs);
   } catch { /* skip */ }
 }

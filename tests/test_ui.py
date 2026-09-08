@@ -385,7 +385,9 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
 
     res = client.get(f"/studio/talks/{talk.id}/jobs")
     assert res.status_code == 200
-    jobs = res.json()
+    data = res.json()
+    assert data["status"] == "transcoding"
+    jobs = data["jobs"]
     assert len(jobs) == 1
     assert jobs[0]["kind"] == "transcode"
     assert jobs[0]["status"] == "running"

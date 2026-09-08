@@ -98,7 +98,9 @@ async function pollTalk(talkId) {
     } else {
       const r = await fetch(`/studio/talks/${talkId}/jobs`);
       if (!r.ok) return;
-      jobs = await r.json();
+      const data = await r.json();
+      talkStatus = data.status || talkStatus;
+      jobs = data.jobs || (Array.isArray(data) ? data : []);
     }
 
     const activeJob = jobs.find(j => j.status === 'running');
