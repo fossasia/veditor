@@ -32,43 +32,90 @@ function getActiveTalkIds() {
     .map(row => parseInt(row.dataset.talkId, 10));
 }
 
+function renderActiveJobCell(cell, statusText, pct, remainingStr) {
+  cell.textContent = '';
+
+  const container = document.createElement('div');
+  container.style.cssText = 'display:flex;flex-direction:column;gap:3px;min-width:110px;';
+
+  const headerDiv = document.createElement('div');
+  headerDiv.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:4px;';
+
+  const statusBadge = document.createElement('span');
+  statusBadge.className = 'badge badge-blue badge-pulse';
+  const dot = document.createElement('span');
+  dot.className = 'badge-dot';
+  statusBadge.appendChild(dot);
+  statusBadge.appendChild(document.createTextNode((statusText || 'processing').replace(/_/g, ' ')));
+
+  const pctBadge = document.createElement('span');
+  pctBadge.className = 'badge badge-info';
+  pctBadge.style.cssText = 'font-size:0.65rem;padding:1px 4px;';
+  pctBadge.textContent = `${pct}%`;
+
+  headerDiv.appendChild(statusBadge);
+  headerDiv.appendChild(pctBadge);
+
+  const trackDiv = document.createElement('div');
+  trackDiv.className = 'job-progress-track';
+  trackDiv.style.cssText = 'height:3px;margin:0;';
+
+  const fillDiv = document.createElement('div');
+  fillDiv.className = 'job-progress-fill animated';
+  fillDiv.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  trackDiv.appendChild(fillDiv);
+
+  container.appendChild(headerDiv);
+  container.appendChild(trackDiv);
+
+  if (remainingStr) {
+    const remSpan = document.createElement('span');
+    remSpan.style.cssText = 'font-size:0.65rem;color:var(--v-text-muted);font-variant-numeric:tabular-nums;';
+    remSpan.textContent = remainingStr;
+    container.appendChild(remSpan);
+  }
+
+  cell.appendChild(container);
+}
+
 async function pollTalk(talkId) {
   try {
     const key = (window.getApiKey && window.getApiKey()) || '';
-    const headers = key ? { 'X-API-Key': key } : {};
-    const r = await (window.authFetch || fetch)(`/talks/${talkId}`, { headers });
-    if (!r.ok) return;
-    const data = await r.json();
     const cell = document.querySelector(`.status-cell[data-talk-id="${talkId}"]`);
     const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
 
-    const activeJob = (data.jobs || []).find(j => j.status === 'running');
+    let talkStatus = row ? row.dataset.status : '';
+    let jobs = [];
+
+    if (key) {
+      const headers = { 'X-API-Key': key };
+      const r = await (window.authFetch || fetch)(`/talks/${talkId}`, { headers });
+      if (!r.ok) return;
+      const data = await r.json();
+      talkStatus = data.status;
+      jobs = data.jobs || [];
+    } else {
+      const r = await fetch(`/studio/talks/${talkId}/jobs`);
+      if (!r.ok) return;
+      jobs = await r.json();
+    }
+
+    const activeJob = jobs.find(j => j.status === 'running');
     if (activeJob && activeJob.progress_pct !== null && activeJob.progress_pct !== undefined) {
       const pct = Math.round(activeJob.progress_pct);
       const remainingStr = (activeJob.estimated_remaining !== null && activeJob.estimated_remaining !== undefined)
         ? `~${Math.round(activeJob.estimated_remaining)}s left`
         : (activeJob.elapsed_time !== null && activeJob.elapsed_time !== undefined ? `${Math.round(activeJob.elapsed_time)}s elapsed` : '');
 
-      cell.innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:3px;min-width:110px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
-            <span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>${data.status.replace(/_/g, ' ')}</span>
-            <span class="badge badge-info" style="font-size:0.65rem;padding:1px 4px;">${pct}%</span>
-          </div>
-          <div class="job-progress-track" style="height:3px;margin:0;">
-            <div class="job-progress-fill animated" style="width: ${pct}%;"></div>
-          </div>
-          ${remainingStr ? `<span style="font-size:0.65rem;color:var(--v-text-muted);font-variant-numeric:tabular-nums;">${remainingStr}</span>` : ''}
-        </div>
-      `;
-    } else {
-      const newBadge = STATUS_BADGE_MAP[data.status] ?? STATUS_BADGE_MAP.waiting_for_files;
+      renderActiveJobCell(cell, talkStatus || activeJob.kind, pct, remainingStr);
+    } else if (talkStatus) {
+      const newBadge = STATUS_BADGE_MAP[talkStatus] ?? STATUS_BADGE_MAP.waiting_for_files;
       cell.innerHTML = newBadge;
     }
 
-    if (row) row.dataset.status = data.status;
-    if (data.status === 'done' || data.status === 'failed') {
+    if (row && talkStatus) row.dataset.status = talkStatus;
+    if (talkStatus === 'done' || talkStatus === 'failed') {
       setTimeout(() => location.reload(), 1500);
     }
   } catch { /* skip */ }

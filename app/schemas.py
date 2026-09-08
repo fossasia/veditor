@@ -94,16 +94,27 @@ class JobRead(JobBase):
     @computed_field
     @property
     def elapsed_time(self) -> float | None:
-        """Computed elapsed runtime in seconds (now - started_at)."""
+        """Computed elapsed runtime in seconds.
+
+        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`)
+        when present, falling back to current UTC time for non-terminal jobs.
+        """
         if self.started_at is None:
             return None
-        now = datetime.now(UTC)
         started = (
             self.started_at
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        return max(0.0, round((now - started).total_seconds(), 2))
+        if self.status in ("done", "failed") and self.updated_at is not None:
+            end = (
+                self.updated_at
+                if self.updated_at.tzinfo is not None
+                else self.updated_at.replace(tzinfo=UTC)
+            )
+        else:
+            end = datetime.now(UTC)
+        return max(0.0, round((end - started).total_seconds(), 2))
 
     @computed_field
     @property

@@ -259,3 +259,52 @@ def test_linear_extrapolation_accuracy():
         progress_pct=75.0,
     )
     assert 9.5 <= job_75.estimated_remaining <= 10.5
+
+
+def test_terminal_job_elapsed_time_uses_updated_at():
+    """Verify done and failed jobs calculate elapsed_time using updated_at instead of current time."""
+    from datetime import UTC, datetime
+
+    from app.schemas import JobRead
+
+    started = datetime(2026, 9, 7, 10, 0, 0, tzinfo=UTC)
+    updated = datetime(2026, 9, 7, 10, 2, 30, tzinfo=UTC)  # 150 seconds later
+
+    # 1. Done status with updated_at
+    done_job = JobRead(
+        id=20,
+        talk_id=1,
+        kind="cut",
+        status="done",
+        started_at=started,
+        updated_at=updated,
+        progress_pct=100.0,
+    )
+    assert done_job.elapsed_time == 150.0
+    assert done_job.estimated_remaining == 0.0
+
+    # 2. Failed status with updated_at
+    failed_job = JobRead(
+        id=21,
+        talk_id=1,
+        kind="transcode",
+        status="failed",
+        started_at=started,
+        updated_at=updated,
+        progress_pct=40.0,
+    )
+    assert failed_job.elapsed_time == 150.0
+    # Linear remaining for failed job at 40%: (150 / 0.4) * 0.6 = 225.0
+    assert failed_job.estimated_remaining == 225.0
+
+    # 3. Model level elapsed_time property
+    db_done_job = models.Job(
+        id=22,
+        talk_id=1,
+        kind="cut",
+        status="done",
+        started_at=started,
+        updated_at=updated,
+        progress_pct=100.0,
+    )
+    assert db_done_job.elapsed_time == 150.0
