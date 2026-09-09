@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.queue import redis_conn
-from app.routes import jobs, ops, reviews, talks, ui
+from app.routes import jobs, ops, reviews, studio, talks
 
 app = FastAPI(title="VEditor API")
 
@@ -16,7 +16,7 @@ app.include_router(ops.router)
 app.include_router(talks.router)
 app.include_router(reviews.router)
 app.include_router(jobs.router)
-app.include_router(ui.router)
+app.include_router(studio.router)
 
 
 @app.get("/", include_in_schema=False)

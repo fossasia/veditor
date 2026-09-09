@@ -273,11 +273,11 @@ window.submitScheduleImport = async function() {
     if (fileInput && fileInput.files && fileInput.files[0]) {
       const fd = new FormData();
       fd.append('file', fileInput.files[0]);
-      res = await (window.authFetch || fetch)('/studio/schedule/import', { method: 'POST', body: fd });
+      res = await (window.authFetch || fetch)('/talks/schedule/import', { method: 'POST', body: fd });
     } else if (jsonText.trim()) {
       let parsed;
       try { parsed = JSON.parse(jsonText); } catch { throw new Error('Invalid JSON format'); }
-      res = await (window.authFetch || fetch)('/studio/schedule/import', {
+      res = await (window.authFetch || fetch)('/talks/schedule/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed),
@@ -328,7 +328,7 @@ window.submitQuickTalk = async function() {
       payload.start = new Date(startVal).toISOString();
     }
 
-    const res = await (window.authFetch || fetch)('/studio/talks/create', {
+    const res = await (window.authFetch || fetch)('/talks/schedule/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -339,8 +339,7 @@ window.submitQuickTalk = async function() {
       throw new Error(err.detail || `Server returned ${res.status}`);
     }
 
-    const data = await res.json();
-    window.location = `/studio/talks/${data.talk_id}`;
+    location.reload();
   } catch (err) {
     alert(`Failed to create talk: ${err.message}`);
     if (btn) { btn.disabled = false; btn.innerHTML = orig; }
@@ -354,7 +353,7 @@ window.deleteSingleTalk = async function(id, title) {
   }
 
   try {
-    const res = await (window.authFetch || fetch)(`/studio/talks/${id}/delete`, { method: 'POST' });
+    const res = await (window.authFetch || fetch)(`/talks/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Server returned ${res.status}`);
@@ -419,7 +418,7 @@ window.submitBulkDelete = async function() {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Deleting...'; }
 
   try {
-    const res = await (window.authFetch || fetch)('/studio/talks/bulk-delete', {
+    const res = await (window.authFetch || fetch)('/talks/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ talk_ids: selected }),
@@ -430,7 +429,6 @@ window.submitBulkDelete = async function() {
       throw new Error(err.detail || `Server returned ${res.status}`);
     }
 
-    const data = await res.json();
     location.reload();
   } catch (err) {
     alert(`Bulk delete failed: ${err.message}`);

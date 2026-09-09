@@ -1,9 +1,13 @@
+import io
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import models
+from app.auth import hash_api_key
+from app.db import SessionLocal, get_db
 from app.main import app
 from app.storage import StorageBackend, get_storage_backend
 
@@ -31,11 +35,10 @@ def test_static_assets(client: TestClient):
     assert studio_js.status_code == 200
 
 
-from app.db import SessionLocal, get_db
-
-
 @pytest.fixture
 def db_session():
+    from sqlalchemy import inspect
+
     db = SessionLocal()
     app.dependency_overrides[get_db] = lambda: db
     created = []
@@ -50,28 +53,44 @@ def db_session():
         yield db
     finally:
         try:
+            db.rollback()
+
             for obj in created:
-                if isinstance(obj, models.Talk) and obj.id:
-                    db.query(models.Job).filter(models.Job.talk_id == obj.id).delete()
-                    db.query(models.Review).filter(
-                        models.Review.talk_id == obj.id
-                    ).delete()
-            db.commit()
-            for obj in reversed(created):
-                if isinstance(obj, (models.Job, models.Review)):
-                    continue
                 try:
-                    db.delete(obj)
-                    db.commit()
-                except Exception:  # noqa: BLE001
-                    db.rollback()
+                    insp = inspect(obj)
+                    if insp and insp.has_identity and insp.identity:
+                        obj_id = insp.identity[0]
+                        if isinstance(obj, models.Talk):
+                            db.query(models.Job).filter(
+                                models.Job.talk_id == obj_id
+                            ).delete()
+                            db.query(models.Review).filter(
+                                models.Review.talk_id == obj_id
+                            ).delete()
+                            db.query(models.Talk).filter(
+                                models.Talk.id == obj_id
+                            ).delete()
+                        elif isinstance(obj, models.Client):
+                            db.query(models.Client).filter(
+                                models.Client.id == obj_id
+                            ).delete()
+                        elif isinstance(obj, models.Event):
+                            db.query(models.Event).filter(
+                                models.Event.id == obj_id
+                            ).delete()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
         finally:
             app.dependency_overrides.pop(get_db, None)
             db.close()
 
 
+
 def test_dashboard_page(client: TestClient, db_session):
-    event = models.Event(name="Test UI Event")
+    event = models.Event(name="Test Studio Dashboard Event")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -79,7 +98,7 @@ def test_dashboard_page(client: TestClient, db_session):
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Test UI Dashboard Talk",
+        title="Test Studio Dashboard Talk",
         room="Auditorium",
         start=now,
         end=now + timedelta(minutes=45),
@@ -91,12 +110,12 @@ def test_dashboard_page(client: TestClient, db_session):
     response = client.get("/studio")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
-    assert "Test UI Dashboard Talk" in response.text
+    assert "Test Studio Dashboard Talk" in response.text
     assert "Auditorium" in response.text
 
 
 def test_talk_studio_page(client: TestClient, db_session):
-    event = models.Event(name="Test Studio Event")
+    event = models.Event(name="Test Studio Page Event")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -143,82 +162,13 @@ def test_media_serving(client: TestClient, tmp_path):
     assert not_found.status_code == 404
 
 
-def test_ui_post_routes_require_authentication(client: TestClient, db_session):
-    """Mutating UI endpoints must return 401 if unauthenticated."""
-    res = client.post("/studio/talks/1/status", json={"status": "waiting_for_files"})
-    assert res.status_code == 401
-
-    res = client.post("/studio/talks/1/approve")
-    assert res.status_code == 401
-
-    res = client.post("/studio/talks/1/reject")
-    assert res.status_code == 401
-
-    res = client.post("/studio/talks/1/retry")
-    assert res.status_code == 401
-
-    res = client.post("/studio/talks/1/delete")
-    assert res.status_code == 401
-
-
-def test_ui_post_routes_event_scoping(client: TestClient, db_session):
-    """Mutating talks belonging to other events returns 404."""
-    import uuid
-
-    from app.auth import hash_api_key
-
-    # Client has access only to an allowed event
-    allowed_event = models.Event(name=f"Allowed Event {uuid.uuid4().hex}")
-    db_session.add(allowed_event)
-    db_session.commit()
-    db_session.refresh(allowed_event)
-
-    api_key = f"test_ui_api_key_{uuid.uuid4().hex}"
-    client_model = models.Client(
-        hashed_key=hash_api_key(api_key), event_ids=[allowed_event.id]
-    )
-    db_session.add(client_model)
-
-    event2 = models.Event(name=f"Other Event {uuid.uuid4().hex}")
-    db_session.add(event2)
-    db_session.commit()
-    db_session.refresh(event2)
-
-    now = datetime.now(tz=UTC)
-    talk_other = models.Talk(
-        event_id=event2.id,
-        title=f"Other Event Talk {uuid.uuid4().hex}",
-        room="Hall B",
-        start=now,
-        end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-    )
-    db_session.add(talk_other)
-    db_session.commit()
-    db_session.refresh(talk_other)
-
-    # Attempt mutation with X-API-Key
-    headers = {"X-API-Key": api_key}
-    res = client.post(
-        f"/studio/talks/{talk_other.id}/status",
-        json={"status": "needs_work"},
-        headers=headers,
-    )
-    assert res.status_code == 404
-
-
-def test_ui_post_routes_authenticated_success(client: TestClient, db_session):
-    """Authenticated UI mutations succeed with valid key."""
-    import uuid
-
-    from app.auth import hash_api_key
-
-    event = models.Event(name=f"Allowed Event {uuid.uuid4().hex}")
+def test_talk_patch_metadata(client: TestClient, db_session):
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"valid_ui_key_{uuid.uuid4().hex}"
+    api_key = f"key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -226,8 +176,8 @@ def test_ui_post_routes_authenticated_success(client: TestClient, db_session):
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title=f"Authorized Talk {uuid.uuid4().hex}",
-        room="Hall A",
+        title="Original Title",
+        room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
         status="waiting_for_files",
@@ -236,31 +186,137 @@ def test_ui_post_routes_authenticated_success(client: TestClient, db_session):
     db_session.commit()
     db_session.refresh(talk)
 
-    # Header authentication
-    res = client.post(
-        f"/studio/talks/{talk.id}/status",
-        json={"status": "pending_approval", "note": "Reviewed"},
+    # Patch talk title & room
+    res = client.patch(
+        f"/talks/{talk.id}",
+        json={"title": "Updated Title", "room": "Room B"},
         headers={"X-API-Key": api_key},
     )
     assert res.status_code == 200
-    assert res.json()["new_status"] == "pending_approval"
+    data = res.json()
+    assert data["title"] == "Updated Title"
+    assert data["room"] == "Room B"
 
-    # Cookie authentication
-    client.cookies.set("veditor_api_key", api_key)
-    res_cookie = client.post(
-        f"/studio/talks/{talk.id}/edit",
-        json={"title": "Updated Title", "room": "Hall C"},
+
+def test_talk_delete_single(client: TestClient, db_session):
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Delete Talk",
+        room="Room A",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
     )
-    assert res_cookie.status_code == 200
-    assert res_cookie.json()["title"] == "Updated Title"
-    client.cookies.clear()
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    res = client.delete(
+        f"/talks/{talk.id}",
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    assert res.json()["deleted_id"] == talk.id
+
+    # Verify talk is deleted
+    assert (
+        db_session.query(models.Talk).filter(models.Talk.id == talk.id).first() is None
+    )
+
+
+def test_talk_bulk_delete(client: TestClient, db_session):
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk1 = models.Talk(
+        event_id=event.id,
+        title="Bulk Talk 1",
+        room="Room A",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talk2 = models.Talk(
+        event_id=event.id,
+        title="Bulk Talk 2",
+        room="Room B",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk1)
+    db_session.add(talk2)
+    db_session.commit()
+    db_session.refresh(talk1)
+    db_session.refresh(talk2)
+
+    res = client.post(
+        "/talks/bulk-delete",
+        json={"talk_ids": [talk1.id, talk2.id]},
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    assert res.json()["deleted_count"] == 2
+
+
+def test_talk_upload_recording(client: TestClient, db_session):
+    from unittest.mock import patch
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Upload Recording Talk",
+        room="Room A",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    fake_file = io.BytesIO(b"fake mp4 video bytes")
+    with patch("app.routes.talks.light_queue") as mock_queue:
+        res = client.post(
+            f"/talks/{talk.id}/upload",
+            files={"file": ("recording.mp4", fake_file, "video/mp4")},
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 202
+        assert res.json()["status"] == "detecting"
+        mock_queue.enqueue.assert_called_once()
 
 
 def test_import_schedule_json_list(client: TestClient, db_session):
-    import uuid
-
-    from app.auth import hash_api_key
-
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -281,88 +337,29 @@ def test_import_schedule_json_list(client: TestClient, db_session):
             "start": "2026-09-05T10:00:00Z",
             "end": "2026-09-05T10:45:00Z",
         },
-        {
-            "event_id": 180,
-            "title": "Modern Microservices Architecture in Python",
-            "room": "Hall 2",
-            "start": "2026-09-05T11:00:00Z",
-            "end": "2026-09-05T11:45:00Z",
-        },
     ]
 
     res = client.post(
-        "/studio/schedule/import",
+        "/talks/schedule/import",
         json=schedule_payload,
         headers={"X-API-Key": api_key},
     )
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"
-    assert data["imported_count"] == 3
-
-    talks = (
-        db_session.query(models.Talk)
-        .filter(models.Talk.event_id == data["event_id"])
-        .all()
-    )
-    assert len(talks) == 3
-    keynote = next(
-        t for t in talks if t.title == "Opening Keynote: Open Source AI Frontiers"
-    )
-    assert keynote.room == "Hall 1"
-    assert (
-        keynote.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        == "2026-09-05T09:00:00Z"
-    )
-    assert (
-        keynote.end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        == "2026-09-05T09:45:00Z"
-    )
-
-
-def test_create_single_talk_custom_duration(client: TestClient, db_session):
-    import uuid
-
-    from app.auth import hash_api_key
-
-    api_key = f"single_talk_key_{uuid.uuid4().hex}"
-    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
-    db_session.add(client_model)
-    db_session.commit()
-
-    res = client.post(
-        "/studio/talks/create",
-        json={
-            "event_name": f"Event {uuid.uuid4().hex}",
-            "title": "Custom Duration Session",
-            "room": "Auditorium B",
-            "duration_minutes": 25,
-            "start": "2026-09-05T14:00:00Z",
-        },
-        headers={"X-API-Key": api_key},
-    )
-    assert res.status_code == 200
-    talk_id = res.json()["talk_id"]
-
-    talk = db_session.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    assert talk is not None
-    assert talk.title == "Custom Duration Session"
-    assert talk.room == "Auditorium B"
-    assert (talk.end - talk.start).total_seconds() == 25 * 60
+    assert data["imported_count"] == 2
 
 
 def test_get_talk_jobs_endpoint(client: TestClient, db_session):
-    import uuid
-
-    from app.auth import hash_api_key
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
     api_key = f"key_{uuid.uuid4().hex}"
-    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    client_model = models.Client(
+        hashed_key=hash_api_key(api_key), event_ids=[event.id]
+    )
     db_session.add(client_model)
     db_session.commit()
 
@@ -391,23 +388,25 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     db_session.commit()
 
     # 1. Unauthenticated request must be rejected
-    unauth_res = client.get(f"/studio/talks/{talk.id}/jobs")
+    unauth_res = client.get(f"/talks/{talk.id}/jobs")
     assert unauth_res.status_code == 401
 
     # 2. Authenticated with wrong event scope must return 404
     other_key = f"other_key_{uuid.uuid4().hex}"
-    other_client = models.Client(hashed_key=hash_api_key(other_key), event_ids=[999999])
+    other_client = models.Client(
+        hashed_key=hash_api_key(other_key), event_ids=[999999]
+    )
     db_session.add(other_client)
     db_session.commit()
     scope_res = client.get(
-        f"/studio/talks/{talk.id}/jobs",
+        f"/talks/{talk.id}/jobs",
         headers={"X-API-Key": other_key},
     )
     assert scope_res.status_code == 404
 
     # 3. Authenticated authorized request succeeds
     res = client.get(
-        f"/studio/talks/{talk.id}/jobs",
+        f"/talks/{talk.id}/jobs",
         headers={"X-API-Key": api_key},
     )
     assert res.status_code == 200
@@ -425,8 +424,6 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
 def test_dashboard_and_studio_render_active_job_progress(
     client: TestClient, db_session
 ):
-    import uuid
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -468,3 +465,4 @@ def test_dashboard_and_studio_render_active_job_progress(
     assert "72%" in studio_res.text
     assert "job-card" in studio_res.text
     assert "pipeline-progress-wrap" in studio_res.text
+

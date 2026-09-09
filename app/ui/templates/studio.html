@@ -296,7 +296,7 @@
             <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
               Approve Preview (Start Master Transcode)
             </button>
-            <button class="btn btn-danger w-full" id="btn-needs-work" onclick="setTalkStatus({{ talk.id }}, 'needs_work')">
+            <button class="btn btn-danger w-full" id="btn-needs-work" onclick="requestChangesTalk({{ talk.id }})">
               Request Changes (Needs Work)
             </button>
           {% elif talk.status in ['rejected', 'broken'] %}
