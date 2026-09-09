@@ -618,6 +618,10 @@ def update_talk(
         talk.title = payload.title
     if payload.room is not None:
         talk.room = payload.room
+    if payload.start is not None:
+        talk.start = payload.start
+    if payload.end is not None:
+        talk.end = payload.end
 
     db.commit()
     db.refresh(talk)
@@ -754,25 +758,60 @@ def _parse_iso_datetime(val: str | None) -> datetime | None:
         return None
 
 
-def _parse_duration_minutes(val: str | float | None) -> int | None:
+def _parse_duration_seconds(val: str | float | None) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
-        return int(val)
+        # Numeric values <= 480 are interpreted as minutes (e.g. 45 -> 2700s)
+        # Larger numbers are treated as raw seconds
+        return float(val * 60) if val <= 480 else float(val)
     if isinstance(val, str):
         val = val.strip()
+        if not val:
+            return None
+        low = val.lower()
+        if low.endswith("s"):
+            try:
+                return float(low[:-1].strip())
+            except ValueError:
+                return None
+        if low.endswith(("min", "mins", "m")):
+            try:
+                num_str = low.rstrip("s").rstrip("in").rstrip("m").strip()
+                return float(num_str) * 60
+            except ValueError:
+                return None
+        if low.endswith(("h", "hr", "hrs")):
+            try:
+                num_str = low.rstrip("s").rstrip("r").rstrip("h").strip()
+                return float(num_str) * 3600
+            except ValueError:
+                return None
+
         if ":" in val:
             parts = val.split(":")
-            if len(parts) in (2, 3):
-                try:
-                    return int(parts[0]) * 60 + int(parts[1])
-                except ValueError:
-                    return None
+            try:
+                if len(parts) == 2:
+                    # MM:SS
+                    return float(int(parts[0]) * 60 + float(parts[1]))
+                elif len(parts) == 3:
+                    # HH:MM:SS
+                    return float(
+                        int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                    )
+            except ValueError:
+                return None
         try:
-            return int(val)
+            num = float(val)
+            return float(num * 60) if num <= 480 else float(num)
         except ValueError:
             return None
     return None
+
+
+def _parse_duration_minutes(val: str | float | None) -> int | None:
+    sec = _parse_duration_seconds(val)
+    return int(sec // 60) if sec is not None else None
 
 
 @router.post("/schedule/import", response_model=schemas.ScheduleImportResponse)
@@ -877,23 +916,25 @@ async def import_schedule(
 
         t_start = _parse_iso_datetime(t_info.get("start") or t_info.get("date"))
         t_end = _parse_iso_datetime(t_info.get("end"))
-        t_dur = _parse_duration_minutes(
-            t_info.get("duration") or t_info.get("duration_minutes")
+        t_dur_sec = _parse_duration_seconds(
+            t_info.get("duration")
+            or t_info.get("duration_seconds")
+            or t_info.get("duration_minutes")
         )
 
         if t_start and t_end:
             start_dt = t_start
             end_dt = t_end
-        elif t_start and t_dur:
+        elif t_start and t_dur_sec is not None:
             start_dt = t_start
-            end_dt = t_start + timedelta(minutes=t_dur)
+            end_dt = t_start + timedelta(seconds=t_dur_sec)
         elif t_start:
             start_dt = t_start
             end_dt = t_start + timedelta(minutes=45)
         else:
-            dur = t_dur or 45
-            start_dt = now + timedelta(minutes=created_count * dur)
-            end_dt = start_dt + timedelta(minutes=dur)
+            dur_sec = t_dur_sec if t_dur_sec is not None else 2700.0
+            start_dt = now + timedelta(seconds=created_count * dur_sec)
+            end_dt = start_dt + timedelta(seconds=dur_sec)
 
         existing = (
             db.query(models.Talk)

@@ -350,6 +350,7 @@ def test_import_schedule_json_list(client: TestClient, db_session):
     assert data["imported_count"] == 2
 
 
+
 def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -465,4 +466,56 @@ def test_dashboard_and_studio_render_active_job_progress(
     assert "72%" in studio_res.text
     assert "job-card" in studio_res.text
     assert "pipeline-progress-wrap" in studio_res.text
+
+
+def test_import_schedule_mm_ss_duration(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    res = client.post(
+        "/talks/schedule/import",
+        json={
+            "event_name": "Lightning Talks",
+            "title": "Short Demo",
+            "room": "Demo Pod",
+            "duration": "01:35",
+            "start": "2026-09-09T17:15:00Z",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["imported_count"] == 1
+
+    talk = (
+        db_session.query(models.Talk).filter(models.Talk.title == "Short Demo").first()
+    )
+    assert talk is not None
+    assert (talk.end - talk.start).total_seconds() == 95.0
+
+
+def test_import_schedule_suffix_units(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    res = client.post(
+        "/talks/schedule/import",
+        json={
+            "event_name": "Lightning Talks",
+            "title": "30s Clip",
+            "room": "Demo Pod",
+            "duration": "30s",
+            "start": "2026-09-09T17:15:00Z",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    talk = db_session.query(models.Talk).filter(models.Talk.title == "30s Clip").first()
+    assert talk is not None
+    assert (talk.end - talk.start).total_seconds() == 30.0
 

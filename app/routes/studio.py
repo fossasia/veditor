@@ -125,6 +125,8 @@ STAGE_MILESTONE_MAP = {
     "generating_previews": 2,
     "preview": 2,
     "needs_work": 2,
+    "pending_intro_outro": 3,
+    "assembling": 3,
     "transcoding": 3,
     "uploading": 3,
     "done": 4,  # All milestones complete

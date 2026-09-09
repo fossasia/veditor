@@ -268,6 +268,8 @@ class IntroOutroRequest(BaseModel):
 class TalkUpdate(BaseModel):
     title: str | None = None
     room: str | None = None
+    start: datetime | None = None
+    end: datetime | None = None
 
 
 class BulkDeleteRequest(BaseModel):

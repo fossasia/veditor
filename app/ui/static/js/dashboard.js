@@ -305,7 +305,7 @@ window.submitQuickTalk = async function() {
   const eventName = (document.getElementById('quick-event-name') || {}).value || 'General Conference';
   const title = (document.getElementById('quick-talk-title') || {}).value || '';
   const room = (document.getElementById('quick-talk-room') || {}).value || 'Auditorium A';
-  const duration = parseInt((document.getElementById('quick-talk-duration') || {}).value, 10) || 45;
+  const duration = (document.getElementById('quick-talk-duration') || {}).value || '45:00';
   const startVal = (document.getElementById('quick-talk-start') || {}).value || '';
   const btn = document.getElementById('btn-submit-quick-talk');
   const orig = btn ? btn.innerHTML : '';
@@ -322,8 +322,9 @@ window.submitQuickTalk = async function() {
       event_name: eventName,
       title,
       room,
-      duration_minutes: duration,
+      duration: duration.trim(),
     };
+
     if (startVal) {
       payload.start = new Date(startVal).toISOString();
     }

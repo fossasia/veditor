@@ -278,39 +278,75 @@
         </div>
 
         <div class="action-btns" id="action-btns" style="display:flex;flex-direction:column;gap:6px;">
-          {% if talk.status == 'needs_work' %}
-            <button class="btn btn-primary w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
-              Re-cut Timestamps & Regenerate Preview
+          {% if talk.status == 'waiting_for_files' %}
+            <div class="badge badge-waiting" style="padding:10px;width:100%;justify-content:center;text-align:center;">
+              Waiting for video recording upload
+            </div>
+            <button class="btn btn-primary w-full" onclick="document.getElementById('video-file-input').click()">
+              Upload Recording Video
+            </button>
+          {% elif talk.status in ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
+            <div class="badge badge-processing" style="padding:10px;width:100%;justify-content:center;text-align:center;">
+              <span class="spinner spinner-sm"></span> Processing in background ({{ talk.status | replace('_', ' ') | title }})...
+            </div>
+          {% elif talk.status == 'pending_approval' %}
+            <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Approve Schedule Alignment (Gate 1)
             </button>
             <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
               Reject Talk
             </button>
-          {% elif talk.status in ['pending_approval', 'waiting_for_files', 'pending_bounds'] %}
-            <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
-              Approve Timestamps (Start Processing)
+          {% elif talk.status == 'pending_bounds' %}
+            <button class="btn btn-primary w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Submit Cut Bounds & Generate Preview
             </button>
             <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
-              Reject Timestamps
+              Reject / Abort
+            </button>
+          {% elif talk.status == 'needs_work' %}
+            <button class="btn btn-primary w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Re-cut Bounds & Regenerate Preview
+            </button>
+            <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
+              Reject Talk
             </button>
           {% elif talk.status == 'preview' %}
             <button class="btn btn-success w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
-              Approve Preview (Start Master Transcode)
+              Approve Preview (Gate 2)
             </button>
-            <button class="btn btn-danger w-full" id="btn-needs-work" onclick="requestChangesTalk({{ talk.id }})">
+            <button class="btn btn-warning w-full" id="btn-needs-work" onclick="requestChangesTalk({{ talk.id }})">
               Request Changes (Needs Work)
             </button>
+            <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})">
+              Reject Talk
+            </button>
+          {% elif talk.status == 'pending_intro_outro' %}
+            <div style="background:var(--v-bg-subtle);border:1px solid var(--v-border-subtle);border-radius:var(--v-radius-sm);padding:10px;margin-bottom:10px;font-size:0.8rem;">
+              <div style="font-weight:600;margin-bottom:6px;color:var(--v-text-primary);">Opening & Closing Slates</div>
+              <label style="display:flex;align-items:center;gap:6px;margin-bottom:6px;cursor:pointer;">
+                <input type="checkbox" id="check-include-intro" checked>
+                <span>Include Opening Intro Slate</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:pointer;">
+                <input type="checkbox" id="check-include-outro" checked>
+                <span>Include Closing Outro Slate</span>
+              </label>
+            </div>
+            <button class="btn btn-primary w-full" id="btn-approve" onclick="approveTalk({{ talk.id }})">
+              Start Master Assembly & Transcode
+            </button>
+            <button class="btn btn-danger w-full" id="btn-reject" onclick="rejectTalk({{ talk.id }})" style="margin-top:6px;">
+              Reject / Abort
+            </button>
+
           {% elif talk.status in ['rejected', 'broken'] %}
             <button class="btn btn-primary w-full" id="btn-retry" onclick="retryTalk({{ talk.id }})">
               Retry Talk Lifecycle
             </button>
           {% elif talk.status == 'done' %}
-            <div class="badge badge-done" style="padding:8px 12px;width:100%;justify-content:center;">
+            <div class="badge badge-done" style="padding:10px;width:100%;justify-content:center;text-align:center;">
               Published & Complete
             </div>
-          {% else %}
-            <button class="btn btn-primary w-full" onclick="approveTalk({{ talk.id }})">
-              Process Next Stage
-            </button>
           {% endif %}
         </div>
 

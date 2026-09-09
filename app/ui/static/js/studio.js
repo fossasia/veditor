@@ -363,6 +363,17 @@ window.approveTalk = async function(id) {
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-approve');
   const originalHtml = btn ? btn.innerHTML : '';
+  const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
+
+  if (['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'].includes(talkStatus)) {
+    alert(`Talk is currently processing in background (${talkStatus}). Please wait for this stage to finish.`);
+    return;
+  }
+  if (talkStatus === 'waiting_for_files') {
+    alert('Please upload a video recording before approving.');
+    return;
+  }
+
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Processing...'; }
 
   const progressWrap = document.getElementById('pipeline-progress-wrap');
@@ -379,10 +390,9 @@ window.approveTalk = async function(id) {
   if (progressDesc) progressDesc.textContent = 'Executing processing pipeline...';
 
   try {
-    const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
     if (talkStatus === 'pending_approval') {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
-    } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work' || talkStatus === 'waiting_for_files') {
+    } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
       const cutStart = formatTimecode(inPointSec).slice(0, 8);
       const cutEnd = formatTimecode(outPointSec).slice(0, 8);
       await postAPI(`/talks/${id}/cut`, { cut_start: cutStart, cut_end: cutEnd });
@@ -397,6 +407,7 @@ window.approveTalk = async function(id) {
         intro_source: 'generated',
         outro_source: 'generated',
       });
+
     } else {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     }
@@ -663,4 +674,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const url = btn.getAttribute('data-asset-url') || btn.closest('.media-asset-row')?.getAttribute('data-asset-url');
     if (url) window.loadVideoSrc(url);
   });
+
+  // Auto-poll status when in background processing states
+  const activeProcessingStates = ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'];
+  const currentTalkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
+  const currentTalkId = window.location.pathname.split('/').filter(Boolean).pop();
+
+  if (activeProcessingStates.includes(currentTalkStatus) && currentTalkId) {
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await (window.authFetch || fetch)(`/talks/${currentTalkId}`, { _isPolling: true });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status && data.status !== currentTalkStatus) {
+            clearInterval(pollInterval);
+            location.reload();
+          }
+        }
+      } catch (_) {
+        // Ignore network polling glitches
+      }
+    }, 3000);
+  }
 });
+
