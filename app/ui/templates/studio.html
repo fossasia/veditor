@@ -384,7 +384,7 @@
           {% endif %}
           {% if job.started_at %}
           <div class="job-timing-meta">
-            <span>Started {{ job.started_at.strftime('%H:%M:%S') }}</span>
+            <span>Started {{ job.started_at.strftime('%H:%M:%S UTC') }}</span>
             {% if job.estimated_remaining is not none and job.status == 'running' %}
               <span>~{{ "%.0f"|format(job.estimated_remaining) }}s remaining</span>
             {% elif job.elapsed_time is not none %}

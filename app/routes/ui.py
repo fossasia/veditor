@@ -19,7 +19,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.auth import hash_api_key
@@ -189,6 +189,7 @@ def _record_stage_job(
     db.add(job)
     db.commit()
     db.refresh(job)
+    job_id = job.id
     try:
         result = func()
         job.status = "done"
@@ -197,9 +198,12 @@ def _record_stage_job(
         db.commit()
         return result
     except Exception:
-        job.status = "failed"
-        job.updated_at = datetime.now(UTC)
-        db.commit()
+        db.rollback()
+        failed_job = db.get(models.Job, job_id)
+        if failed_job:
+            failed_job.status = "failed"
+            failed_job.updated_at = datetime.now(UTC)
+            db.commit()
         raise
 
 
@@ -344,7 +348,7 @@ def dashboard(
     status_filter: str | None = None,
     q: str | None = None,
 ):
-    query = db.query(models.Talk)
+    query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
     if client is not None:
         query = query.filter(models.Talk.event_id.in_(client.event_ids))
     if event_id is not None:
@@ -552,13 +556,11 @@ def _get_scoped_talk(talk_id: int, client: models.Client, db: Session) -> models
 @router.get("/talks/{talk_id}/jobs", response_model=schemas.TalkJobsResponse)
 def get_talk_jobs(
     talk_id: int,
+    client: Annotated[models.Client, Depends(get_ui_client)],
     db: Annotated[Session, Depends(get_db)],
-    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
 ):
     """Returns the current talk status along with recent jobs and active progress."""
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (client is not None and talk.event_id not in client.event_ids):
-        raise HTTPException(status_code=404, detail="Talk not found")
+    talk = _get_scoped_talk(talk_id, client, db)
     jobs = (
         db.query(models.Job)
         .filter(models.Job.talk_id == talk_id)

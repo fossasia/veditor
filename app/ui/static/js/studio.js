@@ -371,28 +371,12 @@ window.approveTalk = async function(id) {
   const progressDesc = document.getElementById('pipeline-progress-desc');
 
   if (progressWrap) progressWrap.style.display = 'block';
-
-  let currentPct = 10;
-  if (progressFill) progressFill.style.width = `${currentPct}%`;
-  if (progressPct) progressPct.textContent = `${currentPct}%`;
-
-  const stages = [
-    { pct: 25, desc: 'Rendering title intro and outro slates...' },
-    { pct: 55, desc: 'Cutting media clip to specified In/Out points...' },
-    { pct: 80, desc: 'Generating video preview & normalizing audio...' },
-    { pct: 95, desc: 'Finalizing pipeline and saving assets...' }
-  ];
-
-  let stageIndex = 0;
-  const timer = setInterval(() => {
-    if (stageIndex < stages.length) {
-      const s = stages[stageIndex];
-      if (progressFill) progressFill.style.width = `${s.pct}%`;
-      if (progressPct) progressPct.textContent = `${s.pct}%`;
-      if (progressDesc) progressDesc.textContent = s.desc;
-      stageIndex++;
-    }
-  }, 1200);
+  if (progressFill) {
+    progressFill.style.width = '100%';
+    progressFill.classList.add('animated');
+  }
+  if (progressPct) progressPct.textContent = 'Processing';
+  if (progressDesc) progressDesc.textContent = 'Executing processing pipeline...';
 
   try {
     await postUI(`/studio/talks/${id}/approve`, {
@@ -401,13 +385,10 @@ window.approveTalk = async function(id) {
       start_sec: inPointSec,
       end_sec: outPointSec,
     });
-    clearInterval(timer);
-    if (progressFill) progressFill.style.width = '100%';
     if (progressPct) progressPct.textContent = '100%';
     if (progressDesc) progressDesc.textContent = 'Pipeline complete! Reloading studio...';
     setTimeout(() => location.reload(), 400);
   } catch (err) {
-    clearInterval(timer);
     alert(`Pipeline execution failed: ${err.message}`);
     if (progressWrap) progressWrap.style.display = 'none';
     if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
@@ -556,7 +537,7 @@ function renderRecentJobs(jobs) {
 
     if (job.started_at) {
       const d = new Date(job.started_at);
-      const timeStr = !isNaN(d.getTime()) ? d.toTimeString().slice(0, 8) : '';
+      const timeStr = !isNaN(d.getTime()) ? `${d.toISOString().slice(11, 19)} UTC` : '';
       const meta = document.createElement('div');
       meta.className = 'job-timing-meta';
 
@@ -593,6 +574,14 @@ async function pollStudioJobs() {
     const data = await res.json();
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
     renderRecentJobs(jobs);
+
+    const hasRunningJob = jobs.some(j => j.status === 'running');
+    const talkStatus = data.status;
+    const isTerminal = ['done', 'failed', 'rejected', 'broken'].includes(talkStatus);
+    if (!hasRunningJob && isTerminal && studioPollInterval) {
+      clearInterval(studioPollInterval);
+      studioPollInterval = null;
+    }
   } catch { /* skip */ }
 }
 

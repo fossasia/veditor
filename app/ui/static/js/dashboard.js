@@ -81,6 +81,7 @@ function renderActiveJobCell(cell, statusText, pct, remainingStr) {
 async function pollTalk(talkId) {
   try {
     const key = (window.getApiKey && window.getApiKey()) || '';
+    const headers = key ? { 'X-API-Key': key } : {};
     const cell = document.querySelector(`.status-cell[data-talk-id="${talkId}"]`);
     const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
@@ -88,22 +89,13 @@ async function pollTalk(talkId) {
     let talkStatus = row ? row.dataset.status : '';
     let jobs = [];
 
-    if (key) {
-      const headers = { 'X-API-Key': key };
-      const r = await (window.authFetch || fetch)(`/talks/${talkId}`, { headers });
-      if (!r.ok) return;
-      const data = await r.json();
-      talkStatus = data.status;
-      jobs = data.jobs || [];
-    } else {
-      const r = await fetch(`/studio/talks/${talkId}/jobs`);
-      if (!r.ok) return;
-      const data = await r.json();
-      talkStatus = data.status || talkStatus;
-      jobs = data.jobs || (Array.isArray(data) ? data : []);
-    }
+    const r = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers });
+    if (!r.ok) return;
+    const data = await r.json();
+    talkStatus = data.status || talkStatus;
+    jobs = data.jobs || (Array.isArray(data) ? data : []);
 
-    const activeJob = jobs.find(j => j.status === 'running');
+    const activeJob = jobs.findLast ? jobs.findLast(j => j.status === 'running') : [...jobs].reverse().find(j => j.status === 'running');
     if (activeJob && activeJob.progress_pct !== null && activeJob.progress_pct !== undefined) {
       const pct = Math.round(activeJob.progress_pct);
       const remainingStr = (activeJob.estimated_remaining !== null && activeJob.estimated_remaining !== undefined)
@@ -117,9 +109,6 @@ async function pollTalk(talkId) {
     }
 
     if (row && talkStatus) row.dataset.status = talkStatus;
-    if (talkStatus === 'done' || talkStatus === 'failed') {
-      setTimeout(() => location.reload(), 1500);
-    }
   } catch { /* skip */ }
 }
 

@@ -96,8 +96,8 @@ class JobRead(JobBase):
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`)
-        when present, falling back to current UTC time for non-terminal jobs.
+        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
             return None
@@ -106,7 +106,9 @@ class JobRead(JobBase):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed") and self.updated_at is not None:
+        if self.status in ("done", "failed", "broken", "rejected"):
+            if self.updated_at is None:
+                return None
             end = (
                 self.updated_at
                 if self.updated_at.tzinfo is not None
@@ -121,9 +123,12 @@ class JobRead(JobBase):
     def estimated_remaining(self) -> float | None:
         """
         Linearly extrapolated remaining seconds based on progress_pct and elapsed_time.
-        Returns None if progress_pct is None or <= 0.
+        Only computed for active running jobs.
+        Returns None if not running, or if progress_pct is None or <= 0.
         Returns 0.0 if progress_pct >= 100.0.
         """
+        if self.status != "running":
+            return 0.0 if self.status == "done" and self.progress_pct is not None and self.progress_pct >= 100.0 else None
         if (
             self.elapsed_time is None
             or self.progress_pct is None

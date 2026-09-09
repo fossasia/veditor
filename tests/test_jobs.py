@@ -222,6 +222,7 @@ def test_get_job_estimated_remaining_edge_cases():
         kind="transcode",
         status="done",
         started_at=started,
+        updated_at=now,
         progress_pct=100.0,
     )
     assert job_100_pct.elapsed_time is not None
@@ -294,12 +295,34 @@ def test_terminal_job_elapsed_time_uses_updated_at():
         progress_pct=40.0,
     )
     assert failed_job.elapsed_time == 150.0
-    # Linear remaining for failed job at 40%: (150 / 0.4) * 0.6 = 225.0
-    assert failed_job.estimated_remaining == 225.0
+    # Failed jobs are terminal and must not report remaining time
+    assert failed_job.estimated_remaining is None
 
-    # 3. Model level elapsed_time property
-    db_done_job = models.Job(
+    # 3. Terminal job with missing updated_at returns None (no drift)
+    terminal_missing_updated = JobRead(
         id=22,
+        talk_id=1,
+        kind="transcode",
+        status="failed",
+        started_at=started,
+        updated_at=None,
+        progress_pct=40.0,
+    )
+    assert terminal_missing_updated.elapsed_time is None
+    assert terminal_missing_updated.estimated_remaining is None
+
+    # 4. Model level elapsed_time property and started_at default
+    db_queued_job = models.Job(
+        talk_id=1,
+        kind="cut",
+        status="queued",
+    )
+    assert db_queued_job.started_at is None
+    assert db_queued_job.elapsed_time is None
+    assert db_queued_job.estimated_remaining is None
+
+    db_done_job = models.Job(
+        id=23,
         talk_id=1,
         kind="cut",
         status="done",
@@ -308,3 +331,14 @@ def test_terminal_job_elapsed_time_uses_updated_at():
         progress_pct=100.0,
     )
     assert db_done_job.elapsed_time == 150.0
+
+    db_broken_no_updated = models.Job(
+        id=24,
+        talk_id=1,
+        kind="cut",
+        status="broken",
+        started_at=started,
+        updated_at=None,
+    )
+    assert db_broken_no_updated.elapsed_time is None
+    assert db_broken_no_updated.estimated_remaining is None

@@ -353,11 +353,17 @@ def test_create_single_talk_custom_duration(client: TestClient, db_session):
 
 def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     import uuid
+    from app.auth import hash_api_key
 
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
 
     now = datetime.now(tz=UTC)
     talk = models.Talk(
@@ -383,7 +389,26 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     db_session.add(job)
     db_session.commit()
 
-    res = client.get(f"/studio/talks/{talk.id}/jobs")
+    # 1. Unauthenticated request must be rejected
+    unauth_res = client.get(f"/studio/talks/{talk.id}/jobs")
+    assert unauth_res.status_code == 401
+
+    # 2. Authenticated with wrong event scope must return 404
+    other_key = f"other_key_{uuid.uuid4().hex}"
+    other_client = models.Client(hashed_key=hash_api_key(other_key), event_ids=[999999])
+    db_session.add(other_client)
+    db_session.commit()
+    scope_res = client.get(
+        f"/studio/talks/{talk.id}/jobs",
+        headers={"X-API-Key": other_key},
+    )
+    assert scope_res.status_code == 404
+
+    # 3. Authenticated authorized request succeeds
+    res = client.get(
+        f"/studio/talks/{talk.id}/jobs",
+        headers={"X-API-Key": api_key},
+    )
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "transcoding"

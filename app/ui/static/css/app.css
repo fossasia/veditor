@@ -579,6 +579,13 @@ td {
   animation: progress-shimmer 1.5s infinite linear;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .job-progress-fill.animated {
+    animation: none;
+    background: var(--v-primary);
+  }
+}
+
 @keyframes progress-shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }

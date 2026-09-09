@@ -83,8 +83,6 @@ class Job(Base):
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
-        default=lambda: datetime.now(UTC),
         nullable=True,
     )
     updated_at: Mapped[datetime | None] = mapped_column(
@@ -101,8 +99,8 @@ class Job(Base):
     def elapsed_time(self) -> float | None:
         """Calculate elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`)
-        when present, falling back to current UTC time for non-terminal jobs.
+        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
             return None
@@ -111,7 +109,9 @@ class Job(Base):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed") and self.updated_at is not None:
+        if self.status in ("done", "failed", "broken", "rejected"):
+            if self.updated_at is None:
+                return None
             end = (
                 self.updated_at
                 if self.updated_at.tzinfo is not None
@@ -124,6 +124,8 @@ class Job(Base):
     @property
     def estimated_remaining(self) -> float | None:
         """Estimate remaining runtime in seconds based on elapsed time and progress percentage."""
+        if self.status != "running":
+            return 0.0 if self.status == "done" and self.progress_pct is not None and self.progress_pct >= 100.0 else None
         if (
             self.elapsed_time is None
             or self.progress_pct is None
