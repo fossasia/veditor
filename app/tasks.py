@@ -116,6 +116,10 @@ def job_detect(talk_id: int, raw_key: str) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
             advance(talk, "pending_approval")
@@ -168,6 +172,10 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "generating_previews")
             job.status = "done"
@@ -307,6 +315,10 @@ def job_intro(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk_status = talk.status
             job.status = "done"
@@ -371,6 +383,10 @@ def job_outro(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk_status = talk.status
             job.status = "done"
@@ -432,6 +448,10 @@ def job_concat(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             job.status = "done"
             job.updated_at = datetime.now(UTC)
@@ -491,6 +511,10 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "preview")
             job.status = "done"
@@ -550,6 +574,10 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "transcoding")
             job.status = "done"
@@ -630,6 +658,10 @@ def job_transcode(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "uploading")
             job.status = "done"
@@ -680,6 +712,10 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "done")
             job.status = "done"

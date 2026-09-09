@@ -106,7 +106,7 @@ class JobRead(JobBase):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed", "broken", "rejected"):
+        if self.status in ("done", "failed", "broken", "rejected", "cancelled"):
             if self.updated_at is None:
                 return None
             end = (

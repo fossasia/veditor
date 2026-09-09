@@ -372,7 +372,7 @@ window.approveTalk = async function(id) {
 
   if (progressWrap) progressWrap.style.display = 'block';
   if (progressFill) {
-    progressFill.style.width = '100%';
+    progressFill.style.width = '0%';
     progressFill.classList.add('animated');
   }
   if (progressPct) progressPct.textContent = 'Processing';
@@ -385,6 +385,7 @@ window.approveTalk = async function(id) {
       start_sec: inPointSec,
       end_sec: outPointSec,
     });
+    if (progressFill) progressFill.style.width = '100%';
     if (progressPct) progressPct.textContent = '100%';
     if (progressDesc) progressDesc.textContent = 'Pipeline complete! Reloading studio...';
     setTimeout(() => location.reload(), 400);
@@ -568,8 +569,9 @@ async function pollStudioJobs() {
 
   try {
     const key = (window.getApiKey && window.getApiKey()) || '';
-    const headers = key ? { 'X-API-Key': key } : {};
-    const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers });
+    if (!key) return;
+    const headers = { 'X-API-Key': key };
+    const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers, _isPolling: true });
     if (!res.ok) return;
     const data = await res.json();
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
@@ -586,6 +588,8 @@ async function pollStudioJobs() {
 }
 
 function startStudioPolling() {
+  const key = (window.getApiKey && window.getApiKey()) || '';
+  if (!key) return;
   if (studioPollInterval) clearInterval(studioPollInterval);
   studioPollInterval = setInterval(pollStudioJobs, 2500);
 }
