@@ -128,7 +128,13 @@ class JobRead(JobBase):
         Returns 0.0 if progress_pct >= 100.0.
         """
         if self.status != "running":
-            return 0.0 if self.status == "done" and self.progress_pct is not None and self.progress_pct >= 100.0 else None
+            return (
+                0.0
+                if self.status == "done"
+                and self.progress_pct is not None
+                and self.progress_pct >= 100.0
+                else None
+            )
         if (
             self.elapsed_time is None
             or self.progress_pct is None

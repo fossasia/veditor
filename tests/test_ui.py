@@ -353,6 +353,7 @@ def test_create_single_talk_custom_duration(client: TestClient, db_session):
 
 def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     import uuid
+
     from app.auth import hash_api_key
 
     event = models.Event(name=f"Event {uuid.uuid4().hex}")

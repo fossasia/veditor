@@ -3,7 +3,7 @@
  */
 
 const ACTIVE_STATUSES = new Set([
-  'detecting', 'cutting', 'generating_previews', 'normalizing', 'rendering', 'transcoding', 'uploading', 'publishing'
+  'detecting', 'cutting', 'generating_previews', 'normalizing', 'assembling', 'rendering', 'transcoding', 'uploading', 'publishing'
 ]);
 
 const STATUS_BADGE_MAP = {
@@ -15,6 +15,7 @@ const STATUS_BADGE_MAP = {
   cutting:             '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Cutting</span>',
   generating_previews: '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Generating Previews</span>',
   normalizing:         '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Normalizing</span>',
+  assembling:          '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Assembling</span>',
   rendering:           '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Rendering</span>',
   transcoding:         '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Transcoding</span>',
   uploading:           '<span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>Uploading</span>',
