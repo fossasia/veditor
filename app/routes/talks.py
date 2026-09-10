@@ -806,23 +806,19 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
         if not val:
             return None
         low = val.lower()
-        if low.endswith("s"):
-            try:
-                return float(low[:-1].strip())
-            except ValueError:
-                return None
-        if low.endswith(("min", "mins", "m")):
-            try:
-                num_str = low.rstrip("s").rstrip("in").rstrip("m").strip()
-                return float(num_str) * 60
-            except ValueError:
-                return None
-        if low.endswith(("h", "hr", "hrs")):
-            try:
-                num_str = low.rstrip("s").rstrip("r").rstrip("h").strip()
-                return float(num_str) * 3600
-            except ValueError:
-                return None
+
+        # Check longer suffixes before bare 's' so 'mins' and 'hrs' parse correctly
+        for suffixes, multiplier in (
+            (("hrs", "hr", "h"), 3600.0),
+            (("mins", "min", "m"), 60.0),
+            (("secs", "sec", "s"), 1.0),
+        ):
+            for suffix in suffixes:
+                if low.endswith(suffix):
+                    try:
+                        return float(low[: -len(suffix)].strip()) * multiplier
+                    except ValueError:
+                        return None
 
         if ":" in val:
             parts = val.split(":")
@@ -880,6 +876,7 @@ async def import_schedule(
     talks_to_create = []
 
     if isinstance(data, dict):
+        event_name = data.get("event_name") or event_name
         if "schedule" in data and "conference" in data["schedule"]:
             conf = data["schedule"]["conference"]
             event_name = conf.get("title") or event_name
@@ -896,7 +893,6 @@ async def import_schedule(
                             }
                         )
         elif "talks" in data:
-            event_name = data.get("event_name") or event_name
             talks_to_create = data["talks"]
         elif "title" in data:
             talks_to_create = [data]
