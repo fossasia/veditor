@@ -192,7 +192,7 @@
               <a href="/studio/talks/{{ talk.id }}" class="btn btn-ghost btn-sm">
                 Open Studio
               </a>
-              <button class="btn btn-ghost btn-sm btn-delete-talk" onclick="event.stopPropagation(); deleteSingleTalk({{ talk.id }}, '{{ talk.title | escape }}')" data-talk-id="{{ talk.id }}" data-talk-title="{{ talk.title }}" title="Delete Talk" style="color:#ef4444;padding:3px 7px;">
+              <button class="btn btn-ghost btn-sm btn-delete-talk" onclick="event.stopPropagation(); deleteSingleTalkFromButton(this)" data-talk-id="{{ talk.id }}" data-talk-title="{{ talk.title }}" title="Delete Talk" style="color:#ef4444;padding:3px 7px;">
                 <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
 

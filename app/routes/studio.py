@@ -84,6 +84,8 @@ ALL_STATUSES = [
     "cutting",
     "generating_previews",
     "preview",
+    "pending_intro_outro",
+    "assembling",
     "transcoding",
     "uploading",
     "needs_work",
@@ -222,15 +224,23 @@ def dashboard(
 def get_talk_media_default(
     talk_id: int,
     filename: str,
+    db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
 ):
+    if client is not None:
+        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        if talk and talk.event_id not in client.event_ids:
+            raise HTTPException(status_code=404, detail="Media not found")
+
+    safe_filename = Path(filename).name
     candidate_keys = [
-        f"{talk_id}/preview/{filename}",
-        f"{talk_id}/raw/{filename}",
-        f"{talk_id}/intro/{filename}",
-        f"{talk_id}/outro/{filename}",
-        f"{talk_id}/cut/{filename}",
-        f"{talk_id}/final/{filename}",
+        f"{talk_id}/preview/{safe_filename}",
+        f"{talk_id}/raw/{safe_filename}",
+        f"{talk_id}/intro/{safe_filename}",
+        f"{talk_id}/outro/{safe_filename}",
+        f"{talk_id}/cut/{safe_filename}",
+        f"{talk_id}/final/{safe_filename}",
     ]
     for key in candidate_keys:
         if storage.exists(key):
@@ -244,9 +254,18 @@ def get_talk_media_categorized(
     talk_id: int,
     category: str,
     filename: str,
+    db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
 ):
-    key = f"{talk_id}/{category}/{filename}"
+    if client is not None:
+        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        if talk and talk.event_id not in client.event_ids:
+            raise HTTPException(status_code=404, detail="Media not found")
+
+    safe_category = Path(category).name
+    safe_filename = Path(filename).name
+    key = f"{talk_id}/{safe_category}/{safe_filename}"
     if not storage.exists(key):
         raise HTTPException(status_code=404, detail=f"Media {key} not found")
     path = storage.get(key)

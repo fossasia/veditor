@@ -348,6 +348,13 @@ window.submitQuickTalk = async function() {
 };
 
 // ── Single & Bulk Delete Operations ─────────────────────────────
+window.deleteSingleTalkFromButton = function(btn) {
+  if (!btn) return;
+  const id = btn.getAttribute('data-talk-id');
+  const title = btn.getAttribute('data-talk-title') || `Talk #${id}`;
+  window.deleteSingleTalk(id, title);
+};
+
 window.deleteSingleTalk = async function(id, title) {
   if (!confirm(`Are you sure you want to delete talk #${id}: "${title}"?\nThis will permanently delete all associated recording and media files.`)) {
     return;

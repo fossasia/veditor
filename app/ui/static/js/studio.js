@@ -131,10 +131,14 @@ function updateTimelineTicks() {
   const ticks = document.getElementById('timeline-ticks');
   if (!ticks) return;
   const steps = 5;
-  ticks.innerHTML = Array.from({ length: steps }, (_, i) => {
-    const t = (dur / (steps - 1)) * i;
-    return `<span>${formatTimecode(t).slice(0, 5)}</span>`;
-  }).join('');
+  ticks.replaceChildren(
+    ...Array.from({ length: steps }, (_, i) => {
+      const t = (dur / (steps - 1)) * i;
+      const span = document.createElement('span');
+      span.textContent = formatTimecode(t).slice(0, 5);
+      return span;
+    })
+  );
 }
 
 function updateCutMarkersUI() {
@@ -359,10 +363,20 @@ async function postAPI(path, body = {}) {
   return res.json();
 }
 
+function setBtnBusy(btn, isBusy, busyText) {
+  if (!btn) return;
+  btn.disabled = isBusy;
+  if (isBusy) {
+    if (!btn.dataset.origText) btn.dataset.origText = btn.textContent.trim();
+    btn.textContent = busyText;
+  } else {
+    btn.textContent = btn.dataset.origText || 'Submit';
+  }
+}
+
 window.approveTalk = async function(id) {
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-approve');
-  const originalHtml = btn ? btn.innerHTML : '';
   const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
 
   if (['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'].includes(talkStatus)) {
@@ -374,7 +388,7 @@ window.approveTalk = async function(id) {
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Processing...'; }
+  setBtnBusy(btn, true, 'Processing...');
 
   const progressWrap = document.getElementById('pipeline-progress-wrap');
   const progressFill = document.getElementById('pipeline-progress-fill');
@@ -393,8 +407,8 @@ window.approveTalk = async function(id) {
     if (talkStatus === 'pending_approval') {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
-      const cutStart = formatTimecode(inPointSec).slice(0, 8);
-      const cutEnd = formatTimecode(outPointSec).slice(0, 8);
+      const cutStart = formatTimecode(inPointSec);
+      const cutEnd = formatTimecode(outPointSec);
       await postAPI(`/talks/${id}/cut`, { cut_start: cutStart, cut_end: cutEnd });
     } else if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'approve', note: notes || 'Approved in review studio' });
@@ -418,7 +432,7 @@ window.approveTalk = async function(id) {
   } catch (err) {
     alert(`Pipeline action failed: ${err.message}`);
     if (progressWrap) progressWrap.style.display = 'none';
-    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    setBtnBusy(btn, false);
   }
 };
 
@@ -427,8 +441,7 @@ window.rejectTalk = async function(id) {
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   if (!confirm('Reject this talk?')) return;
   const btn = document.getElementById('btn-reject');
-  const originalHtml = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Rejecting...'; }
+  setBtnBusy(btn, true, 'Rejecting...');
   try {
     const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
     if (talkStatus === 'pending_approval') {
@@ -441,34 +454,32 @@ window.rejectTalk = async function(id) {
     location.reload();
   } catch (err) {
     alert(`Rejection failed: ${err.message}`);
-    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    setBtnBusy(btn, false);
   }
 };
 
 window.requestChangesTalk = async function(id) {
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-needs-work');
-  const originalHtml = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Requesting changes...'; }
+  setBtnBusy(btn, true, 'Requesting changes...');
   try {
     await postAPI(`/talks/${id}/review`, { decision: 'needs_work', note: notes || 'Needs work' });
     location.reload();
   } catch (err) {
     alert(`Request changes failed: ${err.message}`);
-    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    setBtnBusy(btn, false);
   }
 };
 
 window.retryTalk = async function(id) {
   const btn = document.getElementById('btn-retry');
-  const originalHtml = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Resetting...'; }
+  setBtnBusy(btn, true, 'Resetting...');
   try {
     await postAPI(`/talks/${id}/abort`);
     location.reload();
   } catch (err) {
     alert(`Reset failed: ${err.message}`);
-    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    setBtnBusy(btn, false);
   }
 };
 

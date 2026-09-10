@@ -516,6 +516,70 @@ def configure_assembly(
     return schemas.TalkRead.model_validate(talk)
 
 
+def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> None:
+    """
+    Cancels queued and active RQ jobs for the given talk across all queues,
+    and removes its artifacts from storage if storage is provided.
+    """
+    try:
+        from rq.registry import StartedJobRegistry
+
+        for q in (light_queue, heavy_queue):
+            # 1. Cancel queued jobs
+            for job_id in list(q.job_ids):
+                try:
+                    rq_job = q.fetch_job(job_id)
+                    if rq_job and rq_job.args and rq_job.args[0] == talk_id:
+                        rq_job.cancel()
+                        rq_job.delete()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            # 2. Stop running/started/deferred/scheduled jobs
+            registries = [
+                getattr(q, "started_job_registry", None),
+                getattr(q, "deferred_job_registry", None),
+                getattr(q, "scheduled_job_registry", None),
+            ]
+            for reg in registries:
+                if reg is None:
+                    continue
+                try:
+                    for job_id in reg.get_job_ids():
+                        try:
+                            rq_job = q.fetch_job(job_id)
+                            if rq_job and rq_job.args and rq_job.args[0] == talk_id:
+                                send_stop_job_command(q.connection, job_id)
+                                rq_job.cancel()
+                                rq_job.delete()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            try:
+                registry = StartedJobRegistry(queue=q)
+                for job_id in registry.get_job_ids():
+                    try:
+                        rq_job = q.fetch_job(job_id)
+                        if rq_job and rq_job.args and rq_job.args[0] == talk_id:
+                            send_stop_job_command(q.connection, job_id)
+                            rq_job.cancel()
+                            rq_job.delete()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+            except Exception:  # noqa: BLE001, S110
+                pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Error cancelling RQ jobs for talk %s: %s", talk_id, e)
+
+    if storage:
+        try:
+            storage.delete(str(talk_id))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error deleting storage for talk %s: %s", talk_id, e)
+
+
 @router.post(
     "/{talk_id}/abort",
     response_model=schemas.TalkRead,
@@ -528,9 +592,9 @@ def abort_talk(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
     """
-    Aborts all running/queued processes for the talk, cancels RQ jobs,
-    deletes all associated storage files, clears DB jobs and reviews,
-    and resets talk status back to 'waiting_for_files'.
+    Aborts in-flight pipeline operations for a talk, cancels RQ jobs,
+    clears DB jobs and reviews, and resets talk status back to 'waiting_for_files'.
+    Returns 404 if talk is not found or not authorized for caller's events.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
     if not talk or talk.event_id not in client.event_ids:
@@ -538,42 +602,7 @@ def abort_talk(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
 
-    # Cancel and remove any enqueued or active RQ jobs for this talk
-    for q in (light_queue, heavy_queue):
-        try:
-            job_ids_to_check = set(q.job_ids)
-            for reg in (
-                q.started_job_registry,
-                q.deferred_job_registry,
-                q.scheduled_job_registry,
-            ):
-                try:
-                    job_ids_to_check.update(reg.get_job_ids())
-                except Exception:  # noqa: BLE001, S110
-                    pass
-
-            for job_id in job_ids_to_check:
-                try:
-                    job = q.fetch_job(job_id)
-                    if (
-                        job
-                        and job.args
-                        and len(job.args) > 0
-                        and job.args[0] == talk.id
-                    ):
-                        try:
-                            send_stop_job_command(q.connection, job.id)
-                        except Exception:  # noqa: BLE001, S110
-                            pass
-                        job.cancel()
-                        job.delete()
-                except Exception:  # noqa: BLE001, S110
-                    pass
-        except Exception:  # noqa: BLE001, S110
-            pass
-
-    # Delete all storage artifacts for this talk
-    storage.delete(str(talk.id))
+    _cancel_talk_jobs(talk.id, storage)
 
     # Clear DB jobs and reviews
     db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
@@ -622,7 +651,14 @@ def update_talk(
     if payload.end is not None:
         talk.end = payload.end
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A talk with this title and start time already exists for this event",
+        )
     db.refresh(talk)
     return talk
 
@@ -644,7 +680,7 @@ def delete_talk(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
 
-    storage.delete(str(talk_id))
+    _cancel_talk_jobs(talk_id, storage)
     db.query(models.Review).filter(models.Review.talk_id == talk_id).delete()
     db.query(models.Job).filter(models.Job.talk_id == talk_id).delete()
     db.delete(talk)
@@ -675,22 +711,16 @@ def bulk_delete_talks(
         )
         .all()
     )
-    valid_ids = [t.id for t in valid_talks]
-    if not valid_ids:
-        return {"status": "ok", "deleted_count": 0}
 
-    for tid in valid_ids:
-        storage.delete(str(tid))
-        db.query(models.Review).filter(models.Review.talk_id == tid).delete()
-        db.query(models.Job).filter(models.Job.talk_id == tid).delete()
+    deleted_count = 0
+    for talk in valid_talks:
+        _cancel_talk_jobs(talk.id, storage)
+        db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
+        db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
+        db.delete(talk)
+        deleted_count += 1
 
-    deleted_count = (
-        db.query(models.Talk)
-        .filter(models.Talk.id.in_(valid_ids))
-        .delete(synchronize_session=False)
-    )
     db.commit()
-
     return {"status": "ok", "deleted_count": deleted_count}
 
 
@@ -723,10 +753,12 @@ async def upload_recording(
         )
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir) / (file.filename or "recording.mp4")
-        content = await file.read()
+        safe_filename = Path(file.filename or "recording.mp4").name or "recording.mp4"
+        tmp_path = Path(tmpdir) / safe_filename
         # storage-boundary-exempt: upload staging
-        tmp_path.write_bytes(content)
+        with open(tmp_path, "wb") as f_out:  # noqa: ASYNC230
+            while chunk := await file.read(1024 * 1024):
+                f_out.write(chunk)
 
         raw_key = f"{talk_id}/raw/raw.mp4"
         storage.put(raw_key, tmp_path)
@@ -735,12 +767,17 @@ async def upload_recording(
     db.commit()
     db.refresh(talk)
 
-    light_queue.enqueue(
-        job_detect,
-        talk.id,
-        raw_key,
-        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
-    )
+    try:
+        light_queue.enqueue(
+            job_detect,
+            talk.id,
+            raw_key,
+            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        )
+    except Exception:
+        talk.status = "waiting_for_files"
+        db.commit()
+        raise
 
     return schemas.TalkRead.model_validate(talk)
 
@@ -883,25 +920,41 @@ async def import_schedule(
         target_event_id = talks_to_create[0].get("event_id")
 
     event = None
+    is_new_event = False
     if target_event_id:
-        event = (
+        existing_event = (
             db.query(models.Event).filter(models.Event.id == target_event_id).first()
+        )
+        if existing_event:
+            verify_event_access(target_event_id, client)
+            event = existing_event
+        else:
+            event = models.Event(id=target_event_id, name=event_name)
+            db.add(event)
+            db.commit()
+            db.refresh(event)
+            is_new_event = True
+
+    if not event:
+        # Check if caller already has an event with matching name
+        event = (
+            db.query(models.Event)
+            .filter(
+                models.Event.name == event_name,
+                models.Event.id.in_(client.event_ids),
+            )
+            .first()
         )
 
     if not event:
-        event = db.query(models.Event).filter(models.Event.name == event_name).first()
-
-    if not event:
-        if target_event_id:
-            event = models.Event(id=target_event_id, name=event_name)
-        else:
-            event = models.Event(name=event_name)
+        event = models.Event(name=event_name)
         db.add(event)
         db.commit()
         db.refresh(event)
+        is_new_event = True
 
-    # Ensure client has access to this event
-    if event.id not in client.event_ids:
+    # Ensure client has access to this newly created event
+    if is_new_event and event.id not in client.event_ids:
         client.event_ids = list(set(client.event_ids + [event.id]))
         db.commit()
 
@@ -915,11 +968,21 @@ async def import_schedule(
 
         t_start = _parse_iso_datetime(t_info.get("start") or t_info.get("date"))
         t_end = _parse_iso_datetime(t_info.get("end"))
-        t_dur_sec = _parse_duration_seconds(
-            t_info.get("duration")
-            or t_info.get("duration_seconds")
-            or t_info.get("duration_minutes")
-        )
+
+        # Explicit duration_seconds / duration_minutes vs generic duration
+        t_dur_sec = None
+        if "duration_seconds" in t_info and t_info["duration_seconds"] is not None:
+            try:
+                t_dur_sec = float(t_info["duration_seconds"])
+            except ValueError, TypeError:
+                t_dur_sec = None
+        elif "duration_minutes" in t_info and t_info["duration_minutes"] is not None:
+            try:
+                t_dur_sec = float(t_info["duration_minutes"]) * 60
+            except ValueError, TypeError:
+                t_dur_sec = None
+        elif "duration" in t_info and t_info["duration"] is not None:
+            t_dur_sec = _parse_duration_seconds(t_info["duration"])
 
         if t_start and t_end:
             start_dt = t_start

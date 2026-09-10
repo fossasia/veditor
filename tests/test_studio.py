@@ -321,16 +321,21 @@ def test_import_schedule_json_list(client: TestClient, db_session):
     db_session.add(client_model)
     db_session.commit()
 
+    test_event_id = 98765
+    db_session.query(models.Talk).filter(models.Talk.event_id == test_event_id).delete()
+    db_session.query(models.Event).filter(models.Event.id == test_event_id).delete()
+    db_session.commit()
+
     schedule_payload = [
         {
-            "event_id": 180,
+            "event_id": test_event_id,
             "title": "Opening Keynote: Open Source AI Frontiers",
             "room": "Hall 1",
             "start": "2026-09-05T09:00:00Z",
             "end": "2026-09-05T09:45:00Z",
         },
         {
-            "event_id": 180,
+            "event_id": test_event_id,
             "title": "Building Scalable Video Pipelines with PyAV",
             "room": "Hall 1",
             "start": "2026-09-05T10:00:00Z",
