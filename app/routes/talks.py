@@ -163,7 +163,6 @@ def get_talk_jobs(
     return {"status": talk.status, "jobs": jobs}
 
 
-
 @router.post(
     "/{talk_id}/recordings",
     response_model=schemas.TalkRead,

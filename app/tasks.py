@@ -562,7 +562,20 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_out = Path(tmpdir) / "loudness.mp4"
-            normalize(cut_path, tmp_out)
+            try:
+                normalize(cut_path, tmp_out)
+            except ValueError as val_err:
+                if "No audio stream found" in str(val_err):
+                    logger.warning(
+                        "Talk %s has no audio stream; bypassing loudness normalization",
+                        talk_id,
+                    )
+                    import shutil
+
+                    # storage-boundary-exempt: bypass audio normalization copy
+                    shutil.copy2(cut_path, tmp_out)
+                else:
+                    raise
             storage.put(loud_key, tmp_out)
 
         with SessionLocal() as db:

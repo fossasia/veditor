@@ -88,7 +88,6 @@ def db_session():
             db.close()
 
 
-
 def test_dashboard_page(client: TestClient, db_session):
     event = models.Event(name="Test Studio Dashboard Event")
     db_session.add(event)
@@ -350,7 +349,6 @@ def test_import_schedule_json_list(client: TestClient, db_session):
     assert data["imported_count"] == 2
 
 
-
 def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -358,9 +356,7 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
     db_session.refresh(event)
 
     api_key = f"key_{uuid.uuid4().hex}"
-    client_model = models.Client(
-        hashed_key=hash_api_key(api_key), event_ids=[event.id]
-    )
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
@@ -394,9 +390,7 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
 
     # 2. Authenticated with wrong event scope must return 404
     other_key = f"other_key_{uuid.uuid4().hex}"
-    other_client = models.Client(
-        hashed_key=hash_api_key(other_key), event_ids=[999999]
-    )
+    other_client = models.Client(hashed_key=hash_api_key(other_key), event_ids=[999999])
     db_session.add(other_client)
     db_session.commit()
     scope_res = client.get(
@@ -518,4 +512,3 @@ def test_import_schedule_suffix_units(client: TestClient, db_session):
     talk = db_session.query(models.Talk).filter(models.Talk.title == "30s Clip").first()
     assert talk is not None
     assert (talk.end - talk.start).total_seconds() == 30.0
-
