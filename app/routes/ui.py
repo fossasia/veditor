@@ -1,8 +1,9 @@
 import json
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import jinja2
 from fastapi import (
@@ -18,9 +19,9 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from app import models
+from app import models, schemas
 from app.auth import hash_api_key
 from app.config import PREVIEW_PRESETS
 from app.db import get_db
@@ -165,6 +166,47 @@ def get_evaluated_milestones(status: str) -> list[dict]:
     return result
 
 
+def _record_stage_job(
+    talk_id: int,
+    kind: str,
+    db: Session,
+    func: Callable[[], Any],
+) -> Any:
+    """Execute a pipeline stage function while recording running and completed Job timestamps and status.
+
+    Creates and commits a running Job record before running `func`, and updates
+    it to done (with 100% progress) or failed upon completion or exception.
+    """
+    job = models.Job(
+        talk_id=talk_id,
+        kind=kind,
+        status="running",
+        log_path=f"{talk_id}/logs/{kind}.log",
+        progress_pct=0.0,
+        started_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    job_id = job.id
+    try:
+        result = func()
+        job.status = "done"
+        job.progress_pct = 100.0
+        job.updated_at = datetime.now(UTC)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        failed_job = db.get(models.Job, job_id)
+        if failed_job:
+            failed_job.status = "failed"
+            failed_job.updated_at = datetime.now(UTC)
+            db.commit()
+        raise
+
+
 def _execute_full_processing_pipeline(
     talk: models.Talk,
     storage: StorageBackend,
@@ -182,26 +224,32 @@ def _execute_full_processing_pipeline(
     )
 
     # 1. Generate Real Opening Title Slate
-    with tempfile.TemporaryDirectory() as tmpdir:
-        intro_tmp = Path(tmpdir) / "intro.mp4"
-        generate_intro_clip(
-            intro_tmp,
-            title=talk.title,
-            event_name=event_name,
-            room_date=room_date,
-            duration_seconds=4.0,
-        )
-        storage.put(f"{talk_id}/intro/intro.mp4", intro_tmp)
+    def _run_intro():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            intro_tmp = Path(tmpdir) / "intro.mp4"
+            generate_intro_clip(
+                intro_tmp,
+                title=talk.title,
+                event_name=event_name,
+                room_date=room_date,
+                duration_seconds=4.0,
+            )
+            storage.put(f"{talk_id}/intro/intro.mp4", intro_tmp)
+
+    _record_stage_job(talk_id, "intro", db, _run_intro)
 
     # 2. Generate Real Outro Slate
-    with tempfile.TemporaryDirectory() as tmpdir:
-        outro_tmp = Path(tmpdir) / "outro.mp4"
-        generate_outro_clip(
-            outro_tmp,
-            event_name=event_name,
-            duration_seconds=3.0,
-        )
-        storage.put(f"{talk_id}/outro/outro.mp4", outro_tmp)
+    def _run_outro():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outro_tmp = Path(tmpdir) / "outro.mp4"
+            generate_outro_clip(
+                outro_tmp,
+                event_name=event_name,
+                duration_seconds=3.0,
+            )
+            storage.put(f"{talk_id}/outro/outro.mp4", outro_tmp)
+
+    _record_stage_job(talk_id, "outro", db, _run_outro)
 
     # 3. Ensure Raw recording exists and Cut
     raw_keys = storage.list_keys(f"{talk_id}/raw")
@@ -234,27 +282,23 @@ def _execute_full_processing_pipeline(
     talk.cut_end = e_sec
     db.commit()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cut_tmp = Path(tmpdir) / "cut.mp4"
-        cut(raw_path, cut_tmp, s_sec, e_sec)
-        storage.put(cut_key, cut_tmp)
+    def _run_cut():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cut_tmp = Path(tmpdir) / "cut.mp4"
+            cut(raw_path, cut_tmp, s_sec, e_sec)
+            storage.put(cut_key, cut_tmp)
+
+    _record_stage_job(talk_id, "cut", db, _run_cut)
 
     # 4. Generate Low-Res Preview
-    preset = PREVIEW_PRESETS.get("small_video")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        prev_tmp = Path(tmpdir) / "preview.mp4"
-        generate_preview(storage.get(cut_key), prev_tmp, preset=preset)
-        storage.put(f"{talk_id}/preview/preview.mp4", prev_tmp)
+    def _run_preview():
+        preset = PREVIEW_PRESETS.get("small_video")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prev_tmp = Path(tmpdir) / "preview.mp4"
+            generate_preview(storage.get(cut_key), prev_tmp, preset=preset)
+            storage.put(f"{talk_id}/preview/preview.mp4", prev_tmp)
 
-    # Log completed jobs
-    for kind in ("cut", "intro", "outro", "preview"):
-        job = models.Job(
-            talk_id=talk_id,
-            kind=kind,
-            status="done",
-            log_path=f"{talk_id}/logs/{kind}.log",
-        )
-        db.add(job)
+    _record_stage_job(talk_id, "preview", db, _run_preview)
 
 
 def _execute_master_transcode_pipeline(
@@ -278,23 +322,21 @@ def _execute_master_transcode_pipeline(
         cut_p = Path(storage.get(cut_key))
         outro_p = Path(storage.get(outro_key)) if storage.exists(outro_key) else None
 
-        concat(
-            cut_path=cut_p,
-            intro_path=intro_p,
-            outro_path=outro_p,
-            output_path=composite_tmp,
-        )
-        transcode(composite_tmp, final_tmp, preset=PRESET_720P)
-        publish(final_tmp, talk_id, storage)
+        def _run_transcode():
+            concat(
+                cut_path=cut_p,
+                intro_path=intro_p,
+                outro_path=outro_p,
+                output_path=composite_tmp,
+            )
+            transcode(composite_tmp, final_tmp, preset=PRESET_720P)
 
-    for kind in ("transcode", "publish"):
-        job = models.Job(
-            talk_id=talk_id,
-            kind=kind,
-            status="done",
-            log_path=f"{talk_id}/logs/{kind}.log",
-        )
-        db.add(job)
+        _record_stage_job(talk_id, "transcode", db, _run_transcode)
+
+        def _run_publish():
+            publish(final_tmp, talk_id, storage)
+
+        _record_stage_job(talk_id, "publish", db, _run_publish)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -306,7 +348,7 @@ def dashboard(
     status_filter: str | None = None,
     q: str | None = None,
 ):
-    query = db.query(models.Talk)
+    query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
     if client is not None:
         query = query.filter(models.Talk.event_id.in_(client.event_ids))
     if event_id is not None:
@@ -509,6 +551,24 @@ def _get_scoped_talk(talk_id: int, client: models.Client, db: Session) -> models
             detail="Talk not found",
         )
     return talk
+
+
+@router.get("/talks/{talk_id}/jobs", response_model=schemas.TalkJobsResponse)
+def get_talk_jobs(
+    talk_id: int,
+    client: Annotated[models.Client, Depends(get_ui_client)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Returns the current talk status along with recent jobs and active progress."""
+    talk = _get_scoped_talk(talk_id, client, db)
+    jobs = (
+        db.query(models.Job)
+        .filter(models.Job.talk_id == talk_id)
+        .order_by(models.Job.id.desc())
+        .limit(10)
+        .all()
+    )
+    return {"status": talk.status, "jobs": jobs}
 
 
 @router.post("/talks/{talk_id}/status")

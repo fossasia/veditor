@@ -23,6 +23,10 @@ def get_job(
     """
     Retrieves job status and metadata for polling clients.
 
+    Returns job execution state including progress percentage (`progress_pct`),
+    lifecycle timestamps (`started_at`, `updated_at`), computed elapsed duration
+    (`elapsed_time`), and linearly extrapolated remaining duration (`estimated_remaining`).
+
     Returns 404 if the job does not exist or the job's talk is not authorized
     under caller's event_ids.
     """

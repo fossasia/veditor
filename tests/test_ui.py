@@ -49,14 +49,25 @@ def db_session():
     try:
         yield db
     finally:
-        for obj in reversed(created):
-            try:
-                db.delete(obj)
-                db.commit()
-            except Exception:  # noqa: BLE001
-                db.rollback()
-        app.dependency_overrides.pop(get_db, None)
-        db.close()
+        try:
+            for obj in created:
+                if isinstance(obj, models.Talk) and obj.id:
+                    db.query(models.Job).filter(models.Job.talk_id == obj.id).delete()
+                    db.query(models.Review).filter(
+                        models.Review.talk_id == obj.id
+                    ).delete()
+            db.commit()
+            for obj in reversed(created):
+                if isinstance(obj, (models.Job, models.Review)):
+                    continue
+                try:
+                    db.delete(obj)
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    db.rollback()
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            db.close()
 
 
 def test_dashboard_page(client: TestClient, db_session):
@@ -338,3 +349,122 @@ def test_create_single_talk_custom_duration(client: TestClient, db_session):
     assert talk.title == "Custom Duration Session"
     assert talk.room == "Auditorium B"
     assert (talk.end - talk.start).total_seconds() == 25 * 60
+
+
+def test_get_talk_jobs_endpoint(client: TestClient, db_session):
+    import uuid
+
+    from app.auth import hash_api_key
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Job Polling Test Talk",
+        room="Hall 3",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="transcoding",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    job = models.Job(
+        talk_id=talk.id,
+        kind="transcode",
+        status="running",
+        progress_pct=60.0,
+        started_at=now - timedelta(seconds=15),
+        updated_at=now,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # 1. Unauthenticated request must be rejected
+    unauth_res = client.get(f"/studio/talks/{talk.id}/jobs")
+    assert unauth_res.status_code == 401
+
+    # 2. Authenticated with wrong event scope must return 404
+    other_key = f"other_key_{uuid.uuid4().hex}"
+    other_client = models.Client(hashed_key=hash_api_key(other_key), event_ids=[999999])
+    db_session.add(other_client)
+    db_session.commit()
+    scope_res = client.get(
+        f"/studio/talks/{talk.id}/jobs",
+        headers={"X-API-Key": other_key},
+    )
+    assert scope_res.status_code == 404
+
+    # 3. Authenticated authorized request succeeds
+    res = client.get(
+        f"/studio/talks/{talk.id}/jobs",
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "transcoding"
+    jobs = data["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["kind"] == "transcode"
+    assert jobs[0]["status"] == "running"
+    assert jobs[0]["progress_pct"] == 60.0
+    assert jobs[0]["elapsed_time"] is not None
+    assert jobs[0]["estimated_remaining"] is not None
+
+
+def test_dashboard_and_studio_render_active_job_progress(
+    client: TestClient, db_session
+):
+    import uuid
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Progress Render Talk",
+        room="Auditorium C",
+        start=now,
+        end=now + timedelta(minutes=45),
+        status="transcoding",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    job = models.Job(
+        talk_id=talk.id,
+        kind="transcode",
+        status="running",
+        progress_pct=72.0,
+        started_at=now - timedelta(seconds=30),
+        updated_at=now,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    # 1. Dashboard should render the progress percentage badge and track
+    dash_res = client.get("/studio")
+    assert dash_res.status_code == 200
+    assert "72%" in dash_res.text
+    assert "job-progress-fill" in dash_res.text
+
+    # 2. Studio should render the job card with progress and timing
+    studio_res = client.get(f"/studio/talks/{talk.id}")
+    assert studio_res.status_code == 200
+    assert "72%" in studio_res.text
+    assert "job-card" in studio_res.text
+    assert "pipeline-progress-wrap" in studio_res.text

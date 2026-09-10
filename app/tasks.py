@@ -10,6 +10,7 @@ import logging
 import tempfile
 import time
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import PREVIEW_PRESETS, settings
@@ -59,6 +60,7 @@ def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -
                 return
             job.status = "failed"
             job.log_path = log_key
+            job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
         if talk and talk.status not in (
             "waiting_for_files",
@@ -82,7 +84,13 @@ def job_detect(talk_id: int, raw_key: str) -> None:
                     talk_id,
                 )
                 return
-            job = Job(talk_id=talk_id, kind="detect", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="detect",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -108,10 +116,15 @@ def job_detect(talk_id: int, raw_key: str) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
             advance(talk, "pending_approval")
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -129,7 +142,13 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 raise ValueError(f"Talk {talk_id} not found")
             if talk.cut_start is None or talk.cut_end is None:
                 raise ValueError(f"Talk {talk_id} has no cut bounds set")
-            job = Job(talk_id=talk_id, kind="cut", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="cut",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -153,9 +172,14 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "generating_previews")
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         preview_key = f"{talk_id}/preview/preview.mp4"
@@ -246,7 +270,13 @@ def job_intro(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="intro", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="intro",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -285,9 +315,14 @@ def job_intro(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk_status = talk.status
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         if talk_status == "assembling":
@@ -314,7 +349,13 @@ def job_outro(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="outro", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="outro",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -342,9 +383,14 @@ def job_outro(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             talk_status = talk.status
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         if talk_status == "assembling":
@@ -369,7 +415,13 @@ def job_concat(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="concat", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="concat",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -396,8 +448,13 @@ def job_concat(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         loud_key = f"{talk_id}/assemble/assemble_loud.mp4"
@@ -422,7 +479,13 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="preview", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="preview",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -448,9 +511,14 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "preview")
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -478,7 +546,13 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     talk.status,
                 )
                 return
-            job = Job(talk_id=talk_id, kind="loudness", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="loudness",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -500,9 +574,14 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "transcoding")
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         final_key = f"{talk_id}/final/final.mp4"
@@ -537,6 +616,8 @@ def job_transcode(
                 kind="transcode",
                 status="running",
                 progress_pct=None,
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
             db.add(job)
             db.commit()
@@ -555,6 +636,7 @@ def job_transcode(
                         j = progress_db.get(Job, job_id)
                         if j and j.status == "running":
                             j.progress_pct = round(pct * 100.0, 2)
+                            j.updated_at = datetime.now(UTC)
                             progress_db.commit()
                 except Exception as progress_err:  # noqa: BLE001
                     logger.warning(
@@ -576,10 +658,15 @@ def job_transcode(
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "uploading")
             job.status = "done"
             job.progress_pct = 100.0
+            job.updated_at = datetime.now(UTC)
             db.commit()
 
         light_queue.enqueue(
@@ -601,7 +688,13 @@ def job_publish(talk_id: int, final_key: str) -> None:
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(talk_id=talk_id, kind="publish", status="running")
+            job = Job(
+                talk_id=talk_id,
+                kind="publish",
+                status="running",
+                started_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             db.add(job)
             db.commit()
             db.refresh(job)
@@ -619,9 +712,14 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     talk_id,
                     job_id,
                 )
+                if job:
+                    job.status = "cancelled"
+                    job.updated_at = datetime.now(UTC)
+                    db.commit()
                 return
             advance(talk, "done")
             job.status = "done"
+            job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)

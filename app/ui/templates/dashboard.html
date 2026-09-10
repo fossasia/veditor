@@ -167,7 +167,25 @@
             {% else %}—{% endif %}
           </td>
           <td class="status-cell" data-talk-id="{{ talk.id }}">
-            {{ status_badge(talk.status) }}
+            {% set active_job = (talk.jobs | selectattr('status', 'equalto', 'running') | list | first) if talk.jobs else none %}
+            {% if active_job and active_job.progress_pct is not none %}
+              <div style="display:flex;flex-direction:column;gap:3px;min-width:110px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
+                  <span class="badge badge-blue badge-pulse"><span class="badge-dot"></span>{{ talk.status | replace('_', ' ') | title }}</span>
+                  <span class="badge badge-info" style="font-size:0.65rem;padding:1px 4px;">{{ "%.0f"|format(active_job.progress_pct) }}%</span>
+                </div>
+                <div class="job-progress-track" style="height:3px;margin:0;">
+                  <div class="job-progress-fill animated" style="width: {{ active_job.progress_pct }}%;"></div>
+                </div>
+                {% if active_job.estimated_remaining is not none %}
+                  <span style="font-size:0.65rem;color:var(--v-text-muted);font-variant-numeric:tabular-nums;">~{{ "%.0f"|format(active_job.estimated_remaining) }}s left</span>
+                {% elif active_job.elapsed_time is not none %}
+                  <span style="font-size:0.65rem;color:var(--v-text-muted);font-variant-numeric:tabular-nums;">{{ "%.0f"|format(active_job.elapsed_time) }}s elapsed</span>
+                {% endif %}
+              </div>
+            {% else %}
+              {{ status_badge(talk.status) }}
+            {% endif %}
           </td>
           <td style="text-align:right;padding-right:16px;" onclick="event.stopPropagation()">
             <div style="display:inline-flex;align-items:center;gap:6px;">

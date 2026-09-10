@@ -364,6 +364,20 @@ window.approveTalk = async function(id) {
   const btn = document.getElementById('btn-approve');
   const originalHtml = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner spinner-sm"></span> Processing Pipeline...'; }
+
+  const progressWrap = document.getElementById('pipeline-progress-wrap');
+  const progressFill = document.getElementById('pipeline-progress-fill');
+  const progressPct = document.getElementById('pipeline-progress-pct');
+  const progressDesc = document.getElementById('pipeline-progress-desc');
+
+  if (progressWrap) progressWrap.style.display = 'block';
+  if (progressFill) {
+    progressFill.style.width = '0%';
+    progressFill.classList.add('animated');
+  }
+  if (progressPct) progressPct.textContent = 'Processing';
+  if (progressDesc) progressDesc.textContent = 'Executing processing pipeline...';
+
   try {
     await postUI(`/studio/talks/${id}/approve`, {
       decision: 'approved',
@@ -371,9 +385,13 @@ window.approveTalk = async function(id) {
       start_sec: inPointSec,
       end_sec: outPointSec,
     });
-    location.reload();
+    if (progressFill) progressFill.style.width = '100%';
+    if (progressPct) progressPct.textContent = '100%';
+    if (progressDesc) progressDesc.textContent = 'Pipeline complete! Reloading studio...';
+    setTimeout(() => location.reload(), 400);
   } catch (err) {
     alert(`Pipeline execution failed: ${err.message}`);
+    if (progressWrap) progressWrap.style.display = 'none';
     if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
   }
 };
@@ -446,10 +464,142 @@ window.handleVideoFileUpload = async function(e, talkId) {
   }
 };
 
+// ── Real-time Recent Jobs Polling & Dynamic Rendering ─────────────
+function renderRecentJobs(jobs) {
+  const container = document.getElementById('jobs-container');
+  const empty = document.getElementById('jobs-empty');
+  if (!jobs || jobs.length === 0) {
+    if (container) {
+      container.textContent = '';
+      container.style.display = 'none';
+    }
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+  if (!container) return;
+
+  container.textContent = '';
+  container.style.display = 'flex';
+
+  jobs.forEach(job => {
+    const isRunning = job.status === 'running';
+    const isDone = job.status === 'done' || job.status === 'success';
+    const isFailed = job.status === 'failed';
+    const badgeClass = isDone ? 'badge-done' : (isRunning ? 'badge-processing' : (isFailed ? 'badge-danger' : 'badge-waiting'));
+
+    const card = document.createElement('div');
+    card.className = 'job-card';
+    if (job.id) card.dataset.jobId = String(job.id);
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+
+    const kindSpan = document.createElement('span');
+    kindSpan.style.cssText = 'font-family:var(--v-font-mono);font-weight:600;';
+    kindSpan.textContent = job.kind || '';
+
+    const badgeGroup = document.createElement('div');
+    badgeGroup.style.cssText = 'display:flex;align-items:center;gap:5px;';
+
+    if (job.progress_pct !== null && job.progress_pct !== undefined && isRunning) {
+      const progressBadge = document.createElement('span');
+      progressBadge.className = 'badge badge-info';
+      progressBadge.style.cssText = 'font-size:0.65rem;padding:1px 5px;';
+      progressBadge.textContent = `${Math.round(job.progress_pct)}%`;
+      badgeGroup.appendChild(progressBadge);
+    }
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `badge ${badgeClass}`;
+    statusBadge.style.cssText = 'font-size:0.65rem;padding:1px 5px;';
+    if (isRunning) {
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner spinner-sm';
+      statusBadge.appendChild(spinner);
+    }
+    statusBadge.appendChild(document.createTextNode(job.status || ''));
+    badgeGroup.appendChild(statusBadge);
+
+    header.appendChild(kindSpan);
+    header.appendChild(badgeGroup);
+    card.appendChild(header);
+
+    if (isRunning && job.progress_pct !== null && job.progress_pct !== undefined) {
+      const track = document.createElement('div');
+      track.className = 'job-progress-track';
+      const fill = document.createElement('div');
+      fill.className = 'job-progress-fill animated';
+      fill.style.width = `${Math.min(100, Math.max(0, job.progress_pct))}%`;
+      track.appendChild(fill);
+      card.appendChild(track);
+    }
+
+    if (job.started_at) {
+      const d = new Date(job.started_at);
+      const timeStr = !isNaN(d.getTime()) ? `${d.toISOString().slice(11, 19)} UTC` : '';
+      const meta = document.createElement('div');
+      meta.className = 'job-timing-meta';
+
+      const startedSpan = document.createElement('span');
+      startedSpan.textContent = `Started ${timeStr}`;
+      meta.appendChild(startedSpan);
+
+      if (isRunning && job.estimated_remaining !== null && job.estimated_remaining !== undefined) {
+        const remSpan = document.createElement('span');
+        remSpan.textContent = `~${Math.round(job.estimated_remaining)}s remaining`;
+        meta.appendChild(remSpan);
+      } else if (job.elapsed_time !== null && job.elapsed_time !== undefined) {
+        const elSpan = document.createElement('span');
+        elSpan.textContent = `${Math.round(job.elapsed_time)}s elapsed`;
+        meta.appendChild(elSpan);
+      }
+      card.appendChild(meta);
+    }
+
+    container.appendChild(card);
+  });
+}
+
+let studioPollInterval = null;
+async function pollStudioJobs() {
+  const talkId = (typeof TALK_ID !== 'undefined') ? TALK_ID : parseInt(window.location.pathname.split('/').filter(Boolean).pop(), 10);
+  if (!talkId || isNaN(talkId)) return;
+
+  try {
+    const key = (window.getApiKey && window.getApiKey()) || '';
+    if (!key) return;
+    const headers = { 'X-API-Key': key };
+    const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers, _isPolling: true });
+    if (!res.ok) return;
+    const data = await res.json();
+    const jobs = Array.isArray(data) ? data : (data.jobs || []);
+    renderRecentJobs(jobs);
+
+    const hasRunningJob = jobs.some(j => j.status === 'running');
+    const talkStatus = data.status;
+    const isTerminal = ['done', 'failed', 'rejected', 'broken'].includes(talkStatus);
+    if (!hasRunningJob && isTerminal && studioPollInterval) {
+      clearInterval(studioPollInterval);
+      studioPollInterval = null;
+    }
+  } catch { /* skip */ }
+}
+
+function startStudioPolling() {
+  const key = (window.getApiKey && window.getApiKey()) || '';
+  if (!key) return;
+  if (studioPollInterval) clearInterval(studioPollInterval);
+  studioPollInterval = setInterval(pollStudioJobs, 2500);
+}
+
 // ── Initial Setup & Drag-and-Drop ───────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initInitialVideo();
   updateCutMarkersUI();
+  pollStudioJobs();
+  startStudioPolling();
 
   const dropzone = document.getElementById('no-preview-msg');
   if (dropzone) {
