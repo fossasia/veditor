@@ -580,6 +580,9 @@ def test_publish_advances_to_done_and_halts(dummy_talk, mock_storage):
     job = next(iter(jobs.values()))
     assert job.status == "done"
     mock_enqueue.assert_not_called()  # Terminal state
+    assert mock_storage.delete.call_count == 5
+    for stage in ("1/cut", "1/preview", "1/assemble", "1/intro", "1/outro"):
+        mock_storage.delete.assert_any_call(stage)
 
 
 def test_publish_exception_leads_to_broken(dummy_talk, mock_storage):
@@ -602,6 +605,30 @@ def test_publish_exception_leads_to_broken(dummy_talk, mock_storage):
     assert job.kind == "publish"
     assert job.log_path is not None
     mock_enqueue.assert_not_called()
+    mock_storage.delete.assert_not_called()
+
+
+def test_publish_storage_delete_resilient(dummy_talk, mock_storage):
+    dummy_talk.status = "uploading"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+    mock_storage.delete.side_effect = RuntimeError("Disk failure")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.publish", return_value=None),
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+    ):
+        job_publish(1, "1/final/final.mp4")
+
+    assert dummy_talk.status == "done"
+    job = next(iter(jobs.values()))
+    assert job.status == "done"
+    mock_enqueue.assert_not_called()
+    assert mock_storage.delete.call_count == 5
+    for stage in ("1/cut", "1/preview", "1/assemble", "1/intro", "1/outro"):
+        mock_storage.delete.assert_any_call(stage)
 
 
 def test_job_detect_discards_when_talk_aborted(dummy_talk, mock_storage):

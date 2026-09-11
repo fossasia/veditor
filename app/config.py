@@ -32,6 +32,9 @@ PREVIEW_PRESETS: dict[str, PreviewPreset] = {
 }
 
 
+ALLOWED_JWT_ALGORITHMS: tuple[str, ...] = ("HS256", "HS384", "HS512")
+
+
 class Settings(BaseSettings):
     postgres_user: str = "veditor"
     postgres_password: str = "password"
@@ -46,6 +49,37 @@ class Settings(BaseSettings):
     ingest_roots: list[Path] = []
     preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
     disk_guard_multiplier: float = 3.0
+
+    environment: str = "development"
+    session_secret: str | None = None
+    jwt_algorithm: str = "HS256"
+    session_token_expire_hours: int = 168
+    access_token_expire_seconds: int = 3600
+
+    @field_validator("jwt_algorithm", mode="after")
+    @classmethod
+    def validate_jwt_algorithm(cls, value: str) -> str:
+        if value not in ALLOWED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"jwt_algorithm must be one of {sorted(ALLOWED_JWT_ALGORITHMS)}"
+            )
+        return value
+
+    @field_validator("session_secret", mode="after")
+    @classmethod
+    def validate_session_secret(cls, value: str | None) -> str | None:
+        if value is not None and len(value.encode("utf-8")) < 32:
+            raise ValueError("SESSION_SECRET must be at least 32 bytes long")
+        return value
+
+    @field_validator(
+        "session_token_expire_hours", "access_token_expire_seconds", mode="after"
+    )
+    @classmethod
+    def validate_token_expirations(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("token expiration values must be positive")
+        return value
 
     @field_validator("disk_guard_multiplier", mode="after")
     @classmethod

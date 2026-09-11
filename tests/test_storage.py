@@ -4,7 +4,13 @@ from unittest import mock
 
 import pytest
 
-from app.storage import LocalDiskBackend, StorageBackend, StorageKeyNotFoundError
+from app.storage import (
+    INTERMEDIATE_STAGES,
+    LocalDiskBackend,
+    StorageBackend,
+    StorageKeyNotFoundError,
+    cleanup_intermediates,
+)
 from tests.conftest import FakeStorageBackend
 
 
@@ -174,3 +180,43 @@ def test_list_keys_traversal(tmp_path: Path):
     backend = LocalDiskBackend(data_dir=tmp_path)
     with pytest.raises(ValueError, match="Invalid key"):
         backend.list_keys("../../../etc")
+
+
+def test_cleanup_intermediates_purges_intermediates_preserves_raw_and_final(
+    storage_backend: StorageBackend,
+):
+    talk_id = 42
+    storage_backend.put(f"{talk_id}/raw/video.mp4", b"raw video")
+    storage_backend.put(f"{talk_id}/final/final.mp4", b"final video")
+    for stage in INTERMEDIATE_STAGES:
+        storage_backend.put(f"{talk_id}/{stage}/{stage}.mp4", f"{stage} video".encode())
+
+    cleanup_intermediates(storage_backend, talk_id)
+
+    assert storage_backend.exists(f"{talk_id}/raw/video.mp4")
+    assert storage_backend.exists(f"{talk_id}/final/final.mp4")
+    for stage in INTERMEDIATE_STAGES:
+        assert not storage_backend.exists(f"{talk_id}/{stage}/{stage}.mp4")
+
+
+def test_cleanup_intermediates_idempotent_when_stages_not_generated(
+    storage_backend: StorageBackend,
+):
+    talk_id = 43
+    # Only raw and cut exist; preview, assemble, intro, outro were never generated
+    storage_backend.put(f"{talk_id}/raw/video.mp4", b"raw video")
+    storage_backend.put(f"{talk_id}/cut/cut.mp4", b"cut video")
+
+    cleanup_intermediates(storage_backend, talk_id)
+
+    assert storage_backend.exists(f"{talk_id}/raw/video.mp4")
+    assert not storage_backend.exists(f"{talk_id}/cut/cut.mp4")
+
+
+def test_cleanup_intermediates_resilient_to_storage_delete_errors():
+    mock_backend = mock.MagicMock(spec=StorageBackend)
+    mock_backend.delete.side_effect = RuntimeError("Storage connection failed")
+
+    # Should not raise exception
+    cleanup_intermediates(mock_backend, 42)
+    assert mock_backend.delete.call_count == len(INTERMEDIATE_STAGES)

@@ -27,7 +27,7 @@ from app.pipeline.publish import publish
 from app.pipeline.transcode import transcode
 from app.queue import heavy_queue, light_queue
 from app.states import advance
-from app.storage import get_storage_backend
+from app.storage import cleanup_intermediates, get_storage_backend
 
 logger = logging.getLogger(__name__)
 
@@ -734,6 +734,8 @@ def job_publish(talk_id: int, final_key: str) -> None:
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
+
+        cleanup_intermediates(storage, talk_id)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise

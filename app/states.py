@@ -16,6 +16,7 @@ TRANSITIONS = {
         "pending_intro_outro",
         "needs_work",
         "pending_bounds",
+        "rejected",
         "broken",
     ],
     "pending_intro_outro": ["assembling", "broken"],

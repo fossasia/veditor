@@ -1,8 +1,11 @@
+import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 
 class StorageKeyNotFoundError(FileNotFoundError):
@@ -168,3 +171,30 @@ def get_storage_backend() -> StorageBackend:
     from app.config import settings
 
     return LocalDiskBackend(settings.data_dir)
+
+
+INTERMEDIATE_STAGES: tuple[str, ...] = (
+    "cut",
+    "preview",
+    "assemble",
+    "intro",
+    "outro",
+)
+
+
+def cleanup_intermediates(storage: StorageBackend, talk_id: int) -> None:
+    """Delete intermediate artifacts (cut, preview, assemble, intro, outro) for a talk.
+
+    Safe and idempotent. Deletion failures are logged as warnings and not raised,
+    ensuring cleanup never blocks or rolls back state transitions. raw/ is never touched.
+    """
+    for target in INTERMEDIATE_STAGES:
+        try:
+            storage.delete(f"{talk_id}/{target}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to delete %s storage for talk %s: %s",
+                target,
+                talk_id,
+                exc,
+            )

@@ -180,8 +180,8 @@ def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status
         ("approve", "Looks great!", "pending_intro_outro"),
         ("needs_work", None, "pending_bounds"),
         ("needs_work", "Audio is cut off at the start", "pending_bounds"),
-        ("reject", None, "pending_bounds"),
-        ("reject", "Not suitable for publication", "pending_bounds"),
+        ("reject", None, "rejected"),
+        ("reject", "Not suitable for publication", "rejected"),
     ],
 )
 def test_review_valid_decisions_success(
@@ -297,25 +297,26 @@ def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
     assert resp_work.review.decision == "needs_work"
     assert resp_work.review.note == "Fix cut"
 
-    # Reset talk status for reject test -> pending_bounds
+    # Reset talk status for reject test -> rejected
     preview_talk.status = "preview"
     req_reject = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.reject, note="Reset bounds"
     )
     resp_reject = handle_reject(preview_talk, req_reject, mock_db)
     assert resp_reject.talk.id == preview_talk.id
-    assert resp_reject.talk.status == "pending_bounds"
+    assert resp_reject.talk.status == "rejected"
     assert resp_reject.talk.cut_start is None
     assert resp_reject.talk.cut_end is None
     assert preview_talk.cut_start is None
     assert preview_talk.cut_end is None
+    assert preview_talk.status == "rejected"
     assert resp_reject.review is not None
     assert resp_reject.review.decision == "reject"
     assert resp_reject.review.note == "Reset bounds"
 
 
 def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
-    """Rejecting a talk in preview clears cut bounds, resets to pending_bounds, purges cut/preview files, and enqueues no jobs."""
+    """Rejecting a talk in preview clears cut bounds, transitions to rejected, purges cut/preview files, and enqueues no jobs."""
     talk = models.Talk(
         id=42,
         event_id=1,
@@ -349,7 +350,7 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["talk"]["status"] == "pending_bounds"
+        assert data["talk"]["status"] == "rejected"
         assert data["talk"]["cut_start"] is None
         assert data["talk"]["cut_end"] is None
         assert data["talk"]["raw_duration_seconds"] == 120.0
@@ -357,7 +358,7 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
         assert data["review"]["note"] == "Bounds inaccurate, reset to raw"
         assert talk.cut_start is None
         assert talk.cut_end is None
-        assert talk.status == "pending_bounds"
+        assert talk.status == "rejected"
 
         assert not fake_storage.exists("42/cut/cut.mp4")
         assert not fake_storage.exists("42/preview/preview.mp4")
@@ -387,6 +388,9 @@ def test_handle_reject_storage_delete_error_resilient(mock_db):
     mock_storage.delete.side_effect = [
         RuntimeError("Storage connection failed"),
         None,
+        None,
+        None,
+        None,
     ]
 
     app.dependency_overrides[get_client] = lambda: mock_client
@@ -400,18 +404,21 @@ def test_handle_reject_storage_delete_error_resilient(mock_db):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["talk"]["status"] == "pending_bounds"
+    assert data["talk"]["status"] == "rejected"
     assert data["talk"]["cut_start"] is None
     assert data["talk"]["cut_end"] is None
     assert data["review"]["decision"] == "reject"
-    assert talk.status == "pending_bounds"
+    assert talk.status == "rejected"
     assert talk.cut_start is None
     assert talk.cut_end is None
 
-    assert mock_storage.delete.call_count == 2
+    assert mock_storage.delete.call_count == 5
     assert mock_storage.delete.call_args_list == [
         mock_call("42/cut"),
         mock_call("42/preview"),
+        mock_call("42/assemble"),
+        mock_call("42/intro"),
+        mock_call("42/outro"),
     ]
 
 

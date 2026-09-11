@@ -44,8 +44,9 @@ def _setup_deps(mock_db, mock_storage=None, event_ids=(1,)):
     mock_client = models.Client(id=1, event_ids=list(event_ids))
     app.dependency_overrides[get_client] = lambda: mock_client
     app.dependency_overrides[get_db] = lambda: mock_db
-    if mock_storage is not None:
-        app.dependency_overrides[get_storage_backend] = lambda: mock_storage
+    if mock_storage is None:
+        mock_storage = MagicMock()
+    app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
 
 def _clear_deps():

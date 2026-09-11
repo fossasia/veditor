@@ -32,7 +32,7 @@ from app.ingest import (
 )
 from app.queue import heavy_queue, light_queue
 from app.states import advance
-from app.storage import StorageBackend, get_storage_backend
+from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
 from app.tasks import STAGE_CONFIG, dispatch_assembly, job_cut, job_detect
 
 logger = logging.getLogger(__name__)
@@ -241,6 +241,7 @@ def approve_talk(
     talk_id: int,
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     payload: schemas.ApproveRequest | None = None,
 ):
     """
@@ -271,6 +272,10 @@ def approve_talk(
 
     db.commit()
     db.refresh(talk)
+
+    if decision == "reject":
+        cleanup_intermediates(storage, talk_id)
+
     return schemas.TalkRead.model_validate(talk)
 
 

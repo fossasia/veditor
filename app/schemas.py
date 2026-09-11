@@ -1,7 +1,7 @@
 import re
 from datetime import UTC, datetime, time
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -12,9 +12,19 @@ from pydantic import (
     model_validator,
 )
 
+from app.retention import validate_retention_overrides
+
 
 class EventBase(BaseModel):
     name: str
+    retention_overrides: dict[str, Any] | None = None
+
+    @field_validator("retention_overrides")
+    @classmethod
+    def _validate_retention_overrides(
+        cls, v: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        return validate_retention_overrides(v)
 
 
 class EventCreate(EventBase):
