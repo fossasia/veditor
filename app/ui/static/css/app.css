@@ -642,6 +642,12 @@ td {
 
 .studio-panel-body { padding: 18px; flex: 1; }
 
+.action-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .meta-group { margin-bottom: 16px; }
 .meta-label {
   font-size: 0.68rem;

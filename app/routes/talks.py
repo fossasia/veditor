@@ -1,11 +1,13 @@
 import json
 import logging
+import math
 import tempfile
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
+import av
 from fastapi import (
     APIRouter,
     Depends,
@@ -17,6 +19,7 @@ from fastapi import (
     status,
 )
 from rq.command import send_stop_job_command
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -525,7 +528,10 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
     """
     Cancels queued and active RQ jobs for the given talk across all queues,
     and removes its artifacts from storage if storage is provided.
+    Attempts all cleanup operations, collecting any failures, and raises
+    an aggregate RuntimeError before callers delete or reset database records.
     """
+    errors: list[str] = []
     try:
         from rq.registry import StartedJobRegistry
 
@@ -537,8 +543,8 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                     if rq_job and rq_job.args and rq_job.args[0] == talk_id:
                         rq_job.cancel()
                         rq_job.delete()
-                except Exception:  # noqa: BLE001, S110
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"Failed cancelling queued job {job_id}: {exc}")
 
             # 2. Stop running/started/deferred/scheduled jobs
             registries = [
@@ -557,10 +563,10 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                                 send_stop_job_command(q.connection, job_id)
                                 rq_job.cancel()
                                 rq_job.delete()
-                        except Exception:  # noqa: BLE001, S110
-                            pass
-                except Exception:  # noqa: BLE001, S110
-                    pass
+                        except Exception as exc:  # noqa: BLE001
+                            errors.append(f"Failed stopping job {job_id}: {exc}")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"Failed accessing queue registry: {exc}")
 
             try:
                 registry = StartedJobRegistry(queue=q)
@@ -571,18 +577,23 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                             send_stop_job_command(q.connection, job_id)
                             rq_job.cancel()
                             rq_job.delete()
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-            except Exception:  # noqa: BLE001, S110
-                pass
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Error cancelling RQ jobs for talk %s: %s", talk_id, e)
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(f"Failed stopping started job {job_id}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"Failed accessing StartedJobRegistry: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"Error cancelling RQ jobs for talk {talk_id}: {exc}")
 
     if storage:
         try:
             storage.delete(str(talk_id))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Error deleting storage for talk %s: %s", talk_id, e)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Error deleting storage for talk {talk_id}: {exc}")
+
+    if errors:
+        msg = f"Cleanup failed for talk {talk_id}: " + "; ".join(errors)
+        logger.warning(msg)
+        raise RuntimeError(msg)
 
 
 @router.post(
@@ -648,9 +659,24 @@ def update_talk(
         )
 
     if payload.title is not None:
-        talk.title = payload.title
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Talk title cannot be empty",
+            )
+        talk.title = title
     if payload.room is not None:
         talk.room = payload.room
+
+    new_start = payload.start if payload.start is not None else talk.start
+    new_end = payload.end if payload.end is not None else talk.end
+    if new_start and new_end and new_end <= new_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Talk end time must be after start time",
+        )
+
     if payload.start is not None:
         talk.start = payload.start
     if payload.end is not None:
@@ -751,28 +777,46 @@ async def upload_recording(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
 
-    if talk.status != "waiting_for_files":
+    # Atomically reserve talk from waiting_for_files to detecting before the first await
+    updated = (
+        db.query(models.Talk)
+        .filter(models.Talk.id == talk_id, models.Talk.status == "waiting_for_files")
+        .update({"status": "detecting"})
+    )
+    if not updated:
+        db.refresh(talk)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
         )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        safe_filename = Path(file.filename or "recording.mp4").name or "recording.mp4"
-        tmp_path = Path(tmpdir) / safe_filename
-        # storage-boundary-exempt: upload staging
-        with open(tmp_path, "wb") as f_out:  # noqa: ASYNC230
-            while chunk := await file.read(1024 * 1024):
-                f_out.write(chunk)
-
-        raw_key = f"{talk_id}/raw/raw.mp4"
-        storage.put(raw_key, tmp_path)
-
-    advance(talk, "detecting")
     db.commit()
     db.refresh(talk)
 
+    raw_key = f"{talk_id}/raw/raw.mp4"
     try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            safe_filename = (
+                Path(file.filename or "recording.mp4").name or "recording.mp4"
+            )
+            tmp_path = Path(tmpdir) / safe_filename
+            # storage-boundary-exempt: upload staging
+            with open(tmp_path, "wb") as f_out:  # noqa: ASYNC230
+                while chunk := await file.read(1024 * 1024):
+                    f_out.write(chunk)
+
+            # Validate uploaded media using av.open to confirm valid video stream exists
+            try:
+                with av.open(str(tmp_path)) as container:
+                    if not container.streams.video:
+                        raise ValueError("No video stream found in uploaded file")
+            except Exception as vid_err:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid video file: {vid_err}",
+                ) from vid_err
+
+            storage.put(raw_key, tmp_path)
+
         light_queue.enqueue(
             job_detect,
             talk.id,
@@ -803,9 +847,8 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
-        # Numeric values <= 480 are interpreted as minutes (e.g. 45 -> 2700s)
-        # Larger numbers are treated as raw seconds
-        return float(val * 60) if val <= 480 else float(val)
+        sec = float(val)
+        return sec if math.isfinite(sec) and sec > 0 else None
     if isinstance(val, str):
         val = val.strip()
         if not val:
@@ -821,8 +864,9 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
             for suffix in suffixes:
                 if low.endswith(suffix):
                     try:
-                        return float(low[: -len(suffix)].strip()) * multiplier
-                    except ValueError:
+                        parsed = float(low[: -len(suffix)].strip()) * multiplier
+                        return parsed if math.isfinite(parsed) and parsed > 0 else None
+                    except ValueError, TypeError:
                         return None
 
         if ":" in val:
@@ -830,25 +874,25 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
             try:
                 if len(parts) == 2:
                     # MM:SS
-                    return float(int(parts[0]) * 60 + float(parts[1]))
+                    parsed = float(int(parts[0]) * 60 + float(parts[1]))
+                    return parsed if math.isfinite(parsed) and parsed > 0 else None
                 elif len(parts) == 3:
                     # HH:MM:SS
-                    return float(
+                    parsed = float(
                         int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
                     )
-            except ValueError:
+                    return parsed if math.isfinite(parsed) and parsed > 0 else None
+            except ValueError, TypeError:
                 return None
         try:
-            num = float(val)
-            return float(num * 60) if num <= 480 else float(num)
-        except ValueError:
+            parsed = float(val)
+            return parsed if math.isfinite(parsed) and parsed > 0 else None
+        except ValueError, TypeError:
             return None
     return None
 
 
-def _parse_duration_minutes(val: str | float | None) -> int | None:
-    sec = _parse_duration_seconds(val)
-    return int(sec // 60) if sec is not None else None
+MAX_SCHEDULE_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @router.post("/schedule/import", response_model=schemas.ScheduleImportResponse)
@@ -863,10 +907,49 @@ async def import_schedule(
     """
     data = None
     if file and file.filename:
-        content = await file.read()
-        data = json.loads(content.decode("utf-8"))
+        content_len = request.headers.get("content-length")
+        if content_len:
+            try:
+                if int(content_len) > MAX_SCHEDULE_IMPORT_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="Schedule file exceeds maximum allowed size (10MB)",
+                    )
+            except ValueError:
+                pass
+        content = bytearray()
+        while chunk := await file.read(1024 * 1024):
+            content.extend(chunk)
+            if len(content) > MAX_SCHEDULE_IMPORT_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Schedule file exceeds maximum allowed size (10MB)",
+                )
+        try:
+            data = json.loads(content.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON schedule file",
+            ) from exc
     else:
-        body = await request.json()
+        content_len = request.headers.get("content-length")
+        if content_len:
+            try:
+                if int(content_len) > MAX_SCHEDULE_IMPORT_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="Schedule body exceeds maximum allowed size (10MB)",
+                    )
+            except ValueError:
+                pass
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON body",
+            ) from exc
         if isinstance(body, dict):
             data = body.get("schedule") or body.get("talks") or body
         else:
@@ -935,6 +1018,15 @@ async def import_schedule(
             db.commit()
             db.refresh(event)
             is_new_event = True
+            try:
+                db.execute(
+                    text(
+                        "SELECT setval(pg_get_serial_sequence('events', 'id'), (SELECT MAX(id) FROM events))"
+                    )
+                )
+                db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed coordinating event sequence: %s", exc)
 
     if not event:
         # Check if caller already has an event with matching name
@@ -976,16 +1068,42 @@ async def import_schedule(
             try:
                 t_dur_sec = float(t_info["duration_seconds"])
             except ValueError, TypeError:
-                t_dur_sec = None
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid duration_seconds for talk '{title}'",
+                )
+            if not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid duration_seconds for talk '{title}': must be positive and finite",
+                )
         elif "duration_minutes" in t_info and t_info["duration_minutes"] is not None:
             try:
-                t_dur_sec = float(t_info["duration_minutes"]) * 60
+                t_dur_sec = float(t_info["duration_minutes"]) * 60.0
             except ValueError, TypeError:
-                t_dur_sec = None
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid duration_minutes for talk '{title}'",
+                )
+            if not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid duration_minutes for talk '{title}': must be positive and finite",
+                )
         elif "duration" in t_info and t_info["duration"] is not None:
             t_dur_sec = _parse_duration_seconds(t_info["duration"])
+            if t_dur_sec is None or not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid duration for talk '{title}': must be positive and finite",
+                )
 
         if t_start and t_end:
+            if t_end <= t_start:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"End time must be after start time for talk '{title}'",
+                )
             start_dt = t_start
             end_dt = t_end
         elif t_start and t_dur_sec is not None:

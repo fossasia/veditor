@@ -7,6 +7,8 @@ Worker processes eagerly import this module at boot to avoid per-job import over
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import tempfile
 import time
 import traceback
@@ -567,13 +569,37 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             except ValueError as val_err:
                 if "No audio stream found" in str(val_err):
                     logger.warning(
-                        "Talk %s has no audio stream; bypassing loudness normalization",
+                        "Talk %s has no audio stream; synthesizing silent audio track",
                         talk_id,
                     )
-                    import shutil
-
-                    # storage-boundary-exempt: bypass audio normalization copy
-                    shutil.copy2(cut_path, tmp_out)
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(cut_path),
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "anullsrc=channel_layout=stereo:sample_rate=44100",
+                        "-c:v",
+                        "copy",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        str(tmp_out),
+                    ]
+                    # storage-boundary-exempt: silent audio track synthesis
+                    res = subprocess.run(
+                        cmd, capture_output=True, text=True, check=False
+                    )
+                    if res.returncode != 0:
+                        logger.warning(
+                            "ffmpeg silent audio synthesis failed (%s); falling back to direct copy: %s",
+                            res.returncode,
+                            res.stderr,
+                        )
+                        # storage-boundary-exempt: fallback copy on silent audio synthesis failure
+                        shutil.copy2(cut_path, tmp_out)
                 else:
                     raise
             storage.put(loud_key, tmp_out)

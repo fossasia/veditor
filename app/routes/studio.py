@@ -220,18 +220,22 @@ def dashboard(
     )
 
 
+ALLOWED_MEDIA_CATEGORIES = frozenset(
+    {"preview", "raw", "intro", "outro", "cut", "final"}
+)
+
+
 @router.get("/media/{talk_id}/{filename}")
 def get_talk_media_default(
     talk_id: int,
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
-    if client is not None:
-        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-        if talk and talk.event_id not in client.event_ids:
-            raise HTTPException(status_code=404, detail="Media not found")
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or talk.event_id not in client.event_ids:
+        raise HTTPException(status_code=404, detail="Media not found")
 
     safe_filename = Path(filename).name
     candidate_keys = [
@@ -256,14 +260,16 @@ def get_talk_media_categorized(
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
-    if client is not None:
-        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-        if talk and talk.event_id not in client.event_ids:
-            raise HTTPException(status_code=404, detail="Media not found")
-
     safe_category = Path(category).name
+    if safe_category not in ALLOWED_MEDIA_CATEGORIES:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or talk.event_id not in client.event_ids:
+        raise HTTPException(status_code=404, detail="Media not found")
+
     safe_filename = Path(filename).name
     key = f"{talk_id}/{safe_category}/{safe_filename}"
     if not storage.exists(key):
@@ -278,10 +284,10 @@ def studio(
     talk_id: int,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (client is not None and talk.event_id not in client.event_ids):
+    if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(status_code=404, detail="Talk not found")
 
     jobs = (

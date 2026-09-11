@@ -132,33 +132,91 @@ def test_talk_studio_page(client: TestClient, db_session):
     db_session.commit()
     db_session.refresh(talk)
 
-    response = client.get(f"/studio/talks/{talk.id}")
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Unauthenticated returns 401
+    unauth = client.get(f"/studio/talks/{talk.id}")
+    assert unauth.status_code == 401
+
+    response = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
     assert "Test Studio Detail Talk" in response.text
     assert "Room 101" in response.text
 
 
-def test_talk_studio_not_found(client: TestClient):
-    response = client.get("/studio/talks/999999")
+def test_talk_studio_not_found(client: TestClient, db_session):
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Unauthenticated returns 401
+    assert client.get("/studio/talks/999999").status_code == 401
+
+    response = client.get("/studio/talks/999999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
 
 
-def test_media_serving(client: TestClient, tmp_path):
+def test_media_serving(client: TestClient, db_session, tmp_path):
     from tests.conftest import generate_clip
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Media Talk",
+        room="Hall 1",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     storage: StorageBackend = app.dependency_overrides.get(
         get_storage_backend, get_storage_backend()
     )
-    storage.put("999/preview/preview.mp4", clip)
+    storage.put(f"{talk.id}/preview/preview.mp4", clip)
 
-    response = client.get("/studio/media/999/preview.mp4")
+    # Unauthenticated returns 401
+    assert client.get(f"/studio/media/{talk.id}/preview.mp4").status_code == 401
+
+    response = client.get(
+        f"/studio/media/{talk.id}/preview.mp4", headers={"X-API-Key": api_key}
+    )
     assert response.status_code == 200
     assert "video/mp4" in response.headers.get("content-type", "")
 
-    not_found = client.get("/studio/media/999/missing.mp4")
+    not_found = client.get(
+        f"/studio/media/{talk.id}/missing.mp4", headers={"X-API-Key": api_key}
+    )
     assert not_found.status_code == 404
+
+    # Disallowed category returns 404
+    disallowed = client.get(
+        f"/studio/media/{talk.id}/logs/worker.log", headers={"X-API-Key": api_key}
+    )
+    assert disallowed.status_code == 404
 
 
 def test_talk_patch_metadata(client: TestClient, db_session):
@@ -303,16 +361,35 @@ def test_talk_upload_recording(client: TestClient, db_session):
     db_session.commit()
     db_session.refresh(talk)
 
-    fake_file = io.BytesIO(b"fake mp4 video bytes")
-    with patch("app.routes.talks.light_queue") as mock_queue:
+    from tests.conftest import generate_clip
+
+    clip = generate_clip(0.5)
+    with patch("app.routes.talks.light_queue") as mock_queue, open(clip, "rb") as f_vid:
         res = client.post(
             f"/talks/{talk.id}/upload",
-            files={"file": ("recording.mp4", fake_file, "video/mp4")},
+            files={"file": ("recording.mp4", f_vid, "video/mp4")},
             headers={"X-API-Key": api_key},
         )
         assert res.status_code == 202
         assert res.json()["status"] == "detecting"
         mock_queue.enqueue.assert_called_once()
+
+    # Reset status back to waiting_for_files to test invalid video upload rejection
+    talk.status = "waiting_for_files"
+    db_session.commit()
+
+    fake_file = io.BytesIO(b"not a valid video content")
+    err_res = client.post(
+        f"/talks/{talk.id}/upload",
+        files={"file": ("corrupt.mp4", fake_file, "video/mp4")},
+        headers={"X-API-Key": api_key},
+    )
+    assert err_res.status_code == 400
+    assert "Invalid video file" in err_res.json()["detail"]
+
+    # Verify status was restored to waiting_for_files
+    db_session.refresh(talk)
+    assert talk.status == "waiting_for_files"
 
 
 def test_import_schedule_json_list(client: TestClient, db_session):
@@ -442,6 +519,11 @@ def test_dashboard_and_studio_render_active_job_progress(
     db_session.commit()
     db_session.refresh(talk)
 
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
     job = models.Job(
         talk_id=talk.id,
         kind="transcode",
@@ -460,11 +542,13 @@ def test_dashboard_and_studio_render_active_job_progress(
     assert "job-progress-fill" in dash_res.text
 
     # 2. Studio should render the job card with progress and timing
-    studio_res = client.get(f"/studio/talks/{talk.id}")
+    studio_res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
     assert studio_res.status_code == 200
     assert "72%" in studio_res.text
     assert "job-card" in studio_res.text
     assert "pipeline-progress-wrap" in studio_res.text
+
+
 def test_import_schedule_mm_ss_duration(client: TestClient, db_session):
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
@@ -618,5 +702,164 @@ def test_ui_reject_talk_storage_delete_resilient(client: TestClient, db_session)
         db_session.refresh(talk)
         assert talk.status == "rejected"
         assert mock_storage.delete.call_count == 5
+    finally:
+        app.dependency_overrides.pop(get_storage_backend, None)
+
+
+def test_update_talk_validations(client: TestClient, db_session):
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Valid Title",
+        room="Room 1",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # Blank title should fail with 400
+    res_empty_title = client.patch(
+        f"/talks/{talk.id}",
+        json={"title": "   "},
+        headers={"X-API-Key": api_key},
+    )
+    assert res_empty_title.status_code == 400
+    assert "cannot be empty" in res_empty_title.json()["detail"]
+
+    # End <= start should fail with 400
+    res_bad_interval = client.patch(
+        f"/talks/{talk.id}",
+        json={"end": (now - timedelta(minutes=10)).isoformat()},
+        headers={"X-API-Key": api_key},
+    )
+    assert res_bad_interval.status_code == 400
+    assert "after start time" in res_bad_interval.json()["detail"]
+
+
+def test_import_schedule_malformed_json_and_size_limit(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Malformed JSON body returns 400
+    res_bad_json = client.post(
+        "/talks/schedule/import",
+        content=b"{bad json",
+        headers={"Content-Type": "application/json", "X-API-Key": api_key},
+    )
+    assert res_bad_json.status_code == 400
+
+    # Oversized content returns 413
+    oversized = b"x" * (11 * 1024 * 1024)
+    res_oversized = client.post(
+        "/talks/schedule/import",
+        content=oversized,
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(len(oversized)),
+            "X-API-Key": api_key,
+        },
+    )
+    assert res_oversized.status_code == 413
+
+
+def test_import_schedule_duration_validations(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Negative duration in string format returns 400
+    res_neg = client.post(
+        "/talks/schedule/import",
+        json={
+            "title": "Negative Talk",
+            "duration": "-30s",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res_neg.status_code == 400
+    assert "must be positive and finite" in res_neg.json()["detail"]
+
+    # Negative duration_seconds returns 400
+    res_neg_sec = client.post(
+        "/talks/schedule/import",
+        json={
+            "title": "Negative Sec Talk",
+            "duration_seconds": -100,
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res_neg_sec.status_code == 400
+    assert "must be positive and finite" in res_neg_sec.json()["detail"]
+
+    # End before start returns 400
+    res_bad_range = client.post(
+        "/talks/schedule/import",
+        json={
+            "title": "Backwards Talk",
+            "start": "2026-09-09T17:15:00Z",
+            "end": "2026-09-09T16:15:00Z",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res_bad_range.status_code == 400
+    assert "after start time" in res_bad_range.json()["detail"]
+
+
+def test_delete_talk_propagates_storage_error(client: TestClient, db_session):
+    """When storage fails during talk deletion, an error is raised and the record is not deleted."""
+    from unittest.mock import MagicMock
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Protected Talk",
+        room="Hall 1",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    mock_storage = MagicMock()
+    mock_storage.delete.side_effect = RuntimeError("Disk failure")
+
+    app.dependency_overrides[get_storage_backend] = lambda: mock_storage
+    try:
+        import pytest
+
+        with pytest.raises(RuntimeError, match="Cleanup failed"):
+            client.delete(f"/talks/{talk.id}", headers={"X-API-Key": api_key})
+
+        # Ensure talk still exists in DB
+        db_session.refresh(talk)
+        assert talk is not None
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)

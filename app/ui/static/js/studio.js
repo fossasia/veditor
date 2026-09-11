@@ -444,9 +444,7 @@ window.rejectTalk = async function(id) {
   setBtnBusy(btn, true, 'Rejecting...');
   try {
     const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
-    if (talkStatus === 'pending_approval') {
-      await postAPI(`/talks/${id}/approve`, { decision: 'reject' });
-    } else if (talkStatus === 'preview') {
+    if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'reject', note: notes || 'Rejected in review studio' });
     } else {
       await postAPI(`/talks/${id}/abort`);
@@ -621,7 +619,7 @@ async function pollStudioJobs() {
     const key = (window.getApiKey && window.getApiKey()) || '';
     if (!key) return;
     const headers = { 'X-API-Key': key };
-    const res = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers, _isPolling: true });
+    const res = await (window.authFetch || fetch)(`/talks/${talkId}/jobs`, { headers, _isPolling: true });
     if (!res.ok) return;
     const data = await res.json();
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
