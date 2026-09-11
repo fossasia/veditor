@@ -777,7 +777,12 @@ async def upload_recording(
     Uploads a video recording file directly via multipart form, streams to temporary
     staging, and enqueues an ingest/validation job on the light queue.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = (
+        db.query(models.Talk)
+        .filter(models.Talk.id == talk_id)
+        .with_for_update()
+        .first()
+    )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
