@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 from app.db import Base
-from app.models import Client, Event, Job, Review, Talk
+from app.models import Client, Event, Job, Review, Talk, User
 
 # Use the postgres instance from docker-compose, but we will wrap tests in a transaction
 engine = create_engine(settings.database_url)
@@ -183,3 +183,67 @@ def test_event_retention_overrides_persistence(db_session):
         "new_key": "persisted",
         "ior_key": "persisted_ior",
     }
+
+
+def test_user_model_and_relationships(db_session):
+    user = User(email="testuser@example.com", hashed_password="argon2_hash_val")
+    db_session.add(user)
+    db_session.flush()
+
+    assert user.id is not None
+    assert user.role == "user"
+    assert user.is_active is True
+    assert user.created_at is not None
+    assert user.updated_at is not None
+
+    event = Event(name="User Event", created_by_user=user)
+    db_session.add(event)
+    db_session.flush()
+
+    talk = Talk(
+        event_id=event.id,
+        title="User Talk",
+        start=datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 6, 1, 10, 0, tzinfo=UTC),
+    )
+    db_session.add(talk)
+    db_session.flush()
+
+    review = Review(talk_id=talk.id, decision="approved", user=user)
+    db_session.add(review)
+    db_session.flush()
+
+    assert event.created_by_user_id == user.id
+    assert event.created_by_user == user
+    assert event in user.events
+
+    assert review.user_id == user.id
+    assert review.user == user
+    assert review in user.reviews
+
+
+def test_user_email_unique_enforced(db_session):
+    u1 = User(email="duplicate@example.com", hashed_password="hash1")
+    db_session.add(u1)
+    db_session.flush()
+
+    u2 = User(email="duplicate@example.com", hashed_password="hash2")
+    db_session.add(u2)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_user_role_constraint_enforced(db_session):
+    for role in ("user", "organizer", "admin"):
+        u = User(email=f"{role}@example.com", hashed_password="pw", role=role)
+        db_session.add(u)
+        db_session.flush()
+
+    invalid_user = User(
+        email="invalid_role@example.com", hashed_password="pw", role="superadmin"
+    )
+    db_session.add(invalid_user)
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()

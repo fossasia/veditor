@@ -3,14 +3,17 @@ from typing import Any, Self
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
@@ -43,6 +46,49 @@ class RetentionOverrides(MutableDict):
         return self
 
 
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        Index("idx_users_email", "email", unique=True),
+        CheckConstraint(
+            "role IN ('user', 'organizer', 'admin')",
+            name="ck_users_role",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(32),
+        default="user",
+        server_default=text("'user'"),
+        nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    events: Mapped[list[Event]] = relationship(back_populates="created_by_user")
+    reviews: Mapped[list[Review]] = relationship(back_populates="user")
+
+
 class Event(Base):
     __tablename__ = "events"
 
@@ -51,10 +97,19 @@ class Event(Base):
     retention_overrides: Mapped[dict[str, Any] | None] = mapped_column(
         RetentionOverrides.as_mutable(JSONB), nullable=True, default=None
     )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            name="fk_events_created_by_user_id_users",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
 
     talks: Mapped[list[Talk]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )
+    created_by_user: Mapped[User | None] = relationship(back_populates="events")
 
     @validates("retention_overrides")
     def _validate_retention_overrides(self, key: str, value: Any) -> Any:
@@ -191,5 +246,14 @@ class Review(Base):
         default=lambda: datetime.now(UTC),
         nullable=False,
     )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            name="fk_reviews_user_id_users",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
 
     talk: Mapped[Talk] = relationship(back_populates="reviews")
+    user: Mapped[User | None] = relationship(back_populates="reviews")
