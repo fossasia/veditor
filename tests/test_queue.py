@@ -7,6 +7,7 @@ from app.tasks import STAGE_CONFIG
 
 def test_stage_config_contains_all_stages():
     expected_stages = {
+        "ingest",
         "detect",
         "cut",
         "intro",
@@ -27,6 +28,7 @@ def test_stage_config_queue_assignments():
         assert isinstance(cfg["job_timeout"], int)
         assert cfg["job_timeout"] > 0
 
+    assert STAGE_CONFIG["ingest"]["queue"] == "light"
     assert STAGE_CONFIG["detect"]["queue"] == "light"
     assert STAGE_CONFIG["cut"]["queue"] == "light"
     assert STAGE_CONFIG["intro"]["queue"] == "light"

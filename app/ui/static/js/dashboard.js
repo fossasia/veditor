@@ -305,13 +305,18 @@ window.submitQuickTalk = async function() {
   const eventName = (document.getElementById('quick-event-name') || {}).value || 'General Conference';
   const title = (document.getElementById('quick-talk-title') || {}).value || '';
   const room = (document.getElementById('quick-talk-room') || {}).value || 'Auditorium A';
-  const duration = (document.getElementById('quick-talk-duration') || {}).value || '45:00';
   const startVal = (document.getElementById('quick-talk-start') || {}).value || '';
+  const endVal = (document.getElementById('quick-talk-end') || {}).value || '';
   const btn = document.getElementById('btn-submit-quick-talk');
   const orig = btn ? btn.innerHTML : '';
 
   if (!title.trim()) {
     alert('Please enter a talk title.');
+    return;
+  }
+
+  if (startVal && endVal && new Date(endVal) <= new Date(startVal)) {
+    alert('End time must be after start time.');
     return;
   }
 
@@ -322,11 +327,13 @@ window.submitQuickTalk = async function() {
       event_name: eventName,
       title,
       room,
-      duration: duration.trim(),
     };
 
     if (startVal) {
       payload.start = new Date(startVal).toISOString();
+    }
+    if (endVal) {
+      payload.end = new Date(endVal).toISOString();
     }
 
     const res = await (window.authFetch || fetch)('/talks/schedule/import', {

@@ -309,22 +309,20 @@
       <input type="text" id="quick-talk-title" class="input-field" placeholder="e.g. Building Open Video Systems">
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-      <div>
-        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Room</label>
-        <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
-      </div>
-      <div>
-        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Duration (e.g. 30s, 01:35, 45m)</label>
-        <input type="text" id="quick-talk-duration" class="input-field" value="45m" placeholder="e.g. 30s, 01:35, 45m, 45:00">
-      </div>
-
-
+    <div style="margin-bottom:10px;">
+      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Room</label>
+      <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
     </div>
 
-    <div style="margin-bottom:16px;">
-      <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Start Time (Optional)</label>
-      <input type="datetime-local" id="quick-talk-start" class="input-field">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div>
+        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">Start Time (Optional)</label>
+        <input type="datetime-local" id="quick-talk-start" class="input-field">
+      </div>
+      <div>
+        <label style="font-size:0.75rem;color:var(--v-text-muted);display:block;margin-bottom:3px;">End Time (Optional)</label>
+        <input type="datetime-local" id="quick-talk-end" class="input-field">
+      </div>
     </div>
 
     <div style="display:flex;justify-content:flex-end;gap:8px;">

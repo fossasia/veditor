@@ -446,6 +446,8 @@ window.rejectTalk = async function(id) {
     const talkStatus = typeof TALK_STATUS !== 'undefined' ? TALK_STATUS : '';
     if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'reject', note: notes || 'Rejected in review studio' });
+    } else if (talkStatus === 'pending_approval') {
+      await postAPI(`/talks/${id}/approve`, { decision: 'reject' });
     } else {
       await postAPI(`/talks/${id}/abort`);
     }

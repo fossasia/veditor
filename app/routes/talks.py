@@ -3,11 +3,11 @@ import logging
 import math
 import tempfile
 import traceback
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
-import av
 from fastapi import (
     APIRouter,
     Depends,
@@ -36,7 +36,13 @@ from app.ingest import (
 from app.queue import heavy_queue, light_queue
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
-from app.tasks import STAGE_CONFIG, dispatch_assembly, job_cut, job_detect
+from app.tasks import (
+    STAGE_CONFIG,
+    dispatch_assembly,
+    job_cut,
+    job_detect,
+    job_ingest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -768,8 +774,8 @@ async def upload_recording(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
     """
-    Uploads a video recording file directly via multipart form, saves to storage,
-    advances status to 'detecting', and enqueues the detect job.
+    Uploads a video recording file directly via multipart form, streams to temporary
+    staging, and enqueues an ingest/validation job on the light queue.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
     if not talk or talk.event_id not in client.event_ids:
@@ -777,55 +783,35 @@ async def upload_recording(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
 
-    # Atomically reserve talk from waiting_for_files to detecting before the first await
-    updated = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id, models.Talk.status == "waiting_for_files")
-        .update({"status": "detecting"})
-    )
-    if not updated:
-        db.refresh(talk)
+    if talk.status != "waiting_for_files":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
         )
-    db.commit()
-    db.refresh(talk)
 
     raw_key = f"{talk_id}/raw/raw.mp4"
+    staging_dir = Path(tempfile.gettempdir()) / "veditor_staging"
+    # storage-boundary-exempt: upload staging directory
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_dir / f"upload_{talk_id}_{uuid.uuid4().hex}.mp4"
+
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            safe_filename = (
-                Path(file.filename or "recording.mp4").name or "recording.mp4"
-            )
-            tmp_path = Path(tmpdir) / safe_filename
-            # storage-boundary-exempt: upload staging
-            with open(tmp_path, "wb") as f_out:  # noqa: ASYNC230
-                while chunk := await file.read(1024 * 1024):
-                    f_out.write(chunk)
-
-            # Validate uploaded media using av.open to confirm valid video stream exists
-            try:
-                with av.open(str(tmp_path)) as container:
-                    if not container.streams.video:
-                        raise ValueError("No video stream found in uploaded file")
-            except Exception as vid_err:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid video file: {vid_err}",
-                ) from vid_err
-
-            storage.put(raw_key, tmp_path)
+        # Stream raw upload to temporary staging
+        # storage-boundary-exempt: upload staging
+        with open(staged_path, "wb") as f_out:  # noqa: ASYNC230
+            while chunk := await file.read(1024 * 1024):
+                f_out.write(chunk)
 
         light_queue.enqueue(
-            job_detect,
+            job_ingest,
             talk.id,
+            str(staged_path),
             raw_key,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG["ingest"]["job_timeout"],
         )
     except Exception:
-        talk.status = "waiting_for_files"
-        db.commit()
+        # storage-boundary-exempt: upload staging cleanup
+        staged_path.unlink(missing_ok=True)
         raise
 
     return schemas.TalkRead.model_validate(talk)
@@ -943,17 +929,26 @@ async def import_schedule(
                     )
             except ValueError:
                 pass
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_SCHEDULE_IMPORT_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Schedule body exceeds maximum allowed size (10MB)",
+                )
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Empty schedule data"
+            )
         try:
-            body = await request.json()
+            body = json.loads(content.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON body",
             ) from exc
-        if isinstance(body, dict):
-            data = body.get("schedule") or body.get("talks") or body
-        else:
-            data = body
+        data = body
 
     if not data and not isinstance(data, list):
         raise HTTPException(
@@ -965,7 +960,11 @@ async def import_schedule(
 
     if isinstance(data, dict):
         event_name = data.get("event_name") or event_name
-        if "schedule" in data and "conference" in data["schedule"]:
+        if (
+            "schedule" in data
+            and isinstance(data["schedule"], dict)
+            and "conference" in data["schedule"]
+        ):
             conf = data["schedule"]["conference"]
             event_name = conf.get("title") or event_name
             for day in conf.get("days", []):
@@ -993,65 +992,7 @@ async def import_schedule(
             detail="No sessions found to import",
         )
 
-    target_event_id = None
-    if isinstance(data, dict) and data.get("event_id"):
-        target_event_id = data.get("event_id")
-    elif (
-        talks_to_create
-        and isinstance(talks_to_create[0], dict)
-        and talks_to_create[0].get("event_id")
-    ):
-        target_event_id = talks_to_create[0].get("event_id")
-
-    event = None
-    is_new_event = False
-    if target_event_id:
-        existing_event = (
-            db.query(models.Event).filter(models.Event.id == target_event_id).first()
-        )
-        if existing_event:
-            verify_event_access(target_event_id, client)
-            event = existing_event
-        else:
-            event = models.Event(id=target_event_id, name=event_name)
-            db.add(event)
-            db.commit()
-            db.refresh(event)
-            is_new_event = True
-            try:
-                db.execute(
-                    text(
-                        "SELECT setval(pg_get_serial_sequence('events', 'id'), (SELECT MAX(id) FROM events))"
-                    )
-                )
-                db.commit()
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed coordinating event sequence: %s", exc)
-
-    if not event:
-        # Check if caller already has an event with matching name
-        event = (
-            db.query(models.Event)
-            .filter(
-                models.Event.name == event_name,
-                models.Event.id.in_(client.event_ids),
-            )
-            .first()
-        )
-
-    if not event:
-        event = models.Event(name=event_name)
-        db.add(event)
-        db.commit()
-        db.refresh(event)
-        is_new_event = True
-
-    # Ensure client has access to this newly created event
-    if is_new_event and event.id not in client.event_ids:
-        client.event_ids = list(set(client.event_ids + [event.id]))
-        db.commit()
-
-    created_count = 0
+    validated_talks = []
     now = datetime.now(UTC)
     for t_info in talks_to_create:
         if not isinstance(t_info, dict):
@@ -1112,32 +1053,112 @@ async def import_schedule(
         elif t_start:
             start_dt = t_start
             end_dt = t_start + timedelta(minutes=45)
+        elif t_end and t_dur_sec is not None:
+            dur_sec = t_dur_sec
+            start_dt = t_end - timedelta(seconds=dur_sec)
+            end_dt = t_end
+        elif t_end:
+            dur_sec = 2700.0
+            start_dt = t_end - timedelta(seconds=dur_sec)
+            end_dt = t_end
         else:
             dur_sec = t_dur_sec if t_dur_sec is not None else 2700.0
-            start_dt = now + timedelta(seconds=created_count * dur_sec)
+            start_dt = now + timedelta(seconds=len(validated_talks) * dur_sec)
             end_dt = start_dt + timedelta(seconds=dur_sec)
 
+        validated_talks.append(
+            {
+                "title": title,
+                "room": room,
+                "start": start_dt,
+                "end": end_dt,
+            }
+        )
+
+    if not validated_talks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No sessions found to import",
+        )
+
+    target_event_id = None
+    if isinstance(data, dict) and data.get("event_id"):
+        target_event_id = data.get("event_id")
+    elif (
+        talks_to_create
+        and isinstance(talks_to_create[0], dict)
+        and talks_to_create[0].get("event_id")
+    ):
+        target_event_id = talks_to_create[0].get("event_id")
+
+    event = None
+    is_new_event = False
+    if target_event_id:
+        existing_event = (
+            db.query(models.Event).filter(models.Event.id == target_event_id).first()
+        )
+        if existing_event:
+            verify_event_access(target_event_id, client)
+            event = existing_event
+        else:
+            event = models.Event(id=target_event_id, name=event_name)
+            db.add(event)
+            db.flush()
+            is_new_event = True
+            try:
+                with db.begin_nested():
+                    db.execute(
+                        text(
+                            "SELECT setval(pg_get_serial_sequence('events', 'id'), (SELECT MAX(id) FROM events))"
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed coordinating event sequence: %s", exc)
+
+    if not event:
+        # Check if caller already has an event with matching name
+        event = (
+            db.query(models.Event)
+            .filter(
+                models.Event.name == event_name,
+                models.Event.id.in_(client.event_ids),
+            )
+            .first()
+        )
+
+    if not event:
+        event = models.Event(name=event_name)
+        db.add(event)
+        db.flush()
+        is_new_event = True
+
+    # Ensure client has access to this newly created event
+    if is_new_event and event.id not in client.event_ids:
+        client.event_ids = list(set(client.event_ids + [event.id]))
+
+    created_count = 0
+    for v_talk in validated_talks:
         existing = (
             db.query(models.Talk)
             .filter(
                 models.Talk.event_id == event.id,
-                models.Talk.title == title,
-                models.Talk.start == start_dt,
+                models.Talk.title == v_talk["title"],
+                models.Talk.start == v_talk["start"],
             )
             .first()
         )
         if existing:
-            existing.room = room
-            existing.end = end_dt
+            existing.room = v_talk["room"]
+            existing.end = v_talk["end"]
             created_count += 1
             continue
 
         talk = models.Talk(
             event_id=event.id,
-            title=title,
-            room=room,
-            start=start_dt,
-            end=end_dt,
+            title=v_talk["title"],
+            room=v_talk["room"],
+            start=v_talk["start"],
+            end=v_talk["end"],
             status="waiting_for_files",
         )
         db.add(talk)

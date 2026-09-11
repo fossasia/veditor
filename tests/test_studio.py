@@ -1,4 +1,3 @@
-import io
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -143,6 +142,7 @@ def test_talk_studio_page(client: TestClient, db_session):
 
     response = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
     assert response.status_code == 200
+    assert response.headers.get("cache-control") == "no-store"
     assert "text/html" in response.headers.get("content-type", "")
     assert "Test Studio Detail Talk" in response.text
     assert "Room 101" in response.text
@@ -205,7 +205,15 @@ def test_media_serving(client: TestClient, db_session, tmp_path):
         f"/studio/media/{talk.id}/preview.mp4", headers={"X-API-Key": api_key}
     )
     assert response.status_code == 200
+    assert response.headers.get("cache-control") == "no-store"
     assert "video/mp4" in response.headers.get("content-type", "")
+
+    # Categorized media route also includes no-store
+    response_cat = client.get(
+        f"/studio/media/{talk.id}/preview/preview.mp4", headers={"X-API-Key": api_key}
+    )
+    assert response_cat.status_code == 200
+    assert response_cat.headers.get("cache-control") == "no-store"
 
     not_found = client.get(
         f"/studio/media/{talk.id}/missing.mp4", headers={"X-API-Key": api_key}
@@ -371,25 +379,10 @@ def test_talk_upload_recording(client: TestClient, db_session):
             headers={"X-API-Key": api_key},
         )
         assert res.status_code == 202
-        assert res.json()["status"] == "detecting"
+        assert res.json()["status"] == "waiting_for_files"
         mock_queue.enqueue.assert_called_once()
-
-    # Reset status back to waiting_for_files to test invalid video upload rejection
-    talk.status = "waiting_for_files"
-    db_session.commit()
-
-    fake_file = io.BytesIO(b"not a valid video content")
-    err_res = client.post(
-        f"/talks/{talk.id}/upload",
-        files={"file": ("corrupt.mp4", fake_file, "video/mp4")},
-        headers={"X-API-Key": api_key},
-    )
-    assert err_res.status_code == 400
-    assert "Invalid video file" in err_res.json()["detail"]
-
-    # Verify status was restored to waiting_for_files
-    db_session.refresh(talk)
-    assert talk.status == "waiting_for_files"
+        enqueued_func = mock_queue.enqueue.call_args[0][0]
+        assert enqueued_func.__name__ == "job_ingest"
 
 
 def test_import_schedule_json_list(client: TestClient, db_session):
@@ -819,6 +812,78 @@ def test_import_schedule_duration_validations(client: TestClient, db_session):
     )
     assert res_bad_range.status_code == 400
     assert "after start time" in res_bad_range.json()["detail"]
+
+    # Atomicity: client event_ids should not have been updated when validation failed
+    db_session.refresh(client_model)
+    assert client_model.event_ids == []
+
+
+def test_import_schedule_preserves_event_name_and_atomic(
+    client: TestClient, db_session
+):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Successful import with event_name and talks list preserves event_name
+    res = client.post(
+        "/talks/schedule/import",
+        json={
+            "event_name": "Unique Atomic Event",
+            "talks": [
+                {"title": "Valid Talk 1", "room": "Room A", "duration": "30m"},
+                {"title": "Valid Talk 2", "room": "Room B", "duration": "45m"},
+            ],
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["event_name"] == "Unique Atomic Event"
+    assert data["imported_count"] == 2
+
+    # Partial failure in batch doesn't import any talks or modify client event_ids for new event
+    res_fail = client.post(
+        "/talks/schedule/import",
+        json={
+            "event_name": "Failed Batch Event",
+            "talks": [
+                {"title": "Good Talk", "room": "Room A", "duration": "30m"},
+                {"title": "Bad Talk", "room": "Room B", "duration": "invalid_duration"},
+            ],
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res_fail.status_code == 400
+    failed_ev = (
+        db_session.query(models.Event).filter_by(name="Failed Batch Event").first()
+    )
+    assert failed_ev is None
+
+
+def test_import_schedule_end_time_only(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    target_end = "2026-09-12T18:00:00Z"
+    res = client.post(
+        "/talks/schedule/import",
+        json={
+            "title": "End Only Talk",
+            "room": "Room A",
+            "end": target_end,
+            "duration": "30m",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    talk = db_session.query(models.Talk).filter_by(title="End Only Talk").first()
+    assert talk is not None
+    assert talk.end == datetime.fromisoformat(target_end)
+    assert talk.start == talk.end - timedelta(minutes=30)
 
 
 def test_delete_talk_propagates_storage_error(client: TestClient, db_session):

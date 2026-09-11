@@ -249,7 +249,11 @@ def get_talk_media_default(
     for key in candidate_keys:
         if storage.exists(key):
             path = storage.get(key)
-            return FileResponse(path, media_type="video/mp4")
+            return FileResponse(
+                path,
+                media_type="video/mp4",
+                headers={"Cache-Control": "no-store"},
+            )
     raise HTTPException(status_code=404, detail="Media not found")
 
 
@@ -275,7 +279,11 @@ def get_talk_media_categorized(
     if not storage.exists(key):
         raise HTTPException(status_code=404, detail=f"Media {key} not found")
     path = storage.get(key)
-    return FileResponse(path, media_type="video/mp4")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/talks/{talk_id}", response_class=HTMLResponse)
@@ -357,4 +365,5 @@ def studio(
             "preview_urls": preview_urls,
             "all_statuses": ALL_STATUSES,
         },
+        headers={"Cache-Control": "no-store"},
     )

@@ -12,6 +12,7 @@ from app.tasks import (
     job_concat,
     job_cut,
     job_detect,
+    job_ingest,
     job_intro,
     job_loudness,
     job_outro,
@@ -52,6 +53,26 @@ class MockDBContext:
 
                 def query_mock(model):
                     q = MagicMock()
+                    if model == Talk:
+
+                        def talk_filter_mock(*args):
+                            sub_q = MagicMock()
+
+                            def talk_update_mock(values):
+                                if "status" in values:
+                                    if ctx.talk.status == "waiting_for_files":
+                                        ctx.talk.status = values["status"]
+                                        return 1
+                                    return 0
+                                return 1
+
+                            sub_q.update.side_effect = talk_update_mock
+                            sub_q.first.return_value = ctx.talk
+                            return sub_q
+
+                        q.filter.side_effect = talk_filter_mock
+                        return q
+
                     if model == Job:
 
                         def filter_mock(*args):
@@ -117,6 +138,92 @@ def mock_storage():
     storage.get.return_value = Path("/tmp/fake_media.mp4")
     storage.put.return_value = None
     return storage
+
+
+def test_job_ingest_success(dummy_talk, mock_storage, tmp_path):
+    dummy_talk.status = "waiting_for_files"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    staged_file = tmp_path / "staged.mp4"
+    staged_file.write_bytes(b"dummy video data")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.validate_media_file", return_value=None),
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+    ):
+        job_ingest(dummy_talk.id, str(staged_file), f"{dummy_talk.id}/raw/raw.mp4")
+
+    assert dummy_talk.status == "detecting"
+    assert len(jobs) == 1
+    job = next(iter(jobs.values()))
+    assert job.status == "done"
+    assert job.kind == "ingest"
+    mock_storage.put.assert_called_once()
+    mock_enqueue.assert_called_once_with(
+        job_detect,
+        dummy_talk.id,
+        f"{dummy_talk.id}/raw/raw.mp4",
+        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+    )
+    # Staged file is unlinked
+    assert not staged_file.exists()
+
+
+def test_job_ingest_failure_restores_waiting_for_files(
+    dummy_talk, mock_storage, tmp_path
+):
+    dummy_talk.status = "waiting_for_files"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    staged_file = tmp_path / "staged.mp4"
+    staged_file.write_bytes(b"corrupt video data")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.validate_media_file",
+            side_effect=ValueError("Invalid video stream"),
+        ),
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        pytest.raises(ValueError, match="Invalid video stream"),
+    ):
+        job_ingest(dummy_talk.id, str(staged_file))
+
+    assert dummy_talk.status == "waiting_for_files"
+    job = next(iter(jobs.values()))
+    assert job.status == "failed"
+    mock_enqueue.assert_not_called()
+    assert not staged_file.exists()
+
+
+def test_job_ingest_stale_or_concurrent_discarded(dummy_talk, mock_storage, tmp_path):
+    # If talk is already detecting or past waiting_for_files, job_ingest discards without altering status
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    staged_file = tmp_path / "staged.mp4"
+    staged_file.write_bytes(b"dummy video data")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.validate_media_file") as mock_validate,
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+    ):
+        job_ingest(dummy_talk.id, str(staged_file))
+
+    assert dummy_talk.status == "detecting"
+    assert len(jobs) == 0
+    mock_validate.assert_not_called()
+    mock_storage.put.assert_not_called()
+    mock_enqueue.assert_not_called()
+    assert not staged_file.exists()
 
 
 def test_no_db_session_held_during_detect(dummy_talk, mock_storage):
