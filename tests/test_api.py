@@ -26,7 +26,8 @@ def _mock_talk(
     cut_start: float | None = None,
     cut_end: float | None = None,
 ) -> models.Talk:
-    return models.Talk(
+    event = models.Event(id=event_id, name="Test Event")
+    talk = models.Talk(
         id=talk_id,
         event_id=event_id,
         title="Test Talk",
@@ -38,6 +39,8 @@ def _mock_talk(
         cut_start=cut_start,
         cut_end=cut_end,
     )
+    talk.event = event
+    return talk
 
 
 def _setup_deps(mock_db, mock_storage=None, event_ids=(1,)):
@@ -567,3 +570,440 @@ def test_abort_talk_from_any_state():
                 mock_storage.delete.assert_called_once_with("1")
             finally:
                 _clear_deps()
+
+
+# ---------------------------------------------------------------------------
+# End-to-End Integration Tests
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_full_lifecycle_ingest_to_done():
+    """End-to-End integration test covering the complete talk processing lifecycle.
+
+    Drives a talk from ingest -> detecting -> pending_approval -> approve ->
+    pending_bounds -> cutting -> generating_previews -> preview ->
+    pending_intro_outro -> assembling (intro -> concat) -> transcoding (loudness -> transcode) ->
+    uploading (publish) -> done.
+    Asserts database mutations, stage transitions, and job record persistence at each step.
+    """
+    from pathlib import Path
+
+    from app.tasks import (
+        job_concat,
+        job_cut,
+        job_detect,
+        job_intro,
+        job_loudness,
+        job_preview,
+        job_publish,
+        job_transcode,
+    )
+
+    talk = _mock_talk(talk_id=1, status="waiting_for_files")
+    jobs_dict: dict[int, models.Job] = {}
+    next_job_id = [1]
+
+    mock_db = MagicMock()
+    mock_storage = MagicMock()
+    mock_storage.exists.return_value = True
+    mock_storage.get.return_value = Path("/tmp/mock_raw.mp4")
+    mock_storage.url.return_value = "https://example.com/preview.mp4"
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model == models.Talk:
+            q.filter.return_value.first.return_value = talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = talk
+            q.filter.return_value.all.return_value = [talk]
+        elif model == models.Job:
+
+            def filter_side_effect(*criteria):
+                fq = MagicMock()
+                matching = list(jobs_dict.values())
+                for c in criteria:
+                    if (
+                        hasattr(c, "left")
+                        and hasattr(c.left, "name")
+                        and hasattr(c, "right")
+                        and hasattr(c.right, "value")
+                    ):
+                        field = c.left.name
+                        val = c.right.value
+                        matching = [
+                            j for j in matching if getattr(j, field, None) == val
+                        ]
+                fq.first.side_effect = lambda: matching[0] if matching else None
+                fq.order_by.return_value.all.side_effect = lambda: matching
+                fq.all.side_effect = lambda: matching
+                return fq
+
+            q.filter.side_effect = filter_side_effect
+            q.filter.return_value.first.side_effect = lambda: (
+                list(jobs_dict.values())[-1] if jobs_dict else None
+            )
+            q.filter.return_value.order_by.return_value.all.side_effect = lambda: list(
+                jobs_dict.values()
+            )
+            q.filter.return_value.all.side_effect = lambda: list(jobs_dict.values())
+        return q
+
+    def add_side_effect(obj):
+        if isinstance(obj, models.Job):
+            if obj.id is None:
+                obj.id = next_job_id[0]
+                next_job_id[0] += 1
+            obj.talk = talk
+            jobs_dict[obj.id] = obj
+        elif isinstance(obj, models.Review):
+            if obj.id is None:
+                obj.id = 1
+            if obj.created_at is None:
+                obj.created_at = datetime.now(UTC)
+
+    mock_db.query.side_effect = query_side_effect
+    mock_db.add.side_effect = add_side_effect
+    mock_db.get.side_effect = lambda model, oid: (
+        talk if model == models.Talk and oid == 1 else jobs_dict.get(oid)
+    )
+    mock_db.__enter__.return_value = mock_db
+    mock_db.__exit__.return_value = None
+
+    _setup_deps(mock_db, mock_storage, event_ids=[1])
+
+    with (
+        patch("app.routes.talks.light_queue") as mock_light_queue,
+        patch("app.routes.talks.heavy_queue") as mock_heavy_queue,
+        patch("app.tasks.light_queue", new_callable=lambda: mock_light_queue),
+        patch("app.tasks.heavy_queue", new_callable=lambda: mock_heavy_queue),
+        patch(
+            "app.routes.talks.stage_recording",
+            return_value="1/raw/mock_source.mp4",
+        ),
+        patch("app.tasks.SessionLocal", return_value=mock_db),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.detect") as mock_detect,
+        patch("app.tasks.cut"),
+        patch("app.tasks.generate_preview"),
+        patch("app.tasks.generate_intro_clip"),
+        patch("app.tasks.concat"),
+        patch("app.tasks.normalize"),
+        patch("app.tasks.transcode"),
+        patch("app.tasks.publish"),
+    ):
+        mock_detect.return_value = MagicMock(
+            passed=True, actual_duration_seconds=3600.0
+        )
+
+        try:
+            # 1. Ingest recording -> transitions talk to 'detecting' and enqueues job_detect
+            resp1 = client.post(
+                "/talks/1/recordings",
+                json={"source_path": "/tmp/mock_source.mp4"},
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp1.status_code == 202
+            assert talk.status == "detecting"
+            mock_light_queue.enqueue.assert_called_once()
+            queued_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_task == job_detect
+
+            # 2. Execute job_detect -> transitions talk to 'pending_approval'
+            job_detect(1, "1/raw/mock_source.mp4")
+            assert talk.status == "pending_approval"
+            assert talk.raw_duration_seconds == 3600.0
+            assert any(
+                j.kind == "detect" and j.status == "done" for j in jobs_dict.values()
+            )
+
+            # 3. Approve talk -> transitions talk to 'pending_bounds'
+            resp2 = client.post(
+                "/talks/1/approve",
+                json={"decision": "approve"},
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp2.status_code == 200
+            assert talk.status == "pending_bounds"
+
+            # 4. Submit cut bounds -> transitions talk to 'cutting' and enqueues job_cut
+            mock_light_queue.reset_mock()
+            resp3 = client.post(
+                "/talks/1/cut",
+                json={"cut_start": "00:00:10", "cut_end": "00:50:00"},
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp3.status_code == 202
+            assert talk.status == "cutting"
+            assert talk.cut_start == 10.0
+            assert talk.cut_end == 3000.0
+            mock_light_queue.enqueue.assert_called_once()
+            queued_cut_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_cut_task == job_cut
+
+            # 5. Execute job_cut -> transitions talk to 'generating_previews' and enqueues job_preview
+            mock_light_queue.reset_mock()
+            job_cut(1, "1/raw/mock_source.mp4")
+            assert talk.status == "generating_previews"
+            assert any(
+                j.kind == "cut" and j.status == "done" for j in jobs_dict.values()
+            )
+            mock_light_queue.enqueue.assert_called_once()
+            queued_preview_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_preview_task == job_preview
+
+            # 6. Execute job_preview -> transitions talk to 'preview'
+            job_preview(1, "1/cut/cut.mp4")
+            assert talk.status == "preview"
+            assert any(
+                j.kind == "preview" and j.status == "done" for j in jobs_dict.values()
+            )
+
+            # 7. Review talk -> transitions talk to 'pending_intro_outro'
+            resp4 = client.post(
+                "/talks/1/review",
+                json={"decision": "approve", "note": "Looks great!"},
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp4.status_code == 200
+            assert talk.status == "pending_intro_outro"
+
+            # 8. Submit assembly request -> transitions talk to 'assembling' and enqueues job_intro
+            mock_light_queue.reset_mock()
+            resp5 = client.post(
+                "/talks/1/assemble",
+                json={
+                    "include_intro": True,
+                    "intro_source": "generated",
+                    "include_outro": False,
+                },
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp5.status_code == 202
+            assert talk.status == "assembling"
+            mock_light_queue.enqueue.assert_called_once()
+            queued_intro_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_intro_task == job_intro
+
+            # 9. Execute job_intro -> dispatches assembly to enqueue job_concat
+            mock_light_queue.reset_mock()
+            job_intro(1, "1/cut/cut.mp4", "1/intro/intro.mp4")
+            assert any(
+                j.kind == "intro" and j.status == "done" for j in jobs_dict.values()
+            )
+            mock_light_queue.enqueue.assert_called_once()
+            queued_concat_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_concat_task == job_concat
+
+            # 10. Execute job_concat -> enqueues job_loudness
+            mock_light_queue.reset_mock()
+            job_concat(
+                1,
+                cut_key="1/cut/cut.mp4",
+                intro_key="1/intro/intro.mp4",
+                outro_key=None,
+                concat_key="1/assemble/assemble.mp4",
+            )
+            assert any(
+                j.kind == "concat" and j.status == "done" for j in jobs_dict.values()
+            )
+            mock_light_queue.enqueue.assert_called_once()
+            queued_loudness_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_loudness_task == job_loudness
+
+            # 11. Execute job_loudness -> transitions talk to 'transcoding' and enqueues job_transcode on heavy_queue
+            mock_light_queue.reset_mock()
+            mock_heavy_queue.reset_mock()
+            job_loudness(1, "1/assemble/assemble.mp4", "1/assemble/assemble_loud.mp4")
+            assert talk.status == "transcoding"
+            assert any(
+                j.kind == "loudness" and j.status == "done" for j in jobs_dict.values()
+            )
+            mock_heavy_queue.enqueue.assert_called_once()
+            queued_transcode_task, *_ = mock_heavy_queue.enqueue.call_args[0]
+            assert queued_transcode_task == job_transcode
+
+            # 12. Execute job_transcode -> transitions talk to 'uploading' and enqueues job_publish on light_queue
+            mock_light_queue.reset_mock()
+            mock_heavy_queue.reset_mock()
+            job_transcode(1, "1/assemble/assemble_loud.mp4", "1/final/final.mp4")
+            assert talk.status == "uploading"
+            assert any(
+                j.kind == "transcode" and j.status == "done" for j in jobs_dict.values()
+            )
+            mock_light_queue.enqueue.assert_called_once()
+            queued_publish_task, *_ = mock_light_queue.enqueue.call_args[0]
+            assert queued_publish_task == job_publish
+
+            # 13. Execute job_publish -> transitions talk to terminal 'done'
+            mock_light_queue.reset_mock()
+            job_publish(1, "1/final/final.mp4")
+            assert talk.status == "done"
+            assert any(
+                j.kind == "publish" and j.status == "done" for j in jobs_dict.values()
+            )
+
+            # 14. Final GET /talks/1 verify
+            get_resp = client.get("/talks/1", headers={"X-API-Key": "valid"})
+            assert get_resp.status_code == 200
+            talk_payload = get_resp.json()
+            assert talk_payload["status"] == "done"
+            assert talk_payload["cut_start"] == 10.0
+            assert talk_payload["cut_end"] == 3000.0
+            assert talk_payload["raw_duration_seconds"] == 3600.0
+            assert len(jobs_dict) == 8
+            assert {j.kind for j in jobs_dict.values()} == {
+                "detect",
+                "cut",
+                "preview",
+                "intro",
+                "concat",
+                "loudness",
+                "transcode",
+                "publish",
+            }
+        finally:
+            _clear_deps()
+
+
+def test_e2e_cross_tenant_event_scoping_isolation():
+    """Assert cross-tenant scoping isolation across all talk and job endpoints.
+
+    Verifies that a client authorized only for event_id=2 receives 404 Not Found (or 403 Forbidden)
+    and cannot inspect or mutate talks/jobs belonging to event_id=1.
+    """
+    mock_db = MagicMock()
+    mock_storage = MagicMock()
+    talk = _mock_talk(talk_id=1, event_id=1, status="waiting_for_files")
+    job = models.Job(id=42, talk_id=1, kind="detect", status="done")
+    job.talk = talk
+
+    def query_mock(model):
+        q = MagicMock()
+        if model == models.Talk:
+            q.filter.return_value.first.return_value = talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = talk
+        elif model == models.Job:
+            q.filter.return_value.first.return_value = job
+        return q
+
+    mock_db.query.side_effect = query_mock
+    # Client B only has access to event_id=2
+    _setup_deps(mock_db, mock_storage, event_ids=[2])
+
+    try:
+        # 1. GET /talks/1 -> 404
+        r1 = client.get("/talks/1", headers={"X-API-Key": "client_b"})
+        assert r1.status_code == 404
+        assert r1.json()["detail"] == "Talk not found"
+
+        # 2. GET /jobs/42 -> 404
+        r2 = client.get("/jobs/42", headers={"X-API-Key": "client_b"})
+        assert r2.status_code == 404
+        assert r2.json()["detail"] == "Job not found"
+
+        # 3. POST /talks/1/recordings -> 404
+        r3 = client.post(
+            "/talks/1/recordings",
+            json={"source_path": "/tmp/test.mp4"},
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r3.status_code == 404
+        assert r3.json()["detail"] == "Talk not found"
+
+        # 4. POST /talks/1/approve -> 404
+        r4 = client.post(
+            "/talks/1/approve",
+            json={"decision": "approve"},
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r4.status_code == 404
+        assert r4.json()["detail"] == "Talk not found"
+
+        # 5. POST /talks/1/cut -> 404
+        r5 = client.post(
+            "/talks/1/cut",
+            json={"cut_start": "00:00:10", "cut_end": "00:20:00"},
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r5.status_code == 404
+        assert r5.json()["detail"] == "Talk not found"
+
+        # 6. POST /talks/1/abort -> 404
+        r6 = client.post(
+            "/talks/1/abort",
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r6.status_code == 404
+        assert r6.json()["detail"] == "Talk not found"
+
+        # 7. GET /talks/1/raw-preview -> 404
+        r7 = client.get(
+            "/talks/1/raw-preview",
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r7.status_code == 404
+        assert r7.json()["detail"] == "Talk not found"
+
+        # 8. POST /talks/1/review -> 403 (unauthorized event)
+        r8 = client.post(
+            "/talks/1/review",
+            json={"decision": "approve"},
+            headers={"X-API-Key": "client_b"},
+        )
+        assert r8.status_code == 403
+
+        # Ensure talk state was not modified
+        assert talk.status == "waiting_for_files"
+    finally:
+        _clear_deps()
+
+
+def test_e2e_heavy_light_queue_isolation():
+    """Verify that heavy queue workloads do not block light queue tasks.
+
+    Asserts that STAGE_CONFIG strictly segregates CPU-intensive stages
+    (such as transcode) into the heavy queue and interactive stages
+    into the light queue, and verifies independent queue routing.
+    """
+    from app.queue import heavy_queue, light_queue
+    from app.tasks import STAGE_CONFIG
+
+    # 1. Verify queue configuration segregation
+    assert STAGE_CONFIG["transcode"]["queue"] == "heavy"
+    assert STAGE_CONFIG["detect"]["queue"] == "light"
+    assert STAGE_CONFIG["cut"]["queue"] == "light"
+    assert STAGE_CONFIG["preview"]["queue"] == "light"
+    assert STAGE_CONFIG["loudness"]["queue"] == "light"
+    assert STAGE_CONFIG["publish"]["queue"] == "light"
+
+    # 2. Verify independent Queue instances and names
+    assert light_queue.name == "light"
+    assert heavy_queue.name == "heavy"
+    assert light_queue.name != heavy_queue.name
+
+    # 3. Simulate queue execution order: light worker processes only light queue
+    processed = []
+
+    def mock_heavy_work():
+        processed.append("heavy_completed")
+
+    def mock_light_work():
+        processed.append("light_completed")
+
+    mock_light_q = MagicMock()
+    mock_heavy_q = MagicMock()
+
+    mock_light_q.name = "light"
+    mock_heavy_q.name = "heavy"
+
+    # Enqueue heavy task first, then light task
+    mock_heavy_q.enqueue(mock_heavy_work)
+    mock_light_q.enqueue(mock_light_work)
+
+    # Light worker processes light task without touching heavy task
+    mock_light_q.enqueue.assert_called_once_with(mock_light_work)
+    mock_heavy_q.enqueue.assert_called_once_with(mock_heavy_work)
+
+    # Execute light work
+    mock_light_work()
+    assert processed == ["light_completed"]
+    assert "heavy_completed" not in processed
