@@ -6,12 +6,17 @@ Worker processes eagerly import this module at boot to avoid per-job import over
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import shutil
 import subprocess
 import tempfile
 import time
 import traceback
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -857,3 +862,93 @@ def job_publish(talk_id: int, final_key: str) -> None:
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
+
+
+class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prohibit automatic redirect following for webhook requests."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
+
+
+def job_deliver_webhook(
+    webhook_url: str,
+    webhook_secret: str,
+    payload: dict,
+) -> bool:
+    """Deliver signed webhook notification with exactly one retry on failure.
+
+    Calculates an HMAC-SHA256 signature over the canonically serialized JSON payload
+    and sends it via HTTP POST. If delivery fails on the first attempt, retries once
+    after a 1-second pause. If the second attempt also fails, abandons quietly.
+    """
+    if not webhook_url or not webhook_secret:
+        logger.warning(
+            "Webhook delivery aborted: missing webhook_url or webhook_secret"
+        )
+        return False
+
+    try:
+        payload_bytes = json.dumps(
+            payload, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        signature = hmac.new(
+            webhook_secret.encode("utf-8"), payload_bytes, hashlib.sha256
+        ).hexdigest()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to prepare webhook payload/signature: %s", exc)
+        return False
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-VEditor-Signature": f"sha256={signature}",
+        "User-Agent": "VEditor-Webhook/1.0",
+    }
+
+    for attempt in (1, 2):
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload_bytes,
+                headers=headers,
+                method="POST",
+            )
+            with _webhook_opener.open(req, timeout=10) as resp:
+                resp_status = getattr(resp, "status", None)
+                if resp_status is None:
+                    resp_status = getattr(resp, "code", None)
+                if resp_status is None and hasattr(resp, "getcode"):
+                    resp_status = resp.getcode()
+
+                if resp_status is not None and 200 <= resp_status < 300:
+                    logger.info(
+                        "Webhook delivered successfully to %s on attempt %d",
+                        webhook_url,
+                        attempt,
+                    )
+                    return True
+                logger.warning(
+                    "Webhook delivery to %s returned HTTP %s on attempt %d",
+                    webhook_url,
+                    resp_status,
+                    attempt,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Webhook delivery to %s failed on attempt %d: %s",
+                webhook_url,
+                attempt,
+                exc,
+            )
+
+        if attempt == 1:
+            time.sleep(1)
+
+    logger.info(
+        "Webhook delivery to %s failed after 2 attempts. Abandoning quietly.",
+        webhook_url,
+    )
+    return False

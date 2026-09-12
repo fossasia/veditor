@@ -122,6 +122,10 @@ class Client(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     hashed_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     event_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    webhook_secret: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, default=None
+    )
 
 
 class Talk(Base):

@@ -40,6 +40,7 @@ from app.tasks import (
     STAGE_CONFIG,
     dispatch_assembly,
     job_cut,
+    job_deliver_webhook,
     job_detect,
     job_ingest,
 )
@@ -284,6 +285,50 @@ def approve_talk(
 
     if decision == "reject":
         cleanup_intermediates(storage, talk_id)
+    else:
+        try:
+            candidate_clients: list[models.Client] = []
+            try:
+                candidate_clients = (
+                    db.query(models.Client)
+                    .filter(
+                        models.Client.event_ids.any(talk.event_id),
+                        models.Client.webhook_url.is_not(None),
+                    )
+                    .all()
+                )
+            except Exception:  # noqa: BLE001
+                candidate_clients = []
+
+            if (
+                not candidate_clients
+                and client
+                and getattr(client, "webhook_url", None)
+            ):
+                candidate_clients = [client]
+
+            for c in candidate_clients:
+                webhook_url = getattr(c, "webhook_url", None)
+                webhook_secret = getattr(c, "webhook_secret", None)
+                if webhook_url and webhook_secret:
+                    payload_data = {
+                        "talk_id": talk.id,
+                        "event_id": talk.event_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                    light_queue.enqueue(
+                        job_deliver_webhook,
+                        webhook_url,
+                        webhook_secret,
+                        payload_data,
+                        job_timeout=30,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to dispatch webhook notification for talk %d: %s",
+                talk.id,
+                exc,
+            )
 
     return schemas.TalkRead.model_validate(talk)
 

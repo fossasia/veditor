@@ -2,6 +2,7 @@ import re
 from datetime import UTC, datetime, time
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -47,7 +48,35 @@ class ClientCreate(ClientBase):
 class ClientRead(ClientBase):
     id: int
     hashed_key: str
+    webhook_url: str | None = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class WebhookRegisterRequest(BaseModel):
+    url: str
+    secret: str | None = Field(default=None, max_length=255)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        v = v.strip()
+        parsed = urlsplit(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "Webhook URL must be a valid HTTP or HTTPS URL with a valid host"
+            )
+        return v
+
+
+class WebhookRegisterResponse(BaseModel):
+    status: str = "registered"
+    url: str
+    secret: str
+
+
+class WebhookInfoResponse(BaseModel):
+    url: str | None = None
+    has_secret: bool = False
 
 
 class TalkBase(BaseModel):
