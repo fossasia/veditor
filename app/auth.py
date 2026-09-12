@@ -45,6 +45,18 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
+def lock_active_admins(session: Session) -> list[int]:
+    """Locks active administrator rows in ascending ID order and returns their IDs."""
+    rows = (
+        session.query(models.User.id)
+        .filter(models.User.role == "admin", models.User.is_active.is_(True))
+        .order_by(models.User.id.asc())
+        .with_for_update()
+        .all()
+    )
+    return [r[0] if isinstance(r, (tuple, list)) else getattr(r, "id", r) for r in rows]
+
+
 def get_client(
     api_key: Annotated[str | None, Security(api_key_header)],
     db: Annotated[Session, Depends(get_db)],
@@ -257,6 +269,21 @@ def require_role(min_role: Literal["user", "organizer", "admin"] | str):
         return user
 
     return _role_checker
+
+
+def require_admin(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> CurrentUser:
+    """
+    Dependency enforcing that the caller is an authenticated human administrator
+    (cookie or JWT session with user_id set), rejecting machine API key clients.
+    """
+    if not user.is_human_admin or user.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires a human administrator",
+        )
+    return user
 
 
 def check_event_access(

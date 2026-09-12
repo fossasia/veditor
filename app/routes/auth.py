@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -16,6 +15,7 @@ from app.security import (
     create_session_token,
     decode_session_token,
     hash_password,
+    is_valid_email,
     verify_password,
 )
 from app.ui.templating import templates
@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
-EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DUMMY_HASH = hash_password("veditor-timing-defense-sentinel")
 
 
@@ -128,7 +127,7 @@ def signup_submit(
     password_confirm: Annotated[str, Form()] = "",
 ):
     clean_email = email.strip().lower()
-    if len(clean_email) > 255 or not EMAIL_REGEX.match(clean_email):
+    if len(clean_email) > 255 or not is_valid_email(clean_email):
         return templates.TemplateResponse(
             request,
             "signup.html.jinja",

@@ -1,6 +1,8 @@
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
+from email.errors import HeaderParseError
+from email.headerregistry import Address
 from pathlib import Path
 
 import jwt
@@ -190,3 +192,20 @@ def decode_access_token(token: str) -> dict | None:
         return payload
     except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:
         return None
+
+
+def is_valid_email(email: str) -> bool:
+    """Validates an email address against RFC 5322 using the Python standard library."""
+    if not email or not isinstance(email, str) or "@" not in email:
+        return False
+    try:
+        clean = email.strip()
+        addr = Address(addr_spec=clean)
+        return bool(
+            addr.username
+            and addr.domain
+            and not addr.domain.startswith(".")
+            and not addr.domain.endswith(".")
+        )
+    except (HeaderParseError, ValueError, IndexError, TypeError) as _exc:
+        return False
