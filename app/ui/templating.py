@@ -8,8 +8,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import models
+from app.auth import CurrentUser
 from app.db import SessionLocal, get_db
-from app.security import decode_session_token
+from app.security import decode_session_token, decode_sso_token
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,26 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
             request.state.user = None
         return {"user": None}
 
+    # 1. Check if token is an SSO session token
+    sso_payload = decode_sso_token(token)
+    if sso_payload:
+        sso_user = CurrentUser(
+            user_id=None,
+            client_id=None,
+            email=None,
+            role=sso_payload["role"],
+            source="sso",
+            event_ids=[sso_payload["scope_id"]]
+            if sso_payload.get("scope_type") == "event"
+            else [],
+            scope_type=sso_payload.get("scope_type"),
+            scope_id=sso_payload.get("scope_id"),
+        )
+        if hasattr(request, "state"):
+            request.state.user = sso_user
+        return {"user": sso_user}
+
+    # 2. Check if token is a standard user session token
     payload = decode_session_token(token)
     if not payload or not isinstance(payload, dict):
         if hasattr(request, "state"):

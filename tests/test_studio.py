@@ -214,6 +214,75 @@ def test_talk_studio_page(client: TestClient, db_session):
     assert "Room 101" in response.text
 
 
+def test_talk_studio_human_session_user_access(client: TestClient, db_session):
+    from app.security import create_session_token
+
+    org = models.User(
+        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Human Session Talk",
+        room="Main Hall",
+        start=now,
+        end=now + timedelta(minutes=45),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # 1. Organizer owning event can access talk via session cookie
+    token = create_session_token(org.id, org.role)
+    client.cookies.set("veditor_session", token)
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+    assert "Human Session Talk" in res.text
+    assert "Main Hall" in res.text
+
+    # 2. Admin can access talk via session cookie even if created by someone else
+    admin = models.User(
+        email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="admin",
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
+
+    admin_token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", admin_token)
+    res_admin = client.get(f"/studio/talks/{talk.id}")
+    assert res_admin.status_code == 200
+
+    # 3. Another user who does not own the event gets 404
+    other_org = models.User(
+        email=f"other_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    db_session.add(other_org)
+    db_session.commit()
+    db_session.refresh(other_org)
+
+    other_token = create_session_token(other_org.id, other_org.role)
+    client.cookies.set("veditor_session", other_token)
+    res_other = client.get(f"/studio/talks/{talk.id}")
+    assert res_other.status_code == 404
+
+
 def test_talk_studio_not_found(client: TestClient, db_session):
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)

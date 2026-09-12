@@ -19,12 +19,18 @@ from fastapi import (
     status,
 )
 from rq.command import send_stop_job_command
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.auth import get_client, verify_event_access
+from app.auth import (
+    CurrentUser,
+    check_event_access,
+    check_talk_access,
+    get_client,
+    get_current_user,
+    require_role,
+)
 from app.config import settings
 from app.db import get_db
 from app.ingest import (
@@ -34,6 +40,7 @@ from app.ingest import (
     stage_recording,
 )
 from app.queue import heavy_queue, light_queue
+from app.security import create_sso_token
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
 from app.tasks import (
@@ -49,7 +56,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/talks",
     tags=["talks"],
-    dependencies=[Depends(get_client)],
 )
 
 
@@ -57,7 +63,7 @@ router = APIRouter(
 def create_or_update_talk(
     payload: schemas.TalkCreate,
     response: Response,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
 ):
     """
@@ -65,7 +71,7 @@ def create_or_update_talk(
     Idempotent on the natural key (event_id, title, start).
     Returns 201 Created on insert, 200 OK on update (preserving existing talk status).
     """
-    verify_event_access(payload.event_id, client)
+    check_event_access(payload.event_id, user, db)
 
     talk = (
         db.query(models.Talk)
@@ -123,7 +129,7 @@ def create_or_update_talk(
 @router.get("/{talk_id}", response_model=schemas.TalkWithJobsRead)
 def get_talk(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -132,10 +138,11 @@ def get_talk(
     Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_talk_access(talk, user, db)
 
     candidate_keys = [
         f"{talk.id}/preview/{name}.mp4" for name in settings.preview_presets
@@ -153,15 +160,16 @@ def get_talk(
 @router.get("/{talk_id}/jobs", response_model=schemas.TalkJobsResponse)
 def get_talk_jobs(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """Returns the current talk status along with recent jobs and active progress."""
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_talk_access(talk, user, db)
     jobs = (
         db.query(models.Job)
         .filter(models.Job.talk_id == talk_id)
@@ -185,7 +193,7 @@ def get_talk_jobs(
 def ingest_recording(
     talk_id: int,
     payload: schemas.RecordingIngestRequest,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -197,10 +205,11 @@ def ingest_recording(
     Returns 507 if storage space is insufficient.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if talk.status != "waiting_for_files":
         raise HTTPException(
@@ -248,7 +257,7 @@ def ingest_recording(
 )
 def approve_talk(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     payload: schemas.ApproveRequest | None = None,
@@ -261,10 +270,11 @@ def approve_talk(
     Returns 409 if talk status is not 'pending_approval'.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if talk.status != "pending_approval":
         raise HTTPException(
@@ -310,7 +320,7 @@ RAW_PREVIEW_ALLOWED_STATES = frozenset(
 )
 def raw_preview(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -321,10 +331,11 @@ def raw_preview(
     Returns 404 if talk not found or no raw file exists.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if talk.status not in RAW_PREVIEW_ALLOWED_STATES:
         raise HTTPException(
@@ -349,7 +360,7 @@ def raw_preview(
 def submit_cut_bounds(
     talk_id: int,
     payload: schemas.CutBoundsRequest,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -360,10 +371,19 @@ def submit_cut_bounds(
     Returns 409 if not in pending_bounds. Returns 422 if bounds are invalid.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    if user.source == "sso":
+        check_talk_access(talk, user, db)
+    else:
+        if user.role not in ("organizer", "admin") and not user.is_machine:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operation requires minimum role 'organizer'",
+            )
+        check_event_access(talk.event_id, user, db)
 
     if talk.status != "pending_bounds":
         raise HTTPException(
@@ -423,7 +443,7 @@ def submit_cut_bounds(
 def configure_assembly(
     talk_id: int,
     payload: schemas.IntroOutroRequest,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -443,10 +463,11 @@ def configure_assembly(
         .with_for_update()
         .first()
     )
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if talk.status != "pending_intro_outro":
         raise HTTPException(
@@ -609,7 +630,7 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
 )
 def abort_talk(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -619,10 +640,11 @@ def abort_talk(
     Returns 404 if talk is not found or not authorized for caller's events.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     _cancel_talk_jobs(talk.id, storage)
 
@@ -651,7 +673,7 @@ def abort_talk(
 def update_talk(
     talk_id: int,
     payload: schemas.TalkUpdate,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
 ):
     """
@@ -659,10 +681,11 @@ def update_talk(
     Returns 404 if talk is not found or not in caller's event_ids.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if payload.title is not None:
         title = payload.title.strip()
@@ -703,7 +726,7 @@ def update_talk(
 @router.delete("/{talk_id}", status_code=status.HTTP_200_OK)
 def delete_talk(
     talk_id: int,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -712,10 +735,11 @@ def delete_talk(
     Returns 404 if talk is not found or not in caller's event_ids.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     _cancel_talk_jobs(talk_id, storage)
     db.query(models.Review).filter(models.Review.talk_id == talk_id).delete()
@@ -729,7 +753,7 @@ def delete_talk(
 @router.post("/bulk-delete", response_model=schemas.BulkDeleteResponse)
 def bulk_delete_talks(
     payload: schemas.BulkDeleteRequest,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -740,14 +764,34 @@ def bulk_delete_talks(
     if not payload.talk_ids:
         return {"status": "ok", "deleted_count": 0}
 
-    valid_talks = (
-        db.query(models.Talk)
-        .filter(
-            models.Talk.id.in_(payload.talk_ids),
-            models.Talk.event_id.in_(client.event_ids),
+    if user.is_machine:
+        valid_talks = (
+            db.query(models.Talk)
+            .filter(
+                models.Talk.id.in_(payload.talk_ids),
+                models.Talk.event_id.in_(user.event_ids),
+            )
+            .all()
         )
-        .all()
-    )
+    elif user.role == "admin":
+        valid_talks = (
+            db.query(models.Talk).filter(models.Talk.id.in_(payload.talk_ids)).all()
+        )
+    else:
+        org_event_ids = [
+            e.id
+            for e in db.query(models.Event.id)
+            .filter(models.Event.created_by_user_id == user.user_id)
+            .all()
+        ]
+        valid_talks = (
+            db.query(models.Talk)
+            .filter(
+                models.Talk.id.in_(payload.talk_ids),
+                models.Talk.event_id.in_(org_event_ids),
+            )
+            .all()
+        )
 
     deleted_count = 0
     for talk in valid_talks:
@@ -769,7 +813,7 @@ def bulk_delete_talks(
 async def upload_recording(
     talk_id: int,
     file: Annotated[UploadFile, File()],
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
@@ -783,10 +827,11 @@ async def upload_recording(
         .with_for_update()
         .first()
     )
-    if not talk or talk.event_id not in client.event_ids:
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
+    check_event_access(talk.event_id, user, db)
 
     if talk.status != "waiting_for_files":
         raise HTTPException(
@@ -889,7 +934,7 @@ MAX_SCHEDULE_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
 @router.post("/schedule/import", response_model=schemas.ScheduleImportResponse)
 async def import_schedule(
     request: Request,
-    client: Annotated[models.Client, Depends(get_client)],
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile | None, File()] = None,
 ):
@@ -1088,13 +1133,19 @@ async def import_schedule(
 
     target_event_id = None
     if isinstance(data, dict) and data.get("event_id"):
-        target_event_id = data.get("event_id")
+        try:
+            target_event_id = int(data.get("event_id"))
+        except ValueError, TypeError:
+            pass
     elif (
         talks_to_create
         and isinstance(talks_to_create[0], dict)
         and talks_to_create[0].get("event_id")
     ):
-        target_event_id = talks_to_create[0].get("event_id")
+        try:
+            target_event_id = int(talks_to_create[0].get("event_id"))
+        except ValueError, TypeError:
+            pass
 
     event = None
     is_new_event = False
@@ -1103,43 +1154,61 @@ async def import_schedule(
             db.query(models.Event).filter(models.Event.id == target_event_id).first()
         )
         if existing_event:
-            verify_event_access(target_event_id, client)
+            check_event_access(target_event_id, user, db)
             event = existing_event
         else:
-            event = models.Event(id=target_event_id, name=event_name)
+            created_by = user.user_id if not user.is_machine else None
+            event = models.Event(name=event_name, created_by_user_id=created_by)
             db.add(event)
             db.flush()
             is_new_event = True
-            try:
-                with db.begin_nested():
-                    db.execute(
-                        text(
-                            "SELECT setval(pg_get_serial_sequence('events', 'id'), (SELECT MAX(id) FROM events))"
-                        )
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed coordinating event sequence: %s", exc)
 
     if not event:
         # Check if caller already has an event with matching name
-        event = (
-            db.query(models.Event)
-            .filter(
-                models.Event.name == event_name,
-                models.Event.id.in_(client.event_ids),
+        if user.is_machine:
+            event = (
+                db.query(models.Event)
+                .filter(
+                    models.Event.name == event_name,
+                    models.Event.id.in_(user.event_ids),
+                )
+                .first()
             )
-            .first()
-        )
+        elif user.role == "admin":
+            event = (
+                db.query(models.Event).filter(models.Event.name == event_name).first()
+            )
+        else:
+            event = (
+                db.query(models.Event)
+                .filter(
+                    models.Event.name == event_name,
+                    models.Event.created_by_user_id == user.user_id,
+                )
+                .first()
+            )
 
     if not event:
-        event = models.Event(name=event_name)
+        created_by = user.user_id if not user.is_machine else None
+        event = models.Event(name=event_name, created_by_user_id=created_by)
         db.add(event)
         db.flush()
         is_new_event = True
 
-    # Ensure client has access to this newly created event
-    if is_new_event and event.id not in client.event_ids:
-        client.event_ids = list(set(client.event_ids + [event.id]))
+    # Ensure machine client has access to this newly created event
+    if is_new_event and user.is_machine:
+        if event.id not in user.event_ids:
+            user.event_ids.append(event.id)
+        if user.client_id:
+            client_record = (
+                db.query(models.Client)
+                .filter(models.Client.id == user.client_id)
+                .first()
+            )
+            if client_record and event.id not in (client_record.event_ids or []):
+                client_record.event_ids = list(
+                    set((client_record.event_ids or []) + [event.id])
+                )
 
     created_count = 0
     for v_talk in validated_talks:
@@ -1176,3 +1245,46 @@ async def import_schedule(
         "event_name": event.name,
         "imported_count": created_count,
     }
+
+
+@router.post(
+    "/{talk_id}/sso-token",
+    response_model=schemas.SSOTokenResponse,
+    status_code=status.HTTP_200_OK,
+)
+def create_talk_sso_token(
+    talk_id: int,
+    client: Annotated[models.Client, Depends(get_client)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Issues a short-lived, talk-scoped SSO token carrying role=speaker.
+    Requires caller to be authenticated via X-API-Key only.
+    """
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Talk not found",
+        )
+    if talk.event_id not in (client.event_ids or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Client is not authorized to mint an SSO token for this talk",
+        )
+
+    token = create_sso_token(
+        scope_type="talk",
+        scope_id=talk_id,
+        role="speaker",
+        expires_in_seconds=settings.sso_token_expire_seconds,
+    )
+    return schemas.SSOTokenResponse(
+        token=token,
+        token_type="bearer",
+        scope_type="talk",
+        scope_id=talk_id,
+        role="speaker",
+        expires_in_seconds=settings.sso_token_expire_seconds,
+        url=f"/studio/talks/{talk_id}?sso_token={token}",
+    )

@@ -1,0 +1,161 @@
+/* ── Events Page Styles (events.html) ─────────────────────────── */
+
+.event-create-card {
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-lg);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.event-create-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  margin-bottom: 6px;
+}
+
+.event-create-desc {
+  font-size: 0.82rem;
+  color: var(--v-text-muted);
+  margin-bottom: 16px;
+}
+
+.event-create-form {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.event-create-field {
+  flex: 1;
+  min-width: 260px;
+}
+
+.event-create-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--v-text-secondary);
+  margin-bottom: 6px;
+}
+
+.table-count-spaced {
+  margin-left: 8px;
+}
+
+.col-id {
+  width: 80px;
+  padding-left: 18px;
+}
+
+.col-actions-right {
+  text-align: right;
+  padding-right: 18px;
+}
+
+.row-actions-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-danger-ghost {
+  color: #ef4444;
+}
+
+.btn-danger-ghost:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+.event-title-link {
+  color: var(--v-text-primary);
+  text-decoration: none;
+}
+
+.event-title-link:hover {
+  color: var(--v-primary);
+  text-decoration: underline;
+}
+
+.text-muted {
+  color: var(--v-text-muted);
+}
+
+.events-empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--v-text-muted);
+}
+
+.events-empty-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--v-text-primary);
+  margin-bottom: 6px;
+}
+
+.events-empty-desc {
+  font-size: 0.82rem;
+}
+
+/* ── Edit Modal ───────────────────────────────────────────────── */
+.events-modal-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+
+.events-modal-backdrop.active {
+  display: flex;
+}
+
+.events-modal-card {
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-lg);
+  width: 90%;
+  max-width: 440px;
+  padding: 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.events-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.events-modal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  margin: 0;
+}
+
+.events-modal-field {
+  margin-bottom: 16px;
+}
+
+.events-modal-desc {
+  font-size: 0.85rem;
+  color: var(--v-text-secondary);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.events-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

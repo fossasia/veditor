@@ -2,6 +2,7 @@ import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import jwt
 from argon2 import PasswordHasher
@@ -186,6 +187,73 @@ def decode_access_token(token: str) -> dict | None:
             or not isinstance(payload.get("role"), str)
             or not isinstance(payload.get("sub"), str)
         ):
+            return None
+        return payload
+    except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:
+        return None
+
+
+def create_sso_token(
+    scope_type: Literal["event", "talk"],
+    scope_id: int,
+    role: str,
+    expires_in_seconds: int | None = None,
+) -> str:
+    """
+    Generates a short-lived signed SSO token scoped to an event or talk,
+    with no user_id or personal identity claims.
+    """
+    if scope_type not in ("event", "talk"):
+        raise ValueError("scope_type must be 'event' or 'talk'")
+    if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
+        raise ValueError("scope_id must be a positive integer")
+    if role not in ("organizer", "speaker"):
+        raise ValueError("role must be 'organizer' or 'speaker'")
+    if expires_in_seconds is not None and (
+        not isinstance(expires_in_seconds, int)
+        or isinstance(expires_in_seconds, bool)
+        or expires_in_seconds <= 0
+    ):
+        raise ValueError("expires_in_seconds must be a positive integer")
+
+    now = datetime.now(UTC)
+    expiry = (
+        expires_in_seconds
+        if expires_in_seconds is not None
+        else settings.sso_token_expire_seconds
+    )
+    payload = {
+        "scope_type": scope_type,
+        "scope_id": scope_id,
+        "role": role,
+        "type": "sso",
+        "iat": now,
+        "exp": now + timedelta(seconds=expiry),
+    }
+    return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
+
+
+def decode_sso_token(token: str) -> dict | None:
+    """
+    Decodes and validates an SSO token.
+    Returns the decoded payload dict if valid, or None if expired, tampered,
+    malformed, containing user_id, or missing required claims.
+    """
+    if not token or not isinstance(token, str):
+        return None
+    try:
+        payload = jwt.decode(
+            token, get_session_secret(), algorithms=list(ALLOWED_JWT_ALGORITHMS)
+        )
+        if payload.get("type") != "sso":
+            return None
+        if "user_id" in payload or "sub" in payload or "email" in payload:
+            return None
+        if payload.get("scope_type") not in ("event", "talk"):
+            return None
+        if not isinstance(payload.get("scope_id"), int):
+            return None
+        if payload.get("role") not in ("organizer", "speaker"):
             return None
         return payload
     except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:

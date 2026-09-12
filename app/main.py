@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.queue import redis_conn
-from app.routes import auth, jobs, ops, reviews, studio, talks
+from app.routes import auth, events, jobs, ops, reviews, studio, talks
 
 app = FastAPI(title="VEditor API")
 
@@ -13,6 +13,7 @@ _STATIC_DIR = Path(__file__).parent / "ui" / "static"
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 app.include_router(auth.router)
+app.include_router(events.router)
 app.include_router(ops.router)
 app.include_router(talks.router)
 app.include_router(reviews.router)

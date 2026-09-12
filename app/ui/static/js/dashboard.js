@@ -81,9 +81,13 @@ function renderActiveJobCell(cell, statusText, pct, remainingStr) {
 
 async function pollTalk(talkId) {
   try {
+    const isSessionLoggedIn = Boolean(
+      document.querySelector('.user-email') ||
+      document.getElementById('logout-btn')
+    );
     const key = (window.getApiKey && window.getApiKey()) || '';
-    if (!key) return;
-    const headers = { 'X-API-Key': key };
+    if (!key && !isSessionLoggedIn) return;
+    const headers = key ? { 'X-API-Key': key } : {};
     const cell = document.querySelector(`.status-cell[data-talk-id="${talkId}"]`);
     const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
@@ -91,7 +95,7 @@ async function pollTalk(talkId) {
     let talkStatus = row ? row.dataset.status : '';
     let jobs = [];
 
-    const r = await (window.authFetch || fetch)(`/studio/talks/${talkId}/jobs`, { headers, _isPolling: true });
+    const r = await (window.authFetch || fetch)(`/talks/${talkId}/jobs`, { headers, _isPolling: true });
     if (!r.ok) return;
     const data = await r.json();
     talkStatus = data.status || talkStatus;
@@ -293,7 +297,11 @@ window.submitScheduleImport = async function() {
 
     const data = await res.json();
     alert(`Successfully imported ${data.imported_count} session(s) into "${data.event_name}"!`);
-    location.reload();
+    if (data && data.event_id) {
+      window.location.href = `/studio?event_id=${data.event_id}`;
+    } else {
+      location.reload();
+    }
   } catch (err) {
     alert(`Import failed: ${err.message}`);
   } finally {
@@ -302,15 +310,30 @@ window.submitScheduleImport = async function() {
 };
 
 window.submitQuickTalk = async function() {
-  const eventName = (document.getElementById('quick-event-name') || {}).value || 'General Conference';
-  const title = (document.getElementById('quick-talk-title') || {}).value || '';
+  const eventElem = document.getElementById('quick-event-name');
+  let eventName = 'General Conference';
+  let eventId = null;
+  if (eventElem) {
+    eventName = eventElem.value || 'General Conference';
+    if (eventElem.tagName === 'SELECT') {
+      const opt = eventElem.options[eventElem.selectedIndex];
+      if (opt && opt.dataset && opt.dataset.eventId) {
+        eventId = parseInt(opt.dataset.eventId, 10);
+      }
+    }
+  }
+  const titleInput = document.getElementById('quick-talk-title');
+  const title = (titleInput ? titleInput.value : '').trim();
   const room = (document.getElementById('quick-talk-room') || {}).value || 'Auditorium A';
   const startVal = (document.getElementById('quick-talk-start') || {}).value || '';
   const endVal = (document.getElementById('quick-talk-end') || {}).value || '';
   const btn = document.getElementById('btn-submit-quick-talk');
   const orig = btn ? btn.innerHTML : '';
 
-  if (!title.trim()) {
+  if (!title) {
+    if (titleInput) {
+      titleInput.focus();
+    }
     alert('Please enter a talk title.');
     return;
   }
@@ -329,6 +352,10 @@ window.submitQuickTalk = async function() {
       room,
     };
 
+    if (eventId) {
+      payload.event_id = eventId;
+    }
+
     if (startVal) {
       payload.start = new Date(startVal).toISOString();
     }
@@ -339,15 +366,30 @@ window.submitQuickTalk = async function() {
     const res = await (window.authFetch || fetch)('/talks/schedule/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Server returned ${res.status}`);
+      const errData = await res.json().catch(() => ({}));
+      let msg = errData.detail || `Server returned ${res.status}`;
+      if (Array.isArray(msg)) {
+        msg = msg.map((e) => (e && e.msg ? e.msg : JSON.stringify(e))).join(', ');
+      } else if (typeof msg === 'object' && msg !== null) {
+        msg = JSON.stringify(msg);
+      }
+      throw new Error(msg);
     }
 
-    location.reload();
+    const data = await res.json().catch(() => ({}));
+    const targetEventId = (data && data.event_id) ? data.event_id : eventId;
+    const targetUrl = targetEventId ? `/studio?event_id=${targetEventId}` : '/studio';
+
+    if (window.location.pathname + window.location.search === targetUrl) {
+      window.location.reload();
+    } else {
+      window.location.href = targetUrl;
+    }
   } catch (err) {
     alert(`Failed to create talk: ${err.message}`);
     if (btn) { btn.disabled = false; btn.innerHTML = orig; }
@@ -488,6 +530,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnSubmitQuickTalk = document.getElementById('btn-submit-quick-talk');
   if (btnSubmitQuickTalk) btnSubmitQuickTalk.addEventListener('click', window.submitQuickTalk);
+
+  ['quick-talk-title', 'quick-talk-room'].forEach((id) => {
+    const input = document.getElementById(id);
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          window.submitQuickTalk();
+        }
+      });
+    }
+  });
 
   const selectAll = document.getElementById('select-all-talks');
   if (selectAll) selectAll.addEventListener('change', () => window.toggleSelectAllTalks(selectAll));

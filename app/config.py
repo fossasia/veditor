@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     session_token_expire_hours: int = 168
     access_token_expire_seconds: int = 3600
+    sso_token_expire_seconds: int = 300
 
     @field_validator("jwt_algorithm", mode="after")
     @classmethod
@@ -73,7 +74,10 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "session_token_expire_hours", "access_token_expire_seconds", mode="after"
+        "session_token_expire_hours",
+        "access_token_expire_seconds",
+        "sso_token_expire_seconds",
+        mode="after",
     )
     @classmethod
     def validate_token_expirations(cls, value: int) -> int:

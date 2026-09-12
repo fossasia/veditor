@@ -8,8 +8,10 @@ from app.config import settings
 from app.security import (
     create_access_token,
     create_session_token,
+    create_sso_token,
     decode_access_token,
     decode_session_token,
+    decode_sso_token,
     get_session_secret,
     hash_password,
     verify_password,
@@ -324,3 +326,165 @@ def test_decode_rejects_unallowed_algorithm():
     )
     assert decode_session_token(fake_token) is None
     assert decode_access_token(fake_token) is None
+    assert decode_sso_token(fake_token) is None
+
+
+def test_create_sso_token_event():
+    token = create_sso_token(scope_type="event", scope_id=10, role="organizer")
+    assert isinstance(token, str)
+
+    payload = decode_sso_token(token)
+    assert payload is not None
+    assert payload["type"] == "sso"
+    assert payload["scope_type"] == "event"
+    assert payload["scope_id"] == 10
+    assert payload["role"] == "organizer"
+    assert "exp" in payload
+    assert "iat" in payload
+    assert "user_id" not in payload
+    assert "sub" not in payload
+    assert "email" not in payload
+
+
+def test_create_sso_token_talk():
+    token = create_sso_token(scope_type="talk", scope_id=42, role="speaker")
+    assert isinstance(token, str)
+
+    payload = decode_sso_token(token)
+    assert payload is not None
+    assert payload["type"] == "sso"
+    assert payload["scope_type"] == "talk"
+    assert payload["scope_id"] == 42
+    assert payload["role"] == "speaker"
+    assert "user_id" not in payload
+    assert "sub" not in payload
+
+
+def test_create_sso_token_invalid_inputs():
+    with pytest.raises(ValueError, match="scope_type must be 'event' or 'talk'"):
+        create_sso_token(scope_type="invalid", scope_id=1, role="organizer")
+
+    with pytest.raises(ValueError, match="scope_id must be a positive integer"):
+        create_sso_token(scope_type="event", scope_id=0, role="organizer")
+
+    with pytest.raises(ValueError, match="scope_id must be a positive integer"):
+        create_sso_token(scope_type="event", scope_id=-5, role="organizer")
+
+    with pytest.raises(ValueError, match="role must be 'organizer' or 'speaker'"):
+        create_sso_token(scope_type="event", scope_id=1, role="admin")
+
+    with pytest.raises(
+        ValueError, match="expires_in_seconds must be a positive integer"
+    ):
+        create_sso_token(
+            scope_type="event", scope_id=1, role="organizer", expires_in_seconds=0
+        )
+
+
+def test_decode_sso_token_expired():
+    from datetime import UTC, datetime, timedelta
+
+    secret = get_session_secret()
+    now = datetime.now(UTC)
+    expired_tok = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": 1,
+            "role": "organizer",
+            "iat": now - timedelta(seconds=600),
+            "exp": now - timedelta(seconds=10),
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(expired_tok) is None
+
+
+def test_decode_sso_token_tampered():
+    token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    tampered = token[:-5] + "xxxxx"
+    assert decode_sso_token(tampered) is None
+
+
+def test_decode_sso_token_rejects_user_id():
+    secret = get_session_secret()
+    # Craft a token that includes a user_id or sub claim
+    bad_token = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": 1,
+            "role": "organizer",
+            "user_id": 99,
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_token) is None
+
+    bad_token_sub = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": 1,
+            "role": "organizer",
+            "sub": "99",
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_token_sub) is None
+
+
+def test_decode_sso_token_wrong_type():
+    session_tok = create_session_token(user_id=1, role="admin")
+    assert decode_sso_token(session_tok) is None
+
+    access_tok = create_access_token(user_id=1, email="a@b.c", role="admin")
+    assert decode_sso_token(access_tok) is None
+
+
+def test_decode_sso_token_malformed_claims():
+    secret = get_session_secret()
+    # Non-int scope_id
+    bad_tok = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": "not-int",
+            "role": "organizer",
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_tok) is None
+
+    # Invalid scope_type
+    bad_tok2 = jwt.encode(
+        {"type": "sso", "scope_type": "invalid", "scope_id": 1, "role": "organizer"},
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_tok2) is None
+
+    # Invalid role
+    bad_tok3 = jwt.encode(
+        {"type": "sso", "scope_type": "event", "scope_id": 1, "role": "superadmin"},
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_tok3) is None
+
+
+def test_settings_sso_token_expire_seconds_validation():
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="token expiration values must be positive"):
+        Settings(sso_token_expire_seconds=0)
+
+    with pytest.raises(ValueError, match="token expiration values must be positive"):
+        Settings(sso_token_expire_seconds=-10)
+
+    s = Settings(sso_token_expire_seconds=600)
+    assert s.sso_token_expire_seconds == 600

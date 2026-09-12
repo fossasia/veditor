@@ -27,6 +27,17 @@
 
     <nav class="sidebar-nav">
       <span class="nav-label">Workspace</span>
+      {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
+      <a href="/studio/events" class="nav-item {% if '/events' in request.url.path %}active{% endif %}" id="nav-events-link">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        Events
+      </a>
+      {% endif %}
       <a href="/studio" class="nav-item {% if request.url.path == '/studio' and not request.query_params.get('status_filter') %}active{% endif %}">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <rect x="3" y="3" width="7" height="7"/>
@@ -88,7 +99,11 @@
         <div class="topbar-control-group">
           <!-- Dynamic Authentication State -->
           {% if user %}
-            <span class="user-email">{{ user.email }}</span>
+            {% if user.is_sso %}
+              <span class="user-email">SSO ({{ user.role | capitalize }})</span>
+            {% elif user.email %}
+              <span class="user-email">{{ user.email }}</span>
+            {% endif %}
             <span class="badge badge-role badge-{{ user.role }}">{{ user.role | capitalize }}</span>
             <form method="post" action="/logout" class="logout-form">
               <button type="submit" class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>
