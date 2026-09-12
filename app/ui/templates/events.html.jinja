@@ -1,0 +1,158 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Events — VEditor{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/events.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Events</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+
+  {% if error %}
+    <div class="alert alert-danger" role="alert">
+      <span>{{ error }}</span>
+    </div>
+  {% endif %}
+
+  <!-- Event Creation Form Card -->
+  <div class="event-create-card">
+    <h2 class="event-create-title">Create Event</h2>
+    <p class="event-create-desc">Add a new event workspace to manage talks and video pipelines.</p>
+    <form method="post" action="/studio/events" class="event-create-form">
+      <div class="event-create-field">
+        <label for="event-name" class="event-create-label">Event Name</label>
+        <input
+          type="text"
+          id="event-name"
+          name="name"
+          class="input-field"
+          placeholder="e.g. FOSSASIA Summit 2026"
+          required
+        >
+      </div>
+      <button type="submit" class="btn btn-primary" id="btn-create-event">
+        Create Event
+      </button>
+    </form>
+  </div>
+
+  <!-- Events List Table -->
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span class="table-title">Events</span>
+        <span class="table-count table-count-spaced">{{ events | length }} event{% if events | length != 1 %}s{% endif %}</span>
+      </div>
+    </div>
+
+    {% if events %}
+    <table>
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Event Name</th>
+          <th>Created By / Owner</th>
+          <th class="col-actions-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td class="td-mono col-id">#{{ event.id }}</td>
+          <td class="td-title">
+            <a href="/studio?event_id={{ event.id }}" class="event-title-link">
+              <strong>{{ event.name }}</strong>
+            </a>
+          </td>
+          <td>
+            {% if event.created_by_user %}
+              {{ event.created_by_user.email }}
+            {% elif event.created_by_user_id %}
+              User #{{ event.created_by_user_id }}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="col-actions-right">
+            <div class="row-actions-group">
+              <a href="/studio?event_id={{ event.id }}" class="btn btn-ghost btn-sm" title="Open Event">
+                View Talks
+              </a>
+              <button type="button" class="btn btn-ghost btn-sm btn-edit-event" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Edit Event Name">
+                Edit
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm btn-delete-event btn-danger-ghost" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Delete Event">
+                Delete
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="events-empty-state">
+      <p class="events-empty-title">No events found</p>
+      <p class="events-empty-desc">No events found. Create your first event above.</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── MODAL: Edit Event ─────────────────────────────────────────── -->
+<div id="modal-edit-event" class="events-modal-backdrop">
+  <div class="events-modal-card">
+    <div class="events-modal-header">
+      <h3 class="events-modal-title">Edit Event Name</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal">✕</button>
+    </div>
+
+    <form id="edit-event-form" method="post" action="">
+      <div class="events-modal-field">
+        <label for="edit-event-name" class="event-create-label">Event Name</label>
+        <input type="text" id="edit-event-name" name="name" class="input-field" required>
+      </div>
+
+      <div class="events-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm" id="btn-save-event">
+          Save Changes
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── MODAL: Delete Event ───────────────────────────────────────── -->
+<div id="modal-delete-event" class="events-modal-backdrop">
+  <div class="events-modal-card">
+    <div class="events-modal-header">
+      <h3 class="events-modal-title">Delete Event</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal">✕</button>
+    </div>
+
+    <form id="delete-event-form" method="post" action="">
+      <p class="events-modal-desc">
+        Are you sure you want to delete event <strong id="delete-event-name-display"></strong> and all associated talks? This action cannot be undone.
+      </p>
+
+      <div class="events-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal">Cancel</button>
+        <button type="submit" class="btn btn-danger btn-sm" id="btn-confirm-delete-event">
+          Delete Event
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/events.js"></script>
+{% endblock %}

@@ -17,12 +17,14 @@ def _record_review_and_advance(
     payload: schemas.ReviewRequest,
     target_state: str,
     db: Session,
+    user_id: int | None = None,
 ) -> schemas.ReviewResponse:
     try:
         review = models.Review(
             talk_id=talk.id,
             decision=payload.decision.value,
             note=payload.note,
+            user_id=user_id,
         )
         db.add(review)
         advance(talk, target_state)
@@ -43,8 +45,11 @@ def handle_approve(
     payload: schemas.ReviewRequest,
     db: Session,
     storage: StorageBackend | None = None,
+    user_id: int | None = None,
 ) -> schemas.ReviewResponse:
-    return _record_review_and_advance(talk, payload, "pending_intro_outro", db)
+    return _record_review_and_advance(
+        talk, payload, "pending_intro_outro", db, user_id=user_id
+    )
 
 
 def handle_needs_work(
@@ -52,8 +57,11 @@ def handle_needs_work(
     payload: schemas.ReviewRequest,
     db: Session,
     storage: StorageBackend | None = None,
+    user_id: int | None = None,
 ) -> schemas.ReviewResponse:
-    return _record_review_and_advance(talk, payload, "pending_bounds", db)
+    return _record_review_and_advance(
+        talk, payload, "pending_bounds", db, user_id=user_id
+    )
 
 
 def handle_reject(
@@ -61,10 +69,13 @@ def handle_reject(
     payload: schemas.ReviewRequest,
     db: Session,
     storage: StorageBackend | None = None,
+    user_id: int | None = None,
 ) -> schemas.ReviewResponse:
     talk.cut_start = None
     talk.cut_end = None
-    response = _record_review_and_advance(talk, payload, "rejected", db)
+    response = _record_review_and_advance(
+        talk, payload, "rejected", db, user_id=user_id
+    )
     if storage is not None:
         cleanup_intermediates(storage, talk.id)
     return response

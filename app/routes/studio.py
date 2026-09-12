@@ -1,21 +1,27 @@
+import logging
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import (
     APIRouter,
     Depends,
+    Form,
     HTTPException,
     Request,
     status,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
 from app.auth import hash_api_key
 from app.db import get_db
+from app.routes.auth import _get_authenticated_user_from_cookie
+from app.routes.talks import _cancel_talk_jobs
 from app.storage import StorageBackend, get_storage_backend
 from app.ui.templating import templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/studio", tags=["studio"])
 
@@ -55,6 +61,76 @@ def get_optional_ui_client(
     return (
         db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
     )
+
+
+def _authorize_studio_talk(
+    talk_id: int,
+    request: Request,
+    db: Session,
+    not_found_detail: str = "Talk not found",
+) -> models.Talk:
+    """
+    Authorizes access to a talk in studio endpoints.
+    Supports:
+    1. Authenticated human session users (veditor_session cookie):
+       - admin: access to any talk
+       - organizer/user: access to talks in events created by the user
+    2. API Key machine clients (X-API-Key header or veditor_api_key cookie):
+       - access if talk.event_id in client.event_ids
+    Raises 401 if unauthenticated, 404 if talk does not exist or caller is unauthorized.
+    """
+    user = _get_authenticated_user_from_cookie(request, db)
+    if user:
+        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        if not talk:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
+            )
+        if user.role == "admin":
+            return talk
+        event = db.query(models.Event).filter(models.Event.id == talk.event_id).first()
+        if event and event.created_by_user_id == user.id:
+            return talk
+        api_key = request.headers.get("X-API-Key") or request.cookies.get(
+            "veditor_api_key"
+        )
+        if api_key:
+            hashed_key = hash_api_key(api_key)
+            client = (
+                db.query(models.Client)
+                .filter(models.Client.hashed_key == hashed_key)
+                .first()
+            )
+            if client and talk.event_id in client.event_ids:
+                return talk
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=not_found_detail,
+        )
+
+    api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
+        )
+    hashed_key = hash_api_key(api_key)
+    client = (
+        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    )
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+        )
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or talk.event_id not in client.event_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=not_found_detail,
+        )
+    return talk
 
 
 ALL_STATUSES = [
@@ -144,14 +220,53 @@ def dashboard(
     status_filter: str | None = None,
     q: str | None = None,
 ):
-    query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
-    if client is not None:
-        query = query.filter(models.Talk.event_id.in_(client.event_ids))
-    if event_id is not None:
-        if client is not None and event_id not in client.event_ids:
-            query = query.filter(models.Talk.id == -1)
+    user = _get_authenticated_user_from_cookie(request, db)
+    if user:
+        if user.role == "admin":
+            user_events = db.query(models.Event).order_by(models.Event.name.asc()).all()
         else:
+            user_events = (
+                db.query(models.Event)
+                .filter(models.Event.created_by_user_id == user.id)
+                .order_by(models.Event.name.asc())
+                .all()
+            )
+    elif client is not None:
+        user_events = (
+            db.query(models.Event)
+            .filter(models.Event.id.in_(client.event_ids))
+            .order_by(models.Event.name.asc())
+            .all()
+        )
+    else:
+        user_events = []
+
+    query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
+    if user:
+        if user.role == "organizer":
+            org_event_ids = [e.id for e in user_events]
+            query = query.filter(models.Talk.event_id.in_(org_event_ids))
+            if event_id is not None:
+                if event_id not in org_event_ids:
+                    query = query.filter(models.Talk.id == -1)
+                else:
+                    query = query.filter(models.Talk.event_id == event_id)
+        elif user.role == "admin":
+            if event_id is not None:
+                query = query.filter(models.Talk.event_id == event_id)
+        else:
+            query = query.filter(models.Talk.id == -1)
+    elif client is not None:
+        query = query.filter(models.Talk.event_id.in_(client.event_ids))
+        if event_id is not None:
+            if event_id not in client.event_ids:
+                query = query.filter(models.Talk.id == -1)
+            else:
+                query = query.filter(models.Talk.event_id == event_id)
+    else:
+        if event_id is not None:
             query = query.filter(models.Talk.event_id == event_id)
+
     if status_filter:
         query = query.filter(models.Talk.status == status_filter)
 
@@ -160,7 +275,19 @@ def dashboard(
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
 
-    if client is not None:
+    if user:
+        if user.role == "organizer":
+            org_event_ids = [e.id for e in user_events]
+            all_talks = (
+                db.query(models.Talk)
+                .filter(models.Talk.event_id.in_(org_event_ids))
+                .all()
+            )
+        elif user.role == "admin":
+            all_talks = db.query(models.Talk).all()
+        else:
+            all_talks = []
+    elif client is not None:
         all_talks = (
             db.query(models.Talk)
             .filter(models.Talk.event_id.in_(client.event_ids))
@@ -197,6 +324,7 @@ def dashboard(
             "q": q or "",
             "status_filter": status_filter or "",
             "event_id": event_id,
+            "user_events": user_events,
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -209,15 +337,13 @@ ALLOWED_MEDIA_CATEGORIES = frozenset(
 
 @router.get("/media/{talk_id}/{filename}")
 def get_talk_media_default(
+    request: Request,
     talk_id: int,
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
-        raise HTTPException(status_code=404, detail="Media not found")
+    _authorize_studio_talk(talk_id, request, db, not_found_detail="Media not found")
 
     safe_filename = Path(filename).name
     candidate_keys = [
@@ -241,20 +367,18 @@ def get_talk_media_default(
 
 @router.get("/media/{talk_id}/{category}/{filename}")
 def get_talk_media_categorized(
+    request: Request,
     talk_id: int,
     category: str,
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
     safe_category = Path(category).name
     if safe_category not in ALLOWED_MEDIA_CATEGORIES:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
-        raise HTTPException(status_code=404, detail="Media not found")
+    _authorize_studio_talk(talk_id, request, db, not_found_detail="Media not found")
 
     safe_filename = Path(filename).name
     key = f"{talk_id}/{safe_category}/{safe_filename}"
@@ -274,11 +398,10 @@ def studio(
     talk_id: int,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    client: Annotated[models.Client, Depends(get_ui_client)],
 ):
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or talk.event_id not in client.event_ids:
-        raise HTTPException(status_code=404, detail="Talk not found")
+    talk = _authorize_studio_talk(
+        talk_id, request, db, not_found_detail="Talk not found"
+    )
 
     jobs = (
         db.query(models.Job)
@@ -349,3 +472,192 @@ def studio(
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/events", response_class=HTMLResponse)
+def list_studio_events(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    if user.role not in ("organizer", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires minimum role 'organizer'",
+        )
+
+    if user.role == "admin":
+        events = (
+            db.query(models.Event)
+            .options(selectinload(models.Event.created_by_user))
+            .order_by(models.Event.id.asc())
+            .all()
+        )
+    else:
+        events = (
+            db.query(models.Event)
+            .options(selectinload(models.Event.created_by_user))
+            .filter(models.Event.created_by_user_id == user.id)
+            .order_by(models.Event.id.asc())
+            .all()
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "events.html.jinja",
+        {
+            "events": events,
+            "error": None,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/events", response_class=HTMLResponse)
+def create_studio_event(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    name: Annotated[str, Form()] = "",
+):
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    if user.role not in ("organizer", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires minimum role 'organizer'",
+        )
+
+    clean_name = name.strip()
+    if not clean_name:
+        if user.role == "admin":
+            events = (
+                db.query(models.Event)
+                .options(selectinload(models.Event.created_by_user))
+                .order_by(models.Event.id.asc())
+                .all()
+            )
+        else:
+            events = (
+                db.query(models.Event)
+                .options(selectinload(models.Event.created_by_user))
+                .filter(models.Event.created_by_user_id == user.id)
+                .order_by(models.Event.id.asc())
+                .all()
+            )
+        return templates.TemplateResponse(
+            request,
+            "events.html.jinja",
+            {
+                "events": events,
+                "error": "Event name is required.",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    event = models.Event(
+        name=clean_name,
+        created_by_user_id=user.id,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+
+    return RedirectResponse(
+        url=f"/studio?event_id={event.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/events/{event_id}/edit", response_class=HTMLResponse)
+def edit_studio_event(
+    request: Request,
+    event_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    name: Annotated[str, Form()] = "",
+):
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    if user.role not in ("organizer", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires minimum role 'organizer'",
+        )
+
+    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
+        )
+
+    if user.role != "admin" and event.created_by_user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not authorized to edit this event",
+        )
+
+    clean_name = name.strip()
+    if not clean_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event name cannot be empty",
+        )
+
+    event.name = clean_name
+    db.commit()
+    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/events/{event_id}/delete", response_class=HTMLResponse)
+def delete_studio_event(
+    request: Request,
+    event_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+):
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    if user.role not in ("organizer", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires minimum role 'organizer'",
+        )
+
+    event = (
+        db.query(models.Event)
+        .filter(models.Event.id == event_id)
+        .with_for_update()
+        .first()
+    )
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
+        )
+
+    if user.role != "admin" and event.created_by_user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not authorized to delete this event",
+        )
+
+    talks = list(event.talks)
+    for talk in talks:
+        _cancel_talk_jobs(talk.id, storage)
+
+    for talk in talks:
+        db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
+        db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
+        db.delete(talk)
+
+    db.delete(event)
+    db.commit()
+    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)

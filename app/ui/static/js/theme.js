@@ -85,13 +85,20 @@ window.setUserRole = function (role) {
 
 window.authFetch = function (url, options = {}) {
   options.headers = options.headers || {};
-  const key = window.getApiKey();
-  if (key) {
-    if (options.headers instanceof Headers) {
-      options.headers.set('X-API-Key', key);
-    } else {
-      options.headers['X-API-Key'] = key;
+  const isSessionLoggedIn = Boolean(
+    document.querySelector('.user-email') ||
+    document.getElementById('logout-btn')
+  );
+  if (!isSessionLoggedIn) {
+    const key = window.getApiKey();
+    if (key) {
+      if (options.headers instanceof Headers) {
+        options.headers.set('X-API-Key', key);
+      } else {
+        options.headers['X-API-Key'] = key;
+      }
     }
   }
+  options.credentials = options.credentials || 'same-origin';
   return fetch(url, options);
 };

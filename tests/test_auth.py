@@ -328,6 +328,17 @@ def test_check_event_access_machine_client_in_scope():
     assert check_event_access(event_id=5, user=client_user, db=mock_db) == event
 
 
+def test_check_event_access_machine_client_not_found():
+    mock_db = MagicMock()
+    mock_db.query.return_value.filter.return_value.first.return_value = None
+
+    client_user = CurrentUser(role="admin", source="api_key", event_ids=[4, 5, 6])
+    with pytest.raises(HTTPException) as excinfo:
+        check_event_access(event_id=5, user=client_user, db=mock_db)
+    assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+    assert excinfo.value.detail == "Event not found"
+
+
 def test_check_event_access_machine_client_out_of_scope():
     event = Event(id=10, name="PyCon", created_by_user_id=1)
     mock_db = MagicMock()

@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import models, schemas
-from app.auth import get_client
+from app.auth import CurrentUser, get_client, get_current_user
 from app.db import get_db
 from app.main import app
 from app.review_handlers import (
@@ -76,13 +76,13 @@ def preview_talk():
 
 
 def test_review_unauthorized():
-    """POST /talks/{id}/review without API key returns 401."""
+    """POST /talks/{id}/review without credentials returns 401."""
     response = client.post(
         "/talks/1/review",
         json={"decision": "approve"},
     )
     assert response.status_code == 401
-    assert response.json()["detail"] == "Missing API Key"
+    assert response.json()["detail"] == "Not authenticated"
 
 
 def test_review_invalid_decision_returns_422_without_db_query(mock_db):
@@ -862,3 +862,123 @@ def test_needs_work_subsequent_cut_overwrites_outputs():
     assert fake_storage.get("1/raw/video.mp4").read_bytes() == (
         b"original raw video bytes"
     )
+
+
+def test_review_human_user_role_forbidden(mock_db, preview_talk):
+    """POST /talks/{id}/review returns 403 if human caller has role 'user'."""
+    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=10, email="user@example.com", role="user", source="cookie", event_ids=[]
+    )
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/1/review",
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 403
+    assert "Operation requires minimum role 'organizer'" in response.json()["detail"]
+
+
+def test_review_human_organizer_unowned_event_forbidden(mock_db, preview_talk):
+    """POST /talks/{id}/review returns 403 if organizer does not own the event."""
+    unowned_event = models.Event(id=1, name="Other Event", created_by_user_id=999)
+
+    def mock_query(model):
+        m = MagicMock()
+        if model == models.Event:
+            m.filter.return_value.first.return_value = unowned_event
+        else:
+            m.filter.return_value.first.return_value = preview_talk
+            m.filter.return_value.with_for_update.return_value = m.filter.return_value
+        return m
+
+    mock_db.query.side_effect = mock_query
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=10,
+        email="org@example.com",
+        role="organizer",
+        source="cookie",
+        event_ids=[],
+    )
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/1/review",
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "User is not authorized to access this event"
+
+
+def test_review_human_organizer_owned_event_success(
+    mock_db, preview_talk, fake_storage
+):
+    """POST /talks/{id}/review succeeds for organizer who owns the event."""
+    owned_event = models.Event(id=1, name="Owned Event", created_by_user_id=10)
+
+    def mock_query(model):
+        m = MagicMock()
+        if model == models.Event:
+            m.filter.return_value.first.return_value = owned_event
+        else:
+            m.filter.return_value.first.return_value = preview_talk
+            m.filter.return_value.with_for_update.return_value = m.filter.return_value
+        return m
+
+    mock_db.query.side_effect = mock_query
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=10,
+        email="org@example.com",
+        role="organizer",
+        source="cookie",
+        event_ids=[],
+    )
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    response = client.post(
+        "/talks/1/review",
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["talk"]["status"] == "pending_intro_outro"
+    assert data["review"]["user_id"] == 10
+
+
+def test_review_human_admin_success(mock_db, preview_talk, fake_storage):
+    """POST /talks/{id}/review succeeds for admin even if event created by someone else."""
+    event = models.Event(id=1, name="Event", created_by_user_id=999)
+
+    def mock_query(model):
+        m = MagicMock()
+        if model == models.Event:
+            m.filter.return_value.first.return_value = event
+        else:
+            m.filter.return_value.first.return_value = preview_talk
+            m.filter.return_value.with_for_update.return_value = m.filter.return_value
+        return m
+
+    mock_db.query.side_effect = mock_query
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=1,
+        email="admin@example.com",
+        role="admin",
+        source="cookie",
+        event_ids=[],
+    )
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    response = client.post(
+        "/talks/1/review",
+        json={"decision": "approve"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["talk"]["status"] == "pending_intro_outro"
+    assert data["review"]["user_id"] == 1
