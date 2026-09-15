@@ -40,35 +40,64 @@
     </div>
 
     <div class="topbar-actions">
+      {% block topbar_actions %}{% endblock %}
+
       <div class="topbar-control-group">
         <!-- Dynamic Authentication State -->
         {% if user %}
-          {% if user.is_sso %}
-            <span class="user-email">SSO ({{ user.role | capitalize }})</span>
-          {% elif user.email %}
-            <span class="user-email">{{ user.email }}</span>
-          {% endif %}
           <span class="badge badge-role badge-{{ user.role }}">{{ user.role | capitalize }}</span>
-          <form method="post" action="/logout" class="logout-form">
-            <button type="submit" class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>
-          </form>
+          <details class="user-menu-wrapper" id="user-menu-wrapper">
+            <summary class="user-bubble-btn" id="user-menu-btn" title="User menu" aria-label="User menu" aria-expanded="false" aria-controls="user-dropdown-menu">
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+            </summary>
+            <div class="user-dropdown" id="user-dropdown-menu">
+              <div class="user-dropdown-header">
+                <span class="user-dropdown-label">Signed in as</span>
+                {% if user.is_sso %}
+                  <span class="user-email">SSO ({{ user.role | capitalize }})</span>
+                {% elif user.email %}
+                  <span class="user-email" title="{{ user.email }}">{{ user.email }}</span>
+                {% endif %}
+              </div>
+              <div class="user-dropdown-divider"></div>
+              <button type="button" class="user-dropdown-item" id="theme-toggle-btn">
+                <svg id="theme-icon-sun" class="theme-icon-hidden" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                </svg>
+                <svg id="theme-icon-moon" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+                <span id="theme-toggle-label">Dark Mode</span>
+              </button>
+              <div class="user-dropdown-divider"></div>
+              <form method="post" action="/logout" class="logout-form">
+                <button type="submit" class="user-dropdown-item logout-item" id="logout-btn">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                    <polyline points="16 17 21 12 16 7"/>
+                    <line x1="21" y1="12" x2="9" y2="12"/>
+                  </svg>
+                  <span>Log out</span>
+                </button>
+              </form>
+            </div>
+          </details>
         {% else %}
           <a href="/login" class="btn btn-ghost btn-sm" id="login-link">Log in</a>
           <a href="/signup" class="btn btn-primary btn-sm" id="signup-link">Sign up</a>
+          <button class="btn btn-ghost btn-sm" id="theme-toggle-btn" title="Toggle Theme">
+            <svg id="theme-icon-sun" class="theme-icon-hidden" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+            <svg id="theme-icon-moon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </button>
         {% endif %}
-
-        <!-- Theme Toggle Button -->
-        <button class="btn btn-ghost btn-sm" id="theme-toggle-btn" title="Toggle Theme">
-          <svg id="theme-icon-sun" class="theme-icon-hidden" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-          </svg>
-          <svg id="theme-icon-moon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
-        </button>
       </div>
-
-      {% block topbar_actions %}{% endblock %}
     </div>
   </header>
 

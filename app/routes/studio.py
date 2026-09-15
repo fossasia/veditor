@@ -111,7 +111,12 @@ def _authorize_studio_talk(
 
     user = _get_authenticated_user_from_cookie(request, db)
     if user:
-        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        talk = (
+            db.query(models.Talk)
+            .options(selectinload(models.Talk.event))
+            .filter(models.Talk.id == talk_id)
+            .first()
+        )
         if not talk:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -119,8 +124,7 @@ def _authorize_studio_talk(
             )
         if user.role == "admin":
             return talk
-        event = db.query(models.Event).filter(models.Event.id == talk.event_id).first()
-        if event and event.created_by_user_id == user.id:
+        if talk.event and talk.event.created_by_user_id == user.id:
             return talk
         api_key = request.headers.get("X-API-Key") or request.cookies.get(
             "veditor_api_key"
@@ -154,7 +158,12 @@ def _authorize_studio_talk(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
         )
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = (
+        db.query(models.Talk)
+        .options(selectinload(models.Talk.event))
+        .filter(models.Talk.id == talk_id)
+        .first()
+    )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -189,12 +198,12 @@ MILESTONES_DEF = [
     },
     {
         "num": 2,
-        "title": "Timestamp Review (Gate 1)",
+        "title": "Timestamp Review",
         "desc": "Human verification of speaker In/Out points",
     },
     {
         "num": 3,
-        "title": "Processing & Preview (Gate 2)",
+        "title": "Processing & Preview",
         "desc": "Cut, loudness, title slates & low-res preview",
     },
     {
@@ -619,12 +628,9 @@ def studio(
 
     # Build categorized media assets that can be watched in the studio
     asset_defs = [
+        ("final", "final.mp4", "Master Video (Final)"),
         ("preview", "preview.mp4", "Preview Video"),
         ("raw", "raw.mp4", "Raw Recording"),
-        ("intro", "intro.mp4", "Opening Title Slate"),
-        ("outro", "outro.mp4", "Outro Slate"),
-        ("cut", "cut.mp4", "Cut Talk Clip"),
-        ("final", "final.mp4", "Master Video (Final)"),
     ]
     media_assets = []
     seen_urls = set()

@@ -34,6 +34,20 @@ def db_session():
         yield session
     finally:
         app.dependency_overrides.pop(get_db, None)
+        try:
+            session.rollback()
+            session.query(models.Talk).filter(
+                models.Talk.event.has(models.Event.name.like("%Test Event%"))
+            ).delete(synchronize_session=False)
+            session.query(models.Event).filter(
+                models.Event.name.like("%Test Event%")
+            ).delete(synchronize_session=False)
+            session.query(models.User).filter(
+                models.User.email.like("%@example.com")
+            ).delete(synchronize_session=False)
+            session.commit()
+        except Exception:  # noqa: BLE001
+            session.rollback()
         session.close()
         transaction.rollback()
         connection.close()

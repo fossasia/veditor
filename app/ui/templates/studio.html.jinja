@@ -11,11 +11,11 @@
   {% elif status == 'detecting' %}
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
   {% elif status in ['pending_approval', 'pending_bounds'] %}
-    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review (Gate 1)</span>
+    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>
   {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
   {% elif status == 'preview' %}
-    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready (Gate 2)</span>
+    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>
   {% elif status == 'needs_work' %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
   {% elif status == 'done' %}
@@ -28,107 +28,35 @@
 {% endmacro %}
 
 {% block breadcrumb %}
-  <a href="/studio">Talks</a>
+  <a href="/studio" class="breadcrumb-back">&larr; Talks</a>
   <span class="sep">/</span>
-  <span class="current">{{ talk.title | truncate(45) }}</span>
+  <span class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</span>
+  <span class="sep">/</span>
+  <span class="breadcrumb-room">{{ talk.room or '—' }}</span>
+  <span class="sep">/</span>
+  <span class="current" title="{{ talk.title }}">{{ talk.title }}</span>
 {% endblock %}
 
 {% block topbar_actions %}
-  <span class="talk-header-id">Talk #{{ talk.id }}</span>
+  {% if talk.start %}
+    {% set start_utc = talk.start.astimezone(UTC) if talk.start.tzinfo else talk.start %}
+    {% if talk.end %}
+      {% set end_utc = talk.end.astimezone(UTC) if talk.end.tzinfo else talk.end %}
+      {% if start_utc.date() == end_utc.date() %}
+        {% set time_str = start_utc.strftime('%b %d, %H:%M') ~ ' – ' ~ end_utc.strftime('%H:%M UTC') %}
+      {% else %}
+        {% set time_str = start_utc.strftime('%b %d, %H:%M UTC') ~ ' – ' ~ end_utc.strftime('%b %d, %H:%M UTC') %}
+      {% endif %}
+    {% else %}
+      {% set time_str = start_utc.strftime('%b %d, %H:%M UTC') %}
+    {% endif %}
+    <span class="topbar-time-meta">{{ time_str }}{% if duration_seconds and duration_seconds > 0 %} ({{ duration_seconds | format_duration }}){% endif %}</span>
+  {% endif %}
   {{ status_badge(talk.status) }}
 {% endblock %}
 
 {% block content %}
 <div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
-
-  <!-- ── LEFT: Talk Metadata Panel ───────────────────────────── -->
-  <div class="studio-panel">
-    <div class="studio-panel-header">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-      </svg>
-      <span class="studio-panel-title">Talk Metadata</span>
-    </div>
-    <div class="studio-panel-body">
-
-      <div class="meta-group">
-        <div class="meta-label">Title</div>
-        <div class="meta-value">{{ talk.title }}</div>
-      </div>
-
-      <div class="meta-group">
-        <div class="meta-label">Event</div>
-        <div class="meta-value">Event #{{ talk.event_id }}</div>
-      </div>
-
-      <div class="meta-group">
-        <div class="meta-label">Room</div>
-        <div class="meta-value">{{ talk.room or '—' }}</div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="meta-group">
-        <div class="meta-label">Scheduled Start</div>
-        <div class="meta-value mono">
-          {{ talk.start.strftime('%a, %b %d %Y  %H:%M UTC') if talk.start else '—' }}
-        </div>
-      </div>
-
-      <div class="meta-group">
-        <div class="meta-label">Scheduled End</div>
-        <div class="meta-value mono">
-          {{ talk.end.strftime('%H:%M UTC') if talk.end else '—' }}
-        </div>
-      </div>
-
-      <div class="meta-group">
-        <div class="meta-label">Scheduled Duration</div>
-        <div class="meta-value mono">
-          {% if duration_seconds is not none %}
-            {% set h = duration_seconds // 3600 %}
-            {% set m = (duration_seconds % 3600) // 60 %}
-            {% set s = duration_seconds % 60 %}
-            {{ '%d:%02d:%02d' | format(h, m, s) }}
-          {% else %}—{% endif %}
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <!-- Generated Media Assets (RAW, Intro, Outro, Preview, Final) -->
-      <div class="assets-section-title">
-        Generated Media Assets
-      </div>
-
-      <div id="media-assets-list">
-        {% if media_assets %}
-          {% for asset in media_assets %}
-          <div class="media-asset-row" data-asset-url="{{ asset.url }}">
-            <div class="media-asset-header">
-              <span class="badge media-asset-badge {% if asset.category == 'intro' or asset.category == 'outro' %}badge-pending{% elif asset.category == 'final' %}badge-done{% elif asset.category == 'raw' %}badge-waiting{% else %}badge-preview{% endif %}">
-                {{ asset.category | upper }}
-              </span>
-              <a href="{{ asset.url }}" target="_blank" class="btn btn-ghost btn-sm media-asset-download" title="Download file">
-                Download
-              </a>
-            </div>
-            <div class="media-asset-label">
-              {{ asset.label }}
-            </div>
-            <button class="btn btn-primary btn-sm btn-play-asset" data-asset-url="{{ asset.url }}">
-              Play in Studio
-            </button>
-          </div>
-          {% endfor %}
-        {% else %}
-          <div class="no-media-msg">No pipeline media generated yet.</div>
-        {% endif %}
-      </div>
-
-    </div>
-  </div>
 
   <!-- ── CENTER: Video Player or Upload Dropzone ─────────────── -->
   <div class="player-panel">
@@ -203,6 +131,27 @@
           <svg id="icon-volume-on" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
           <svg id="icon-volume-muted" width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
         </button>
+
+        {% if media_assets %}
+        <div class="source-select-wrap" id="source-select-wrap">
+          <label for="media-source-select" class="source-select-label">Source:</label>
+          <select id="media-source-select" class="select-field" aria-label="Select video source">
+            {% for asset in media_assets %}
+              {% if asset.category in ['final', 'preview', 'raw'] %}
+                <option value="{{ asset.url }}" data-category="{{ asset.category }}">{{ asset.label }}</option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          <a id="media-download-btn" href="#" target="_blank" class="btn btn-ghost btn-sm media-download-btn" title="Download video" download aria-label="Download video">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>Download</span>
+          </a>
+        </div>
+        {% endif %}
       </div>
     </div>
 
@@ -322,7 +271,7 @@
             </div>
           {% elif talk.status == 'pending_approval' %}
             <button class="btn btn-success w-full" id="btn-approve">
-              Approve Schedule Alignment (Gate 1)
+              Approve Schedule Alignment
             </button>
             <button class="btn btn-danger w-full" id="btn-reject">
               Reject Talk
@@ -343,7 +292,7 @@
             </button>
           {% elif talk.status == 'preview' %}
             <button class="btn btn-success w-full" id="btn-approve">
-              Approve Preview (Gate 2)
+              Approve Preview
             </button>
             <button class="btn btn-warning w-full" id="btn-needs-work">
               Request Changes (Needs Work)
@@ -396,6 +345,8 @@
           </div>
         </div>
       </div>
+
+      <div class="divider"></div>
 
       <!-- 4 Lifecycle Milestones -->
       <div class="milestones-title">

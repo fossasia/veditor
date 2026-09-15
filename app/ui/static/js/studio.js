@@ -243,31 +243,22 @@ window.loadVideoSrc = function(url) {
   video.play().catch(() => {});
   loadWaveformForUrl(url);
 
-  // Highlight active row in Generated Media Assets
-  document.querySelectorAll('.media-asset-row').forEach(row => {
-    const rowUrl = row.getAttribute('data-asset-url');
-    const btn = row.querySelector('.btn-play-asset');
-    if (rowUrl === url) {
-      row.style.borderColor = 'var(--v-primary)';
-      row.style.background = 'var(--v-primary-subtle)';
-      if (btn) {
-        btn.textContent = 'Active in Studio';
-        btn.classList.remove('btn-ghost');
-        btn.classList.add('btn-primary');
-      }
-    } else {
-      row.style.borderColor = 'var(--v-border-subtle)';
-      row.style.background = 'var(--v-bg-subtle)';
-      if (btn) {
-        btn.textContent = 'Play in Studio';
-        btn.classList.remove('btn-primary');
-        btn.classList.add('btn-ghost');
-      }
-    }
-  });
+  const sourceSelect = document.getElementById('media-source-select');
+  if (sourceSelect && sourceSelect.value !== url) {
+    sourceSelect.value = url;
+  }
+  const downloadBtn = document.getElementById('media-download-btn');
+  if (downloadBtn && url) {
+    downloadBtn.href = url;
+  }
 };
 
 function initInitialVideo() {
+  const sourceSelect = document.getElementById('media-source-select');
+  if (sourceSelect && sourceSelect.value) {
+    window.loadVideoSrc(sourceSelect.value);
+    return;
+  }
   const urls = getPreviewUrls();
   if (Array.isArray(urls) && urls.length > 0) {
     window.loadVideoSrc(urls[0]);
@@ -904,6 +895,20 @@ document.addEventListener('DOMContentLoaded', () => {
   pollStudioJobs();
   startStudioPolling();
 
+  const sourceSelect = document.getElementById('media-source-select');
+  const downloadBtn = document.getElementById('media-download-btn');
+  if (sourceSelect) {
+    if (downloadBtn && sourceSelect.value) {
+      downloadBtn.href = sourceSelect.value;
+    }
+    sourceSelect.addEventListener('change', () => {
+      const url = sourceSelect.value;
+      if (url) {
+        window.loadVideoSrc(url);
+      }
+    });
+  }
+
   const videoInput = document.getElementById('video-file-input');
   if (videoInput) {
     videoInput.addEventListener('change', (e) => {
@@ -980,13 +985,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.btn-play-asset');
-    if (!btn) return;
-    const url = btn.getAttribute('data-asset-url') || btn.closest('.media-asset-row')?.getAttribute('data-asset-url');
-    if (url) window.loadVideoSrc(url);
-  });
 
   // Auto-poll status when in background processing states
   const activeProcessingStates = ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'];

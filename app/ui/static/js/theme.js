@@ -36,6 +36,10 @@ window.VEditorConfig = window.VEditorConfig || {
         moonIcon.style.display = theme === 'dark' ? 'none' : 'block';
       }
     }
+    const label = document.getElementById('theme-toggle-label');
+    if (label) {
+      label.textContent = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+    }
   }
 
   window.toggleTheme = function () {
@@ -59,6 +63,36 @@ window.VEditorConfig = window.VEditorConfig || {
     if (themeBtn) {
       themeBtn.addEventListener('click', window.toggleTheme);
     }
+
+    // ── User Dropdown Menu (native <details> dismiss & a11y sync) ────
+    const userMenu = document.getElementById('user-menu-wrapper');
+    const userMenuBtn = document.getElementById('user-menu-btn');
+    if (userMenu) {
+      const closeUserMenu = () => {
+        if (userMenu.open) {
+          userMenu.removeAttribute('open');
+        }
+      };
+
+      if (userMenuBtn) {
+        userMenu.addEventListener('toggle', () => {
+          userMenuBtn.setAttribute('aria-expanded', String(userMenu.open));
+        });
+      }
+
+      document.addEventListener('click', (event) => {
+        if (userMenu.open && event.target instanceof Node && !userMenu.contains(event.target)) {
+          closeUserMenu();
+        }
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && userMenu.open) {
+          closeUserMenu();
+          event.stopPropagation();
+        }
+      });
+    }
   });
 })();
 
@@ -68,20 +102,10 @@ window.VEditorConfig = window.VEditorConfig || {
     return path === '/studio' || path.startsWith('/studio/');
   }
 
-  function isTalkPath(path = window.location.pathname) {
-    return path.includes('/studio/talks/');
-  }
-
   function checkSpeakerStudioMode() {
-    if (isTalkPath()) {
-      const role = typeof window.getUserRole === 'function'
-        ? window.getUserRole()
-        : (localStorage.getItem('veditor_role') || 'admin');
-      if (role !== 'organizer' && role !== 'admin') {
-        document.documentElement.setAttribute('data-sidebar', 'hidden');
-        if (document.body) document.body.classList.add('is-speaker');
-        return true;
-      }
+    if (document.body && document.body.classList.contains('is-speaker')) {
+      document.documentElement.setAttribute('data-sidebar', 'hidden');
+      return true;
     }
     return false;
   }

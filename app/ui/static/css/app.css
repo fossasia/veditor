@@ -1119,12 +1119,125 @@ td {
   display: inline;
 }
 
-#theme-toggle-btn {
+#theme-toggle-btn:not(.user-dropdown-item) {
   padding: 5px 8px;
   height: 30px;
 }
 
 .theme-icon-hidden {
   display: none;
+}
+
+/* ── User Menu Dropdown ────────────────────────────────────────── */
+.user-menu-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+summary.user-bubble-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  color: var(--v-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  list-style: none;
+}
+
+summary.user-bubble-btn::-webkit-details-marker {
+  display: none;
+}
+
+summary.user-bubble-btn:hover,
+details[open] > summary.user-bubble-btn {
+  background: var(--v-bg-surface-hover);
+  border-color: var(--v-border-strong);
+  color: var(--v-text-primary);
+}
+
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 220px;
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-md);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  z-index: 100;
+}
+
+.user-dropdown-header {
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.user-dropdown-label {
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--v-text-muted);
+}
+
+.user-dropdown-header .user-email {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+
+.user-dropdown-divider {
+  height: 1px;
+  background: var(--v-border-subtle);
+  margin: 4px 0;
+}
+
+.user-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--v-radius-xs);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--v-text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, color 0.15s ease;
+  font-family: inherit;
+}
+
+.user-dropdown-item:hover {
+  background: var(--v-bg-surface-hover);
+  color: var(--v-text-primary);
+}
+
+.user-dropdown-item#theme-toggle-btn {
+  height: auto;
+  padding: 8px 10px;
+}
+
+.user-dropdown-item.logout-item:hover {
+  color: var(--v-status-danger-text);
+  background: var(--v-status-danger-bg);
 }
 
