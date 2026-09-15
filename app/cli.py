@@ -83,6 +83,30 @@ def create_client(
     print("Store this key safely! It will not be shown again.")
 
 
+def create_platform_client(session: Session, name: str):
+    clean_name = name.strip() if name else ""
+    if not clean_name:
+        print("Error: Client name cannot be empty.")
+        sys.exit(1)
+
+    raw_api_key = secrets.token_urlsafe(32)
+    hashed_key = hash_api_key(raw_api_key)
+
+    client = models.Client(
+        name=clean_name,
+        is_platform=True,
+        hashed_key=hashed_key,
+        event_ids=[],
+    )
+    session.add(client)
+    session.commit()
+    session.refresh(client)
+
+    print(f"Created Platform Client '{client.name}' with ID {client.id}")
+    print(f"API Key: {raw_api_key}")
+    print("Store this key safely! It will not be shown again.")
+
+
 def create_admin(session: Session, email: str, password: str):
     clean_email = email.strip().lower() if email else ""
     if not is_valid_email(clean_email):
@@ -187,6 +211,18 @@ def main():
         help="Shared secret for signing webhook notifications (auto-generated if omitted)",
     )
 
+    # `admin create-platform-client` command
+    create_platform_client_parser = admin_subparsers.add_parser(
+        "create-platform-client",
+        help="Create a new platform-level client with an API key",
+    )
+    create_platform_client_parser.add_argument(
+        "--name",
+        type=str,
+        required=True,
+        help="Name of the platform client (e.g. 'Conference Platform')",
+    )
+
     # `admin create-admin` command
     create_admin_parser = admin_subparsers.add_parser(
         "create-admin", help="Create a new administrator user"
@@ -229,6 +265,8 @@ def main():
                     )
                 else:
                     create_client(db, args.event_name, args.event_id)
+            elif args.subcommand == "create-platform-client":
+                create_platform_client(db, args.name)
             elif args.subcommand == "create-admin":
                 if not sys.stdin.isatty():
                     password = sys.stdin.readline().rstrip("\r\n")

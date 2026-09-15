@@ -83,6 +83,9 @@
               <a href="/studio?event_id={{ event.id }}" class="btn btn-ghost btn-sm" title="Open Event">
                 View Talks
               </a>
+              <button type="button" class="btn btn-ghost btn-sm btn-api-keys" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Manage API Keys">
+                API Keys
+              </button>
               <button type="button" class="btn btn-ghost btn-sm btn-edit-event" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Edit Event Name">
                 Edit
               </button>
@@ -126,6 +129,76 @@
         </button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ── MODAL: API Keys ─────────────────────────────────────────── -->
+<div id="modal-api-keys" class="events-modal-backdrop">
+  <div class="events-modal-card events-modal-card-lg">
+    <div class="events-modal-header">
+      <div>
+        <h3 class="events-modal-title">API Key for <span id="api-keys-event-name-display"></span></h3>
+        <p class="events-modal-desc">Manage API credentials to integrate conference schedules and video pipelines with this event.</p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal">✕</button>
+    </div>
+
+    <!-- Event Credentials Summary Box -->
+    <div class="api-key-info-box">
+      <div class="api-key-info-row">
+        <span class="api-key-info-label">VEditor Event ID:</span>
+        <code id="api-keys-event-id-display" class="api-key-code">#</code>
+        <button type="button" class="btn btn-ghost btn-xs btn-copy-event-id" title="Copy Event ID">Copy ID</button>
+      </div>
+    </div>
+
+    <!-- Newly Created Key Alert (Hidden by default) -->
+    <div id="new-key-alert" class="alert alert-success api-key-alert-hidden">
+      <div class="new-key-header">
+        <strong>New API Key Generated!</strong>
+        <span class="new-key-warning">Copy this key now. It will not be shown again.</span>
+      </div>
+      <div class="new-key-row">
+        <input type="text" id="new-key-input" class="input-field input-mono" readonly>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-copy-new-key">Copy Key</button>
+      </div>
+      <div class="new-key-tip">
+        <span>Copy this API key now. It is event-scoped and can be used directly in your integration settings.</span>
+      </div>
+    </div>
+
+    <!-- Active Keys Section -->
+    <div class="api-keys-section">
+      <div class="api-keys-section-header">
+        <h4 class="api-keys-subtitle">Active API Key</h4>
+        <button type="button" class="btn btn-primary btn-sm" id="btn-generate-api-key">
+          + Generate API Key
+        </button>
+      </div>
+
+      <div id="api-keys-table-wrap">
+        <table class="api-keys-table">
+          <thead>
+            <tr>
+              <th class="col-key-id">ID</th>
+              <th>Label</th>
+              <th>Masked Key</th>
+              <th>Created</th>
+              <th>Last Used</th>
+              <th class="col-actions-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="api-keys-tbody">
+            <!-- Populated dynamically via fetch -->
+          </tbody>
+        </table>
+        <p id="api-keys-empty" class="text-muted text-center api-key-alert-hidden api-keys-empty-msg">No active API key found. Click "+ Generate API Key" above to create one.</p>
+      </div>
+    </div>
+
+    <div class="events-modal-footer api-keys-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal">Close</button>
+    </div>
   </div>
 </div>
 

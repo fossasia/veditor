@@ -169,7 +169,7 @@ def test_post_events_success_organizer(client: TestClient, db_session):
     )
     assert event is not None
     assert event.created_by_user_id == organizer.id
-    assert response.headers["location"] == f"/studio?event_id={event.id}"
+    assert response.headers["location"] == "/studio/events"
 
 
 def test_sidebar_nav_events_link_visibility(client: TestClient, db_session):

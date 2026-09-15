@@ -97,6 +97,28 @@ def test_cli_main_create_client(mock_session_local, mock_create_client):
     mock_session_local.return_value.close.assert_called_once()
 
 
+@patch("app.cli.create_platform_client")
+@patch("app.cli.SessionLocal")
+def test_cli_main_create_platform_client(
+    mock_session_local, mock_create_platform_client
+):
+    test_args = [
+        "veditor",
+        "admin",
+        "create-platform-client",
+        "--name",
+        "Conference Platform",
+    ]
+    with patch.object(sys, "argv", test_args):
+        main()
+
+    mock_session_local.assert_called_once()
+    mock_create_platform_client.assert_called_once_with(
+        mock_session_local.return_value, "Conference Platform"
+    )
+    mock_session_local.return_value.close.assert_called_once()
+
+
 @patch("app.cli.hash_password")
 def test_create_admin_success(mock_hash_password):
     mock_hash_password.return_value = "hashed-secret"

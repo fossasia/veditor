@@ -125,6 +125,7 @@ def signup_submit(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     password_confirm: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "user",
 ):
     clean_email = email.strip().lower()
     if len(clean_email) > 255 or not is_valid_email(clean_email):
@@ -179,10 +180,14 @@ def signup_submit(
 
     hashed = hash_password(password)
 
+    assigned_role = role.strip().lower() if role else "user"
+    if assigned_role not in ("organizer", "user"):
+        assigned_role = "user"
+
     user = models.User(
         email=clean_email,
         hashed_password=hashed,
-        role="user",
+        role=assigned_role,
         is_active=True,
     )
     db.add(user)

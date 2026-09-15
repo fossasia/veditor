@@ -621,3 +621,14 @@ def test_require_talk_access_success_and_unauthorized():
     )
     resp = client.get("/talks/10")
     assert resp.status_code == 403
+
+
+def test_role_hierarchy_levels():
+    """Verify exact role hierarchy requested in issue #238: user(0) < speaker(1) < reviewer(2) < organizer(3) < admin(4)."""
+    from app.auth import ROLE_HIERARCHY
+
+    assert ROLE_HIERARCHY["user"] == 0
+    assert ROLE_HIERARCHY["speaker"] == 1
+    assert ROLE_HIERARCHY["organizer"] == 2
+    assert ROLE_HIERARCHY["admin"] == 3
+    assert len(ROLE_HIERARCHY) == 4

@@ -43,11 +43,7 @@
       <div class="topbar-control-group">
         <!-- Dynamic Authentication State -->
         {% if user %}
-          {% if user.is_sso %}
-            <span class="user-email">SSO ({{ user.role | capitalize }})</span>
-          {% elif user.email %}
-            <span class="user-email">{{ user.email }}</span>
-          {% endif %}
+          <span class="user-email">{{ user.email or user.display_name or (('SSO (' ~ user.role | capitalize ~ ')') if user.is_sso else (user.role | capitalize)) }}</span>
           <span class="badge badge-role badge-{{ user.role }}">{{ user.role | capitalize }}</span>
           <form method="post" action="/logout" class="logout-form">
             <button type="submit" class="btn btn-ghost btn-sm" id="logout-btn">Log out</button>

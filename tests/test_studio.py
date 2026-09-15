@@ -1304,6 +1304,29 @@ def test_studio_mode_body_class(client: TestClient, db_session):
     assert "is-studio-mode" not in res_login.text
 
 
+def test_studio_dashboard_with_slug_event_id_and_sso_token(client, db_session):
+    event = models.Event(
+        name="Slug Conf", source="eventyay", external_id="slug-conf-123"
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    from app.security import create_sso_token
+
+    token = create_sso_token(scope_type="event", scope_id=event.id, role="organizer")
+
+    # Accessing /studio with a string slug in event_id alongside sso_token
+    # should NOT fail with int_parsing 422, but successfully redirect with cookie
+    res = client.get(
+        f"/studio?event_id=slug-conf-123&sso_token={token}",
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == f"/studio?event_id={event.id}"
+    assert "veditor_session" in res.cookies
+
+
 def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
     """When viewed with a speaker token, studio scrubber omits INTRO/OUTRO and enables speaker mode."""
     from app.security import create_sso_token

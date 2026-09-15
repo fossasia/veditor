@@ -42,6 +42,14 @@
         <input type="password" id="password_confirm" name="password_confirm" class="input-field" required minlength="8" maxlength="256" placeholder="Repeat password">
       </div>
 
+      <div class="form-group">
+        <label class="form-label" for="role">Account Role</label>
+        <select id="role" name="role" class="input-field">
+          <option value="organizer" selected>Organizer (Manage events, sync schedules &amp; API keys)</option>
+          <option value="user">User</option>
+        </select>
+      </div>
+
       <button type="submit" class="btn btn-primary btn-lg btn-auth-submit">Create Account</button>
     </form>
 

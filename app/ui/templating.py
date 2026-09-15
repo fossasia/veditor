@@ -39,7 +39,8 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
         sso_user = CurrentUser(
             user_id=None,
             client_id=None,
-            email=None,
+            email=sso_payload.get("email"),
+            display_name=sso_payload.get("display_name"),
             role=sso_payload["role"],
             source="sso",
             event_ids=[sso_payload["scope_id"]]

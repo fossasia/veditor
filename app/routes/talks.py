@@ -134,7 +134,7 @@ def create_or_update_talk(
 
 @router.get("/{talk_id}", response_model=schemas.TalkWithJobsRead)
 def get_talk(
-    talk_id: int,
+    talk_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
@@ -143,8 +143,12 @@ def get_talk(
     Retrieves talk metadata, current status, associated jobs with progress/timing, and preview URLs.
     Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    talk = None
+    if talk_id.isdigit():
+        talk = db.query(models.Talk).filter(models.Talk.id == int(talk_id)).first()
+    if not talk:
+        talk = db.query(models.Talk).filter(models.Talk.external_id == talk_id).first()
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -165,20 +169,24 @@ def get_talk(
 
 @router.get("/{talk_id}/jobs", response_model=schemas.TalkJobsResponse)
 def get_talk_jobs(
-    talk_id: int,
+    talk_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """Returns the current talk status along with recent jobs and active progress."""
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    talk = None
+    if talk_id.isdigit():
+        talk = db.query(models.Talk).filter(models.Talk.id == int(talk_id)).first()
+    if not talk:
+        talk = db.query(models.Talk).filter(models.Talk.external_id == talk_id).first()
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
     check_talk_access(talk, user, db)
     jobs = (
         db.query(models.Job)
-        .filter(models.Job.talk_id == talk_id)
+        .filter(models.Job.talk_id == talk.id)
         .order_by(models.Job.id.desc())
         .limit(10)
         .all()
@@ -211,7 +219,7 @@ def ingest_recording(
     Returns 507 if storage space is insufficient.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -281,7 +289,7 @@ def approve_talk(
         .with_for_update()
         .first()
     )
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -420,7 +428,7 @@ def raw_preview(
     Returns 404 if talk not found or no raw file exists.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -465,7 +473,7 @@ def submit_cut_bounds(
         .with_for_update()
         .first()
     )
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -559,7 +567,7 @@ def configure_assembly(
         .with_for_update()
         .first()
     )
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -736,7 +744,7 @@ def abort_talk(
     Returns 404 if talk is not found or not authorized for caller's events.
     """
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -782,7 +790,7 @@ def update_talk(
             detail="SSO sessions are not permitted to modify talk metadata",
         )
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -841,7 +849,7 @@ def delete_talk(
             detail="SSO sessions are not permitted to delete talks",
         )
     talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -939,7 +947,7 @@ async def upload_recording(
         .with_for_update()
         .first()
     )
-    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+    if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
@@ -1144,6 +1152,14 @@ async def import_schedule(
                                 "start": t.get("date") or t.get("start"),
                                 "end": t.get("end"),
                                 "duration": t.get("duration"),
+                                "external_id": str(
+                                    t.get("code")
+                                    or t.get("id")
+                                    or t.get("guid")
+                                    or t.get("external_id")
+                                    or ""
+                                )
+                                or None,
                             }
                         )
         elif "talks" in data:
@@ -1166,6 +1182,17 @@ async def import_schedule(
             continue
         title = t_info.get("title") or "Untitled Talk"
         room = t_info.get("room") or "Main Hall"
+        raw_ext_id = (
+            t_info.get("external_id")
+            or t_info.get("code")
+            or t_info.get("id")
+            or t_info.get("guid")
+        )
+        talk_external_id = (
+            str(raw_ext_id).strip()
+            if raw_ext_id is not None and str(raw_ext_id).strip()
+            else None
+        )
 
         t_start = _parse_iso_datetime(t_info.get("start") or t_info.get("date"))
         t_end = _parse_iso_datetime(t_info.get("end"))
@@ -1239,6 +1266,7 @@ async def import_schedule(
                 "room": room,
                 "start": start_dt,
                 "end": end_dt,
+                "external_id": talk_external_id,
             }
         )
 
@@ -1248,41 +1276,122 @@ async def import_schedule(
             detail="No sessions found to import",
         )
 
-    target_event_id = None
-    if isinstance(data, dict) and data.get("event_id"):
-        try:
-            target_event_id = int(data.get("event_id"))
-        except ValueError, TypeError:
-            pass
-    elif (
-        talks_to_create
+    # In-memory batch deduplication (keeps latest entry for duplicate keys)
+    deduped_talks = []
+    seen_keys = {}
+    for t in validated_talks:
+        ext_id = t.get("external_id")
+        if ext_id:
+            key = ("ext", ext_id)
+        else:
+            key = ("title_start", t["title"], t["start"])
+        if key in seen_keys:
+            deduped_talks[seen_keys[key]] = t
+        else:
+            seen_keys[key] = len(deduped_talks)
+            deduped_talks.append(t)
+
+    target_identifier = None
+    target_source = None
+    is_explicit_external = False
+
+    if isinstance(data, dict):
+        if data.get("external_id"):
+            target_identifier = data.get("external_id")
+            is_explicit_external = True
+        elif data.get("event_id"):
+            target_identifier = data.get("event_id")
+        target_source = data.get("source")
+
+    if (
+        not target_identifier
+        and talks_to_create
         and isinstance(talks_to_create[0], dict)
-        and talks_to_create[0].get("event_id")
     ):
-        try:
-            target_event_id = int(talks_to_create[0].get("event_id"))
-        except ValueError, TypeError:
-            pass
+        target_identifier = talks_to_create[0].get("event_id") or talks_to_create[
+            0
+        ].get("external_id")
+        if not target_source:
+            target_source = talks_to_create[0].get("source")
+
+    is_platform = getattr(user, "is_platform", False)
+    if (
+        target_source
+        or is_platform
+        or (target_identifier and not str(target_identifier).strip().isdigit())
+    ):
+        is_explicit_external = True
+
+    if is_explicit_external and not target_source:
+        target_source = "platform"
 
     event = None
     is_new_event = False
-    if target_event_id:
-        existing_event = (
-            db.query(models.Event).filter(models.Event.id == target_event_id).first()
-        )
-        if existing_event:
-            check_event_access(target_event_id, user, db)
-            event = existing_event
+
+    if target_identifier is not None:
+        target_str = str(target_identifier).strip()
+        if is_explicit_external:
+            if target_source:
+                existing_event = (
+                    db.query(models.Event)
+                    .filter(
+                        models.Event.source == target_source,
+                        models.Event.external_id == target_str,
+                    )
+                    .first()
+                )
+                if existing_event:
+                    if not is_platform:
+                        check_event_access(existing_event.id, user, db)
+                    event = existing_event
+
+            if not event:
+                existing_event = (
+                    db.query(models.Event)
+                    .filter(models.Event.external_id == target_str)
+                    .first()
+                )
+                if existing_event:
+                    if not is_platform:
+                        check_event_access(existing_event.id, user, db)
+                    event = existing_event
+
+            if not event:
+                created_by = user.user_id if not user.is_machine else None
+                event = models.Event(
+                    name=event_name if event_name != "Conference Event" else target_str,
+                    source=target_source or "platform",
+                    external_id=target_str,
+                    created_by_user_id=created_by,
+                )
+                db.add(event)
+                db.flush()
+                is_new_event = True
         else:
-            created_by = user.user_id if not user.is_machine else None
-            event = models.Event(name=event_name, created_by_user_id=created_by)
-            db.add(event)
-            db.flush()
-            is_new_event = True
+            if target_str.isdigit():
+                existing_event = (
+                    db.query(models.Event)
+                    .filter(models.Event.id == int(target_str))
+                    .first()
+                )
+                if existing_event:
+                    if not is_platform:
+                        check_event_access(existing_event.id, user, db)
+                    event = existing_event
+                else:
+                    created_by = user.user_id if not user.is_machine else None
+                    event = models.Event(name=event_name, created_by_user_id=created_by)
+                    db.add(event)
+                    db.flush()
+                    is_new_event = True
 
     if not event:
         # Check if caller already has an event with matching name
-        if user.is_machine:
+        if getattr(user, "is_platform", False):
+            event = (
+                db.query(models.Event).filter(models.Event.name == event_name).first()
+            )
+        elif user.is_machine:
             event = (
                 db.query(models.Event)
                 .filter(
@@ -1305,6 +1414,19 @@ async def import_schedule(
                 .first()
             )
 
+    if not event and user.is_machine:
+        if not getattr(user, "is_platform", False) and len(user.event_ids) == 1:
+            event = (
+                db.query(models.Event)
+                .filter(models.Event.id == user.event_ids[0])
+                .first()
+            )
+        elif len(user.event_ids) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ambiguous event target: machine client has access to multiple events. Please provide an explicit event identifier.",
+            )
+
     if not event:
         created_by = user.user_id if not user.is_machine else None
         event = models.Event(name=event_name, created_by_user_id=created_by)
@@ -1312,8 +1434,8 @@ async def import_schedule(
         db.flush()
         is_new_event = True
 
-    # Ensure machine client has access to this newly created event
-    if is_new_event and user.is_machine:
+    # Ensure non-platform machine client has access to this newly created event
+    if is_new_event and user.is_machine and not getattr(user, "is_platform", False):
         if event.id not in user.event_ids:
             user.event_ids.append(event.id)
         if user.client_id:
@@ -1327,25 +1449,56 @@ async def import_schedule(
                     set((client_record.event_ids or []) + [event.id])
                 )
 
-    created_count = 0
-    for v_talk in validated_talks:
-        existing = (
-            db.query(models.Talk)
-            .filter(
-                models.Talk.event_id == event.id,
-                models.Talk.title == v_talk["title"],
-                models.Talk.start == v_talk["start"],
+    imported_count = 0
+    for v_talk in deduped_talks:
+        ext_id = v_talk.get("external_id")
+        existing = None
+        if ext_id:
+            existing = (
+                db.query(models.Talk)
+                .filter(
+                    models.Talk.event_id == event.id,
+                    models.Talk.external_id == ext_id,
+                )
+                .first()
             )
-            .first()
-        )
+            if not existing:
+                existing = (
+                    db.query(models.Talk)
+                    .filter(
+                        models.Talk.event_id == event.id,
+                        models.Talk.external_id.is_(None),
+                        models.Talk.title == v_talk["title"],
+                        models.Talk.start == v_talk["start"],
+                    )
+                    .first()
+                )
+                if existing:
+                    existing.external_id = ext_id
+        else:
+            existing = (
+                db.query(models.Talk)
+                .filter(
+                    models.Talk.event_id == event.id,
+                    models.Talk.title == v_talk["title"],
+                    models.Talk.start == v_talk["start"],
+                )
+                .first()
+            )
+
         if existing:
+            existing.title = v_talk["title"]
             existing.room = v_talk["room"]
+            existing.start = v_talk["start"]
             existing.end = v_talk["end"]
-            created_count += 1
+            if ext_id and not existing.external_id:
+                existing.external_id = ext_id
+            imported_count += 1
             continue
 
         talk = models.Talk(
             event_id=event.id,
+            external_id=ext_id,
             title=v_talk["title"],
             room=v_talk["room"],
             start=v_talk["start"],
@@ -1353,55 +1506,76 @@ async def import_schedule(
             status="waiting_for_files",
         )
         db.add(talk)
-        created_count += 1
+        imported_count += 1
 
     db.commit()
     return {
         "status": "ok",
         "event_id": event.id,
         "event_name": event.name,
-        "imported_count": created_count,
+        "imported_count": imported_count,
+        "source": event.source,
+        "external_id": event.external_id,
     }
 
 
 @router.post(
-    "/{talk_id}/sso-token",
+    "/{talk_identifier}/sso-token",
     response_model=schemas.SSOTokenResponse,
     status_code=status.HTTP_200_OK,
 )
 def create_talk_sso_token(
-    talk_id: int,
+    talk_identifier: str,
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
+    payload: schemas.TalkSSOTokenRequest | None = None,
 ):
     """
     Issues a short-lived, talk-scoped SSO token carrying role=speaker.
+    Resolves talk by integer ID or external_id.
     Requires caller to be authenticated via X-API-Key only.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = None
+    if talk_identifier.isdigit():
+        talk = (
+            db.query(models.Talk).filter(models.Talk.id == int(talk_identifier)).first()
+        )
+    if not talk:
+        talk = (
+            db.query(models.Talk)
+            .filter(models.Talk.external_id == talk_identifier)
+            .first()
+        )
     if not talk:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Talk not found",
         )
-    if talk.event_id not in (client.event_ids or []):
+    if not getattr(client, "is_platform", False) and talk.event_id not in (
+        client.event_ids or []
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this talk",
         )
 
+    target_email = payload.email if payload else None
+    target_display_name = payload.display_name if payload else None
+
     token = create_sso_token(
         scope_type="talk",
-        scope_id=talk_id,
+        scope_id=talk.id,
         role="speaker",
         expires_in_seconds=settings.sso_token_expire_seconds,
+        email=target_email,
+        display_name=target_display_name,
     )
     return schemas.SSOTokenResponse(
         token=token,
         token_type="bearer",
         scope_type="talk",
-        scope_id=talk_id,
+        scope_id=talk.id,
         role="speaker",
         expires_in_seconds=settings.sso_token_expire_seconds,
-        url=f"/studio/talks/{talk_id}?sso_token={token}",
+        url=f"/studio/talks/{talk.id}?sso_token={token}",
     )
