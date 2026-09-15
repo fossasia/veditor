@@ -11,11 +11,11 @@
   {% elif status == 'detecting' %}
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
   {% elif status in ['pending_approval', 'pending_bounds'] %}
-    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review (Gate 1)</span>
+    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>
   {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
   {% elif status == 'preview' %}
-    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready (Gate 2)</span>
+    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>
   {% elif status == 'needs_work' %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
   {% elif status == 'done' %}

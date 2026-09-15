@@ -91,15 +91,25 @@ let isPlayingCut = false;
 let currentWaveformPeaks = [];
 let waveformAbortController = null;
 
+const initShellBounds = getStudioShell();
+if (initShellBounds) {
+  const initCutStart = parseFloat(initShellBounds.dataset.cutStart);
+  const initCutEnd = parseFloat(initShellBounds.dataset.cutEnd);
+  if (!isNaN(initCutStart) && initCutStart >= 0) inPointSec = initCutStart;
+  if (!isNaN(initCutEnd) && initCutEnd > inPointSec) outPointSec = initCutEnd;
+}
+
 // ── Timecode Format & Parse ─────────────────────────────────────
 function formatTimecode(t) {
   if (!isFinite(t) || isNaN(t) || t < 0) return '00:00:00.00';
-  const h  = Math.floor(t / 3600);
-  const m  = Math.floor((t % 3600) / 60);
-  const s  = Math.floor(t % 60);
-  const ff = Math.floor((t % 1) * 100);
+  const totalCs = Math.round(t * 100);
+  const cs = totalCs % 100;
+  const totalS = Math.floor(totalCs / 100);
+  const s = totalS % 60;
+  const m = Math.floor(totalS / 60) % 60;
+  const h = Math.floor(totalS / 3600);
   return [h, m, s].map(v => String(v).padStart(2, '0')).join(':') +
-    '.' + String(ff).padStart(2, '0');
+    '.' + String(cs).padStart(2, '0');
 }
 
 function parseTimecode(str) {
@@ -339,6 +349,15 @@ function updateCutMarkersUI() {
   if (inputInPoint)  inputInPoint.value  = formatTimecode(inPointSec);
   if (inputOutPoint) inputOutPoint.value = formatTimecode(outPointSec);
 
+  const reviewIn = document.getElementById('review-in-point');
+  const reviewOut = document.getElementById('review-out-point');
+  const reviewDur = document.getElementById('review-duration');
+  if (reviewIn) reviewIn.textContent = formatTimecode(inPointSec);
+  if (reviewOut) reviewOut.textContent = formatTimecode(outPointSec);
+  if (reviewDur) {
+    const diff = Math.max(0, outPointSec - inPointSec);
+    reviewDur.textContent = formatTimecode(diff);
+  }
   const cutDurationBadge = document.getElementById('cut-duration-badge');
   if (cutDurationBadge) {
     const cutDuration = Math.max(0, outPointSec - inPointSec);
@@ -510,8 +529,25 @@ if (video) {
     isPlayingCut = false;
   });
   video.addEventListener('loadedmetadata', () => {
-    outPointSec = video.duration || 10;
-    inPointSec = 0;
+    if (scrubber) scrubber.max = 1000;
+    const dur = video.duration || 10;
+    const shell = getStudioShell();
+    const activeRow = document.querySelector(`.media-asset-row[data-asset-url="${video.src}"]`);
+    const isRaw = (video.src && video.src.includes('/raw/')) || activeRow?.dataset.assetCategory === 'raw';
+
+    if (isRaw) {
+      const rawStart = shell && shell.dataset.cutStart ? parseFloat(shell.dataset.cutStart) : NaN;
+      const rawEnd = shell && shell.dataset.cutEnd ? parseFloat(shell.dataset.cutEnd) : NaN;
+      inPointSec = (!isNaN(rawStart) && rawStart >= 0) ? rawStart : 0;
+      outPointSec = (!isNaN(rawEnd) && rawEnd > inPointSec) ? rawEnd : dur;
+    } else {
+      inPointSec = 0;
+      outPointSec = dur;
+    }
+
+    inPointSec = Math.max(0, Math.min(inPointSec, dur > 0.1 ? dur - 0.1 : 0));
+    outPointSec = Math.min(dur, Math.max(outPointSec, inPointSec + 0.1));
+
     updateTimecode();
     updateTimelineTicks();
     updateCutMarkersUI();
@@ -633,21 +669,52 @@ window.approveTalk = async function(id) {
     if (talkStatus === 'pending_approval') {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
-      const cutStart = formatTimecode(inPointSec);
-      const cutEnd = formatTimecode(outPointSec);
-      await postAPI(`/talks/${id}/cut`, { cut_start: cutStart, cut_end: cutEnd });
+      const dur = video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : (outPointSec || 10);
+      const clampedIn = Math.max(0, Math.min(inPointSec, dur > 0.1 ? dur - 0.1 : 0));
+      const clampedOut = Math.min(dur, Math.max(outPointSec, clampedIn + 0.1));
+      const cutStart = formatTimecode(clampedIn);
+      const cutEnd = formatTimecode(clampedOut);
+      const cutPayload = { cut_start: cutStart, cut_end: cutEnd };
+      if (notes) cutPayload.note = notes;
+      await postAPI(`/talks/${id}/cut`, cutPayload);
     } else if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'approve', note: notes || 'Approved in review studio' });
     } else if (talkStatus === 'pending_intro_outro') {
-      const includeIntro = document.getElementById('check-include-intro') ? document.getElementById('check-include-intro').checked : true;
-      const includeOutro = document.getElementById('check-include-outro') ? document.getElementById('check-include-outro').checked : true;
+      const includeIntro = document.getElementById('check-include-intro') ? document.getElementById('check-include-intro').checked : false;
+      const includeOutro = document.getElementById('check-include-outro') ? document.getElementById('check-include-outro').checked : false;
+      const introSource = document.querySelector('input[name="intro_source"]:checked')?.value || 'generated';
+      const outroSource = document.querySelector('input[name="outro_source"]:checked')?.value || 'generated';
+      let customIntroPath = document.getElementById('custom-intro-path')?.value?.trim() || null;
+      let customOutroPath = document.getElementById('custom-outro-path')?.value?.trim() || null;
+
+      async function uploadCustomBumper(type, pathVal) {
+        const fileInput = document.getElementById(`custom-${type}-file`);
+        if (!fileInput?.files?.[0] || (pathVal && pathVal.startsWith('/'))) return pathVal;
+        const fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+        fd.append('kind', type);
+        const res = await (window.authFetch || fetch)(`/talks/${id}/bumpers/upload`, {
+          method: 'POST',
+          body: fd,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Failed to upload custom ${type} bumper`);
+        }
+        return (await res.json()).path;
+      }
+
+      if (includeIntro && introSource === 'custom') customIntroPath = await uploadCustomBumper('intro', customIntroPath);
+      if (includeOutro && outroSource === 'custom') customOutroPath = await uploadCustomBumper('outro', customOutroPath);
+
       await postAPI(`/talks/${id}/assemble`, {
         include_intro: includeIntro,
         include_outro: includeOutro,
-        intro_source: 'generated',
-        outro_source: 'generated',
+        intro_source: introSource,
+        outro_source: outroSource,
+        custom_intro_path: (includeIntro && introSource === 'custom') ? customIntroPath : null,
+        custom_outro_path: (includeOutro && outroSource === 'custom') ? customOutroPath : null,
       });
-
     } else {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     }
@@ -759,101 +826,136 @@ window.handleVideoFileUpload = async function(e, talkId) {
   }
 };
 
-// ── Real-time Recent Jobs Polling & Dynamic Rendering ─────────────
-function renderRecentJobs(jobs) {
-  const container = document.getElementById('jobs-container');
-  const empty = document.getElementById('jobs-empty');
-  if (!jobs || jobs.length === 0) {
-    if (container) {
-      container.textContent = '';
-      container.style.display = 'none';
-    }
-    if (empty) empty.style.display = 'block';
-    return;
+
+
+// ── Collapsible Right Sidebar ────────────────────────────────────
+function initRightPanelCollapse() {
+  const shell = getStudioShell();
+  const btnToggle = document.getElementById('btn-toggle-right-panel');
+  const btnExpand = document.getElementById('btn-expand-right-panel');
+
+  function setCollapsed(collapsed, shiftFocus = false) {
+    if (!shell) return;
+    shell.classList.toggle('right-panel-collapsed', collapsed);
+    if (btnToggle) btnToggle.setAttribute('aria-expanded', String(!collapsed));
+    if (btnExpand) btnExpand.setAttribute('aria-expanded', String(!collapsed));
+    if (shiftFocus) (collapsed ? btnExpand : btnToggle)?.focus();
+    try {
+      localStorage.setItem('veditor_right_panel_collapsed', String(collapsed));
+    } catch (_) {}
   }
 
-  if (empty) empty.style.display = 'none';
-  if (!container) return;
+  try {
+    const isCollapsed = localStorage.getItem('veditor_right_panel_collapsed') === 'true';
+    if (isCollapsed) setCollapsed(true, false);
+  } catch (_) {}
 
-  container.textContent = '';
-  container.style.display = 'flex';
+  if (btnToggle) {
+    btnToggle.addEventListener('click', () => setCollapsed(true, true));
+  }
+  if (btnExpand) {
+    btnExpand.addEventListener('click', () => setCollapsed(false, true));
+  }
+}
 
-  jobs.forEach(job => {
-    const isRunning = job.status === 'running';
-    const isDone = job.status === 'done' || job.status === 'success';
-    const isFailed = job.status === 'failed';
-    const badgeClass = isDone ? 'badge-done' : (isRunning ? 'badge-processing' : (isFailed ? 'badge-danger' : 'badge-waiting'));
-
-    const card = document.createElement('div');
-    card.className = 'job-card';
-    if (job.id) card.dataset.jobId = String(job.id);
-
-    const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
-
-    const kindSpan = document.createElement('span');
-    kindSpan.style.cssText = 'font-family:var(--v-font-mono);font-weight:600;';
-    kindSpan.textContent = job.kind || '';
-
-    const badgeGroup = document.createElement('div');
-    badgeGroup.style.cssText = 'display:flex;align-items:center;gap:5px;';
-
-    if (job.progress_pct !== null && job.progress_pct !== undefined && isRunning) {
-      const progressBadge = document.createElement('span');
-      progressBadge.className = 'badge badge-info';
-      progressBadge.style.cssText = 'font-size:0.65rem;padding:1px 5px;';
-      progressBadge.textContent = `${Math.round(job.progress_pct)}%`;
-      badgeGroup.appendChild(progressBadge);
+// ── Bumper Studio Controls ───────────────────────────────────────
+function initBumperStudio() {
+  ['intro', 'outro'].forEach(type => {
+    const toggle = document.getElementById(`check-include-${type}`);
+    const wrap = document.getElementById(`${type}-options-wrap`);
+    if (toggle && wrap) {
+      toggle.addEventListener('change', () => wrap.classList.toggle('is-hidden', !toggle.checked));
     }
 
-    const statusBadge = document.createElement('span');
-    statusBadge.className = `badge ${badgeClass}`;
-    statusBadge.style.cssText = 'font-size:0.65rem;padding:1px 5px;';
-    if (isRunning) {
-      const spinner = document.createElement('span');
-      spinner.className = 'spinner spinner-sm';
-      statusBadge.appendChild(spinner);
-    }
-    statusBadge.appendChild(document.createTextNode(job.status || ''));
-    badgeGroup.appendChild(statusBadge);
+    const radios = document.querySelectorAll(`input[name="${type}_source"]`);
+    const customWrap = document.getElementById(`${type}-custom-wrap`);
+    const file = document.getElementById(`custom-${type}-file`);
+    const path = document.getElementById(`custom-${type}-path`);
+    const dropzone = document.getElementById(`${type}-dropzone`);
+    const fileName = document.getElementById(`${type}-file-name`);
+    let currentUploadGen = 0;
 
-    header.appendChild(kindSpan);
-    header.appendChild(badgeGroup);
-    card.appendChild(header);
+    radios.forEach(r => {
+      r.addEventListener('change', () => {
+        radios.forEach(rad => rad.closest('.bumper-segment')?.classList.toggle('is-active', rad.checked));
+        if (customWrap) customWrap.classList.toggle('is-visible', r.value === 'custom' && r.checked);
+      });
+    });
 
-    if (isRunning && job.progress_pct !== null && job.progress_pct !== undefined) {
-      const track = document.createElement('div');
-      track.className = 'job-progress-track';
-      const fill = document.createElement('div');
-      fill.className = 'job-progress-fill animated';
-      fill.style.width = `${Math.min(100, Math.max(0, job.progress_pct))}%`;
-      track.appendChild(fill);
-      card.appendChild(track);
-    }
-
-    if (job.started_at) {
-      const d = new Date(job.started_at);
-      const timeStr = !isNaN(d.getTime()) ? `${d.toISOString().slice(11, 19)} UTC` : '';
-      const meta = document.createElement('div');
-      meta.className = 'job-timing-meta';
-
-      const startedSpan = document.createElement('span');
-      startedSpan.textContent = `Started ${timeStr}`;
-      meta.appendChild(startedSpan);
-
-      if (isRunning && job.estimated_remaining !== null && job.estimated_remaining !== undefined) {
-        const remSpan = document.createElement('span');
-        remSpan.textContent = `~${Math.round(job.estimated_remaining)}s remaining`;
-        meta.appendChild(remSpan);
-      } else if (job.elapsed_time !== null && job.elapsed_time !== undefined) {
-        const elSpan = document.createElement('span');
-        elSpan.textContent = `${Math.round(job.elapsed_time)}s elapsed`;
-        meta.appendChild(elSpan);
+    async function handleSelectedFile(selected) {
+      if (!selected) return;
+      const uploadGen = ++currentUploadGen;
+      if (fileName) {
+        fileName.textContent = `${selected.name} (Uploading...)`;
+        fileName.classList.remove('is-ready');
       }
-      card.appendChild(meta);
+      if (path) path.value = selected.name;
+      try {
+        const fd = new FormData();
+        fd.append('file', selected);
+        fd.append('kind', type);
+        const res = await (window.authFetch || fetch)(`/talks/${getTalkId()}/bumpers/upload`, {
+          method: 'POST',
+          body: fd,
+        });
+        if (uploadGen !== currentUploadGen) return;
+        if (res.ok) {
+          const data = await res.json();
+          if (uploadGen !== currentUploadGen) return;
+          if (data.path) {
+            if (path) path.value = data.path;
+            if (fileName) {
+              fileName.textContent = `${selected.name} ✓`;
+              fileName.classList.add('is-ready');
+            }
+          }
+        }
+      } catch (_) {
+        if (uploadGen === currentUploadGen && fileName) {
+          fileName.textContent = selected.name;
+        }
+      }
     }
 
-    container.appendChild(card);
+    if (file) {
+      file.addEventListener('change', () => {
+        const selected = file.files?.[0];
+        if (selected) handleSelectedFile(selected);
+      });
+    }
+
+    if (dropzone) {
+      ['dragenter', 'dragover'].forEach(name => {
+        dropzone.addEventListener(name, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.add('drag-over');
+        });
+      });
+      ['dragleave', 'drop'].forEach(name => {
+        dropzone.addEventListener(name, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropzone.classList.remove('drag-over');
+        });
+      });
+      dropzone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const dropped = dt?.files?.[0];
+        if (dropped) {
+          if (file) {
+            try {
+              file.files = dt.files;
+            } catch (_) {}
+          }
+          handleSelectedFile(dropped);
+        }
+      });
+    }
+
+    if (path?.value && fileName && path.value.trim() !== '') {
+      fileName.classList.add('is-ready');
+    }
   });
 }
 
@@ -901,6 +1003,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initInitialVideo();
   initWaveformListeners();
   updateCutMarkersUI();
+  initRightPanelCollapse();
+  initBumperStudio();
   pollStudioJobs();
   startStudioPolling();
 
@@ -953,11 +1057,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const actionBtns = document.getElementById('action-btns');
   if (actionBtns) {
     actionBtns.addEventListener('click', (e) => {
-      const uploadBtn = e.target.closest('#btn-upload-recording');
-      if (uploadBtn && videoInput) {
-        videoInput.click();
-        return;
-      }
       const approveBtn = e.target.closest('#btn-approve');
       if (approveBtn) {
         window.approveTalk(getTalkId());
@@ -1010,4 +1109,3 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3000);
   }
 });
-

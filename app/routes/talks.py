@@ -12,6 +12,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -36,6 +37,7 @@ from app.db import get_db
 from app.ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
+    get_bumper_staging_dir,
     stage_custom_clip,
     stage_recording,
 )
@@ -516,6 +518,15 @@ def submit_cut_bounds(
     talk.cut_start = cut_start_s
     talk.cut_end = cut_end_s
     advance(talk, "cutting")
+    if payload.note:
+        user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
+        review = models.Review(
+            talk_id=talk.id,
+            decision="cut",
+            note=payload.note,
+            user_id=user_id,
+        )
+        db.add(review)
     db.commit()
     db.refresh(talk)
 
@@ -529,6 +540,61 @@ def submit_cut_bounds(
     _dispatch_talk_cut_webhook(talk, user, db)
 
     return schemas.TalkRead.model_validate(talk)
+
+
+@router.post(
+    "/{talk_id}/bumpers/upload",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_bumper_file(
+    talk_id: int,
+    file: Annotated[UploadFile, File()],
+    kind: Annotated[str, Form()] = "intro",
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))] = None,
+    db: Annotated[Session, Depends(get_db)] = None,
+):
+    """Upload a custom bumper and return an opaque key understood by assembly."""
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
+        )
+    check_event_access(talk.event_id, user, db)
+
+    if kind not in ("intro", "outro"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bumper kind must be 'intro' or 'outro'",
+        )
+
+    staging_dir = get_bumper_staging_dir()
+    ext = Path(file.filename or "bumper.mp4").suffix or ".mp4"
+    staged_path = (
+        staging_dir / f"bumper_{talk_id}_{kind}_{uuid.uuid4().hex}{ext}"
+    ).resolve()
+
+    max_size = settings.max_bumper_upload_size_bytes
+    total_bytes = 0
+    try:
+        # storage-boundary-exempt: bumper staging upload
+        with open(staged_path, "wb") as f_out:  # noqa: ASYNC230
+            while chunk := await file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > max_size:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"Bumper file exceeds maximum allowed size of {max_size} bytes",
+                    )
+                f_out.write(chunk)
+    except Exception:
+        # storage-boundary-exempt: bumper staging cleanup
+        staged_path.unlink(missing_ok=True)
+        raise
+
+    return {
+        "path": f"bumpers/{staged_path.name}",
+        "filename": file.filename,
+    }
 
 
 @router.post(

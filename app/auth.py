@@ -57,6 +57,14 @@ def hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
+def _normalize_auth_value(value: str | None) -> str | None:
+    """Normalizes user-controlled auth values without treating empty cookies as credentials."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def lock_active_admins(session: Session) -> list[int]:
     """Locks active administrator rows in ascending ID order and returns their IDs."""
     rows = (
@@ -106,11 +114,39 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
         )
 
 
+def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
+    if not isinstance(raw_key, str) or not raw_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    hashed_key = hash_api_key(raw_key)
+    client = (
+        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    )
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return CurrentUser(
+        user_id=None,
+        client_id=client.id,
+        email=None,
+        role="admin",
+        source="api_key",
+        event_ids=list(client.event_ids or []),
+    )
+
+
 def get_current_user(
     request: Request = None,
     db: Annotated[Session, Depends(get_db)] = None,
     api_key: Annotated[str | None, Security(api_key_header)] = None,
     cookie_token: Annotated[str | None, Cookie(alias="veditor_session")] = None,
+    cookie_api_key: Annotated[str | None, Cookie(alias="veditor_api_key")] = None,
     bearer_creds: Annotated[
         HTTPAuthorizationCredentials | None, Security(bearer_security)
     ] = None,
@@ -120,7 +156,8 @@ def get_current_user(
     Checks credentials in strict order:
     1. Machine client header (X-API-Key)
     2. Session cookie (veditor_session)
-    3. Authorization header (Authorization: Bearer <token>)
+    3. Machine client cookie fallback (veditor_api_key)
+    4. Authorization header (Authorization: Bearer <token>)
 
     Raises HTTP 401 Unauthorized if no credentials are present, or if
     provided credentials are invalid, expired, or deactivated.
@@ -143,60 +180,17 @@ def get_current_user(
                 event_ids=list(client.event_ids or []),
             )
 
-    req_headers = (
-        request.headers if request is not None and hasattr(request, "headers") else {}
-    )
-    req_cookies = (
-        request.cookies if request is not None and hasattr(request, "cookies") else {}
-    )
+    req_headers = getattr(request, "headers", {}) or {}
+    req_cookies = getattr(request, "cookies", {}) or {}
 
-    # 1. Machine client header (X-API-Key)
-    has_api_key = (
-        api_key is not None
-        or (
-            isinstance(req_headers, dict)
-            and ("X-API-Key" in req_headers or "x-api-key" in req_headers)
-        )
-        or (
-            hasattr(req_headers, "get")
-            and (
-                req_headers.get("X-API-Key") is not None
-                or req_headers.get("x-api-key") is not None
-            )
-        )
+    # 1. Explicit machine client header (X-API-Key)
+    header_key = _normalize_auth_value(
+        req_headers.get("X-API-Key") or req_headers.get("x-api-key")
     )
-    if has_api_key:
-        raw_key = (
-            api_key
-            if api_key is not None
-            else (req_headers.get("X-API-Key") or req_headers.get("x-api-key"))
-        )
-        if not isinstance(raw_key, str) or not raw_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        hashed_key = hash_api_key(raw_key)
-        client = (
-            db.query(models.Client)
-            .filter(models.Client.hashed_key == hashed_key)
-            .first()
-        )
-        if not client:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return CurrentUser(
-            user_id=None,
-            client_id=client.id,
-            email=None,
-            role="admin",
-            source="api_key",
-            event_ids=list(client.event_ids or []),
-        )
+    provided_api_key = _normalize_auth_value(api_key)
+    has_header_api_key = header_key is not None or provided_api_key is not None
+    if has_header_api_key:
+        return _authenticate_api_key(provided_api_key or header_key, db)
 
     # 2. SSO header (X-SSO-Token)
     raw_sso = None
@@ -204,16 +198,9 @@ def get_current_user(
         candidate_header = req_headers.get("X-SSO-Token") or req_headers.get(
             "x-sso-token"
         )
-        if isinstance(candidate_header, str):
-            raw_sso = candidate_header
+        raw_sso = _normalize_auth_value(candidate_header)
 
     if raw_sso is not None:
-        if not raw_sso:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
@@ -237,74 +224,94 @@ def get_current_user(
     # 3. Session cookie (veditor_session)
     has_cookie = cookie_token is not None or "veditor_session" in req_cookies
     if has_cookie:
-        raw_cookie = (
+        raw_cookie = _normalize_auth_value(
             cookie_token
             if cookie_token is not None
             else req_cookies.get("veditor_session")
         )
-        if not raw_cookie:
+        if raw_cookie:
+            # First attempt decoding as an SSO session token
+            sso_payload = decode_sso_token(raw_cookie)
+            if sso_payload:
+                return CurrentUser(
+                    user_id=None,
+                    client_id=None,
+                    email=None,
+                    role=sso_payload["role"],
+                    source="sso",
+                    event_ids=[sso_payload["scope_id"]]
+                    if sso_payload.get("scope_type") == "event"
+                    else [],
+                    scope_type=sso_payload.get("scope_type"),
+                    scope_id=sso_payload.get("scope_id"),
+                )
+
+            payload = decode_session_token(raw_cookie)
+            if payload:
+                user = (
+                    db.query(models.User)
+                    .filter(models.User.id == payload["user_id"])
+                    .first()
+                )
+                if not user or not user.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User account not found or inactive",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                return CurrentUser(
+                    user_id=user.id,
+                    email=user.email,
+                    role=user.role,
+                    source="cookie",
+                    event_ids=[],
+                )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired session token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        # First attempt decoding as an SSO session token
-        sso_payload = decode_sso_token(raw_cookie)
-        if sso_payload:
+
+    # 4. Machine client cookie fallback (veditor_api_key)
+    cookie_api = _normalize_auth_value(cookie_api_key)
+    if cookie_api is None:
+        cookie_api = _normalize_auth_value(req_cookies.get("veditor_api_key"))
+    if cookie_api:
+        client = (
+            db.query(models.Client)
+            .filter(models.Client.hashed_key == hash_api_key(cookie_api))
+            .first()
+        )
+        if client:
             return CurrentUser(
                 user_id=None,
-                client_id=None,
+                client_id=client.id,
                 email=None,
-                role=sso_payload["role"],
-                source="sso",
-                event_ids=[sso_payload["scope_id"]]
-                if sso_payload.get("scope_type") == "event"
-                else [],
-                scope_type=sso_payload.get("scope_type"),
-                scope_id=sso_payload.get("scope_id"),
+                role="admin",
+                source="api_key",
+                event_ids=list(client.event_ids or []),
             )
+        # Ignore stale machine cookies so a later bearer credential can be used.
 
-        payload = decode_session_token(raw_cookie)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired session token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        user = (
-            db.query(models.User).filter(models.User.id == payload["user_id"]).first()
-        )
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User account not found or inactive",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return CurrentUser(
-            user_id=user.id,
-            email=user.email,
-            role=user.role,
-            source="cookie",
-            event_ids=[],
-        )
-
-    # 4. Authorization header (Authorization: Bearer <token>)
+    # 5. Authorization header (Authorization: Bearer <token>)
     auth_header = req_headers.get("Authorization") or req_headers.get("authorization")
     has_auth_header = auth_header is not None or bearer_creds is not None
     if has_auth_header:
         token: str | None = None
         if bearer_creds is not None:
-            token = bearer_creds.credentials
+            token = _normalize_auth_value(bearer_creds.credentials)
         elif auth_header:
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == "bearer":
-                token = parts[1]
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authorization header format",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+            token = _normalize_auth_value(auth_header)
+            if token:
+                parts = token.split()
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    token = parts[1]
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid authorization header format",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
         if not token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

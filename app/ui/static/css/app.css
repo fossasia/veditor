@@ -712,6 +712,7 @@ td {
   gap: 0;
   height: calc(100vh - var(--v-topbar-height));
   overflow: hidden;
+  transition: grid-template-columns 0.25s ease;
 }
 
 .studio-panel {
