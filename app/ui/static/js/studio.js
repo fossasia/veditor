@@ -740,10 +740,27 @@ window.approveTalk = async function(id) {
 };
 
 
-window.abortTalk = async function(id) {
+window.abortTalk = function(id) {
   if (!id || typeof id !== 'number') id = getTalkId();
-  if (!confirm('Abort this talk? This will throw away the recording.')) return;
-  const btn = document.getElementById('btn-abort');
+  const modal = document.getElementById('modal-abort');
+  if (modal) {
+    modal.classList.add('active');
+    modal.dataset.talkId = id;
+  }
+};
+
+window.closeAbortModal = function() {
+  const modal = document.getElementById('modal-abort');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+};
+
+window.confirmAbortTalk = async function() {
+  const modal = document.getElementById('modal-abort');
+  if (!modal) return;
+  const id = modal.dataset.talkId;
+  const btn = document.getElementById('btn-confirm-abort');
   setBtnBusy(btn, true, 'Aborting...');
   try {
     await postAPI(`/talks/${id}/abort`);
@@ -751,6 +768,7 @@ window.abortTalk = async function(id) {
   } catch (err) {
     alert(`Abort failed: ${err.message}`);
     setBtnBusy(btn, false);
+    modal.classList.remove('active');
   }
 };
 
@@ -1111,6 +1129,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.addEventListener('click', (e) => {
+    if (e.target.closest('#btn-close-abort-modal') || e.target.closest('#btn-cancel-abort-modal')) {
+      window.closeAbortModal();
+      return;
+    }
+    if (e.target.closest('#btn-confirm-abort')) {
+      window.confirmAbortTalk();
+      return;
+    }
     const btn = e.target.closest('.btn-play-asset');
     if (!btn) return;
     const url = btn.getAttribute('data-asset-url') || btn.closest('.media-asset-row')?.getAttribute('data-asset-url');

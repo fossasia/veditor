@@ -279,14 +279,18 @@ body.is-studio-mode.is-speaker .main-content {
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 16px;
-  animation: modal-fade-in 0.15s ease-out;
+  visibility: hidden;
+  opacity: 0;
+}
+
+.modal-backdrop.active {
+  visibility: visible;
+  opacity: 1;
 }
 
 .modal-dialog {
@@ -297,8 +301,9 @@ body.is-studio-mode.is-speaker .main-content {
   width: 100%;
   max-width: 460px;
   overflow: hidden;
-  animation: modal-pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+
 
 .modal-header {
   padding: 16px 20px;
@@ -319,6 +324,12 @@ body.is-studio-mode.is-speaker .main-content {
   padding: 20px;
 }
 
+.modal-warning-text {
+  margin: 0;
+  color: var(--v-text-secondary);
+  font-size: 0.95rem;
+}
+
 .modal-footer {
   padding: 14px 20px;
   background: var(--v-bg-subtle);
@@ -327,16 +338,6 @@ body.is-studio-mode.is-speaker .main-content {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-}
-
-@keyframes modal-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes modal-pop-in {
-  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .page-body { padding: 24px 28px; flex: 1; }

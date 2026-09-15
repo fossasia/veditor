@@ -654,6 +654,26 @@
   </div>
 
 </div>
+
+<!-- Abort Confirm Modal -->
+<div id="modal-abort" class="modal-backdrop">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">Abort Talk</h3>
+      <button class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-abort-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-warning-text">
+        Are you sure you want to abort this talk? This will throw away the uploaded recording and clear all progress.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btn-cancel-abort-modal">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-abort">Yes, Abort Talk</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}
