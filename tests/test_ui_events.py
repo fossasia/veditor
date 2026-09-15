@@ -157,14 +157,14 @@ def test_post_events_success_organizer(client: TestClient, db_session):
 
     response = client.post(
         "/studio/events",
-        data={"name": "FOSSASIA Summit 2026"},
+        data={"name": "FOSSASIA Summit 2026 Organizer Post"},
         follow_redirects=False,
     )
     assert response.status_code == 303
 
     event = (
         db_session.query(models.Event)
-        .filter(models.Event.name == "FOSSASIA Summit 2026")
+        .filter(models.Event.name == "FOSSASIA Summit 2026 Organizer Post")
         .first()
     )
     assert event is not None
