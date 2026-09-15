@@ -2,7 +2,6 @@ import json
 import logging
 import math
 import tempfile
-import traceback
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -47,7 +46,6 @@ from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
 from app.tasks import (
     STAGE_CONFIG,
-    dispatch_assembly,
     job_cut,
     job_deliver_webhook,
     job_detect,
@@ -94,6 +92,8 @@ def create_or_update_talk(
     if talk:
         talk.room = payload.room
         talk.end = payload.end
+        if payload.speaker_email is not None:
+            talk.speaker_email = payload.speaker_email
         db.commit()
         db.refresh(talk)
         response.status_code = status.HTTP_200_OK
@@ -105,6 +105,7 @@ def create_or_update_talk(
         room=payload.room,
         start=payload.start,
         end=payload.end,
+        speaker_email=payload.speaker_email,
         status="waiting_for_files",
     )
     db.add(talk)
@@ -300,7 +301,7 @@ def approve_talk(
     if decision == "reject":
         advance(talk, "rejected")
     else:
-        advance(talk, "pending_bounds")
+        advance(talk, "pending_intro_outro")
 
     db.commit()
     db.refresh(talk)
@@ -471,15 +472,8 @@ def submit_cut_bounds(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
-    if user.source == "sso":
+    if not user.is_machine:
         check_talk_access(talk, user, db)
-    else:
-        if user.role not in ("organizer", "admin") and not user.is_machine:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operation requires minimum role 'organizer'",
-            )
-        check_event_access(talk.event_id, user, db)
 
     if talk.status != "pending_bounds":
         raise HTTPException(
@@ -637,18 +631,6 @@ def configure_assembly(
             detail=f"Cannot configure intro/outro for talk in status '{talk.status}'; talk must be in 'pending_intro_outro'",
         )
 
-    cut_keys = storage.list_keys(f"{talk.id}/cut/")
-    default_cut_key = f"{talk.id}/cut/cut.mp4"
-    if cut_keys:
-        cut_key = cut_keys[0]
-    elif storage.exists(default_cut_key):
-        cut_key = default_cut_key
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No cut recording found for talk",
-        )
-
     # Validate and stage custom clips before any DB mutation
     if payload.include_intro and payload.intro_source == "custom":
         try:
@@ -683,32 +665,9 @@ def configure_assembly(
         else None
     )
 
-    advance(talk, "assembling")
+    advance(talk, "pending_bounds")
     db.commit()
     db.refresh(talk)
-
-    try:
-        dispatch_assembly(talk.id, cut_key)
-    except Exception:
-        advance(talk, "broken")
-        log_key = f"{talk.id}/logs/assembly.log"
-        log_content = traceback.format_exc()
-        try:
-            storage.put(log_key, log_content.encode("utf-8"))
-        except Exception as log_err:  # noqa: BLE001
-            logger.warning(
-                "Failed to persist dispatch failure log to storage: %s", log_err
-            )
-            log_key = None
-        job = models.Job(
-            talk_id=talk.id,
-            kind="assembly",
-            status="failed",
-            log_path=log_key,
-        )
-        db.add(job)
-        db.commit()
-        raise
 
     return schemas.TalkRead.model_validate(talk)
 
@@ -877,6 +836,8 @@ def update_talk(
         talk.start = payload.start
     if payload.end is not None:
         talk.end = payload.end
+    if payload.speaker_email is not None:
+        talk.speaker_email = payload.speaker_email if payload.speaker_email else None
 
     try:
         db.commit()
@@ -1203,6 +1164,12 @@ async def import_schedule(
             for day in conf.get("days", []):
                 for room_name, room_talks in day.get("rooms", {}).items():
                     for t in room_talks:
+                        speaker_email = t.get("speaker_email")
+                        if not speaker_email and isinstance(t.get("persons"), list):
+                            for p in t["persons"]:
+                                if isinstance(p, dict) and p.get("email"):
+                                    speaker_email = p["email"]
+                                    break
                         talks_to_create.append(
                             {
                                 "title": t.get("title", "Untitled Session"),
@@ -1210,6 +1177,7 @@ async def import_schedule(
                                 "start": t.get("date") or t.get("start"),
                                 "end": t.get("end"),
                                 "duration": t.get("duration"),
+                                "speaker_email": speaker_email,
                             }
                         )
         elif "talks" in data:
@@ -1305,6 +1273,7 @@ async def import_schedule(
                 "room": room,
                 "start": start_dt,
                 "end": end_dt,
+                "speaker_email": t_info.get("speaker_email"),
             }
         )
 
@@ -1407,6 +1376,8 @@ async def import_schedule(
         if existing:
             existing.room = v_talk["room"]
             existing.end = v_talk["end"]
+            if v_talk.get("speaker_email"):
+                existing.speaker_email = v_talk["speaker_email"]
             created_count += 1
             continue
 
@@ -1416,6 +1387,7 @@ async def import_schedule(
             room=v_talk["room"],
             start=v_talk["start"],
             end=v_talk["end"],
+            speaker_email=v_talk.get("speaker_email"),
             status="waiting_for_files",
         )
         db.add(talk)

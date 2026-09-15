@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates
+from app.tasks import dispatch_assembly
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,25 @@ def handle_approve(
     storage: StorageBackend | None = None,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
-    return _record_review_and_advance(
-        talk, payload, "pending_intro_outro", db, user_id=user_id
+    response = _record_review_and_advance(
+        talk, payload, "assembling", db, user_id=user_id
     )
+    if storage is not None:
+        cut_keys = storage.list_keys(f"{talk.id}/cut/")
+        default_cut_key = f"{talk.id}/cut/cut.mp4"
+        if cut_keys:
+            cut_key = cut_keys[0]
+        elif storage.exists(default_cut_key):
+            cut_key = default_cut_key
+        else:
+            cut_key = default_cut_key  # fallback
+        try:
+            dispatch_assembly(talk.id, cut_key)
+        except Exception as e:  # noqa: BLE001
+            talk.status = "broken"
+            db.commit()
+            logger.error("Failed to dispatch assembly for talk %s: %s", talk.id, e)
+    return response
 
 
 def handle_needs_work(
@@ -74,7 +91,7 @@ def handle_reject(
     talk.cut_start = None
     talk.cut_end = None
     response = _record_review_and_advance(
-        talk, payload, "rejected", db, user_id=user_id
+        talk, payload, "pending_bounds", db, user_id=user_id
     )
     if storage is not None:
         cleanup_intermediates(storage, talk.id)

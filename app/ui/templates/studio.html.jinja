@@ -240,7 +240,7 @@
 
       <div class="timeline-track" id="timeline-track">
         <canvas id="tl-waveform" class="tl-waveform" aria-hidden="true"></canvas>
-        {% if talk.status in ['pending_bounds', 'needs_work'] %}
+        {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
         <div class="tl-block tl-content" id="tl-content"></div>
         <div class="tl-marker" id="tl-start-marker" title="Drag Start Point (or press I)"></div>
         <div class="tl-marker end-marker" id="tl-end-marker" title="Drag End Point (or press O)"></div>
@@ -256,7 +256,7 @@
         <span class="tl-tick">—</span>
       </div>
 
-      {% if talk.status in ['pending_bounds', 'needs_work'] %}
+      {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
       <!-- In/Out Bounds Setting Controls -->
       <div class="timeline-inputs-bar">
         <div class="bounds-inputs-group">
@@ -315,14 +315,14 @@
           Review Actions
         </div>
 
-        {% if talk.status in ['pending_bounds', 'preview', 'needs_work'] %}
+        {% if talk.status in ['pending_bounds', 'preview', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
         <div class="review-notes-wrap">
           <label for="review-notes-input" class="review-notes-label">Reviewer Notes</label>
           <textarea id="review-notes-input" class="input-field" rows="2" placeholder="Optional note for organizer"></textarea>
         </div>
         {% endif %}
 
-        {% if talk.status in ['pending_bounds', 'needs_work'] %}
+        {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
         <div class="submission-timestamps-card" id="submission-timestamps-card">
           <div class="submission-timestamps-header">
             <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -368,29 +368,56 @@
               Reject Raw Video
             </button>
           {% elif talk.status == 'pending_bounds' %}
-            <button class="btn btn-primary w-full" id="btn-approve">
-              Submit Timestamps
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject / Abort
-            </button>
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Submit Timestamps
+              </div>
+            {% else %}
+              <button class="btn btn-primary w-full" id="btn-approve">
+                Submit Timestamps
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
           {% elif talk.status == 'needs_work' %}
-            <button class="btn btn-primary w-full" id="btn-approve">
-              Submit Timestamps
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject Talk
-            </button>
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Submit Revised Timestamps
+              </div>
+            {% else %}
+              <button class="btn btn-primary w-full" id="btn-approve">
+                Submit Timestamps
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
           {% elif talk.status == 'preview' %}
-            <button class="btn btn-success w-full" id="btn-approve">
-              Approve Preview
-            </button>
-            <button class="btn btn-warning w-full" id="btn-needs-work">
-              Request Changes (Needs Work)
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject Talk
-            </button>
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Review Preview
+              </div>
+            {% else %}
+              <button class="btn btn-success w-full" id="btn-approve">
+                Approve Preview
+              </button>
+              <button class="btn btn-warning w-full" id="btn-needs-work">
+                Request Changes (Needs Work)
+              </button>
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-reject">
+                Reset Talk to Raw
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
           {% elif talk.status == 'pending_intro_outro' %}
             {% if user and user.role in ['organizer', 'admin'] and not is_speaker %}
               <div class="bumper-studio-card">
@@ -476,11 +503,22 @@
                   </div>
                 </div>
               </div>
+              <!-- Speaker Assignment -->
+              <div class="bumper-studio-card" style="margin-top: 1rem;">
+                <div class="bumper-studio-title">SPEAKER HANDOFF</div>
+                <div class="bumper-group">
+                  <div class="bumper-group-header">
+                    <span class="bumper-group-title">Assign Speaker (Email)</span>
+                  </div>
+                  <input type="email" id="handoff-speaker-email" class="input-field" placeholder="speaker@example.com" value="{{ talk.speaker_email or '' }}" style="margin-top: 0.5rem;">
+                </div>
+              </div>
+
               <button class="btn btn-primary w-full" id="btn-approve">
-                Start Master Assembly & Transcode
+                Handoff to Speaker
               </button>
-              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-reject">
-                Reject / Abort
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
               </button>
             {% else %}
               <div class="badge badge-waiting badge-status-full">

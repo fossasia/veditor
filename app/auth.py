@@ -525,6 +525,14 @@ def check_talk_access(
     if user.role == "admin":
         return target_talk
 
+    if (
+        user.role == "speaker"
+        and target_talk.speaker_email
+        and user.email
+        and target_talk.speaker_email.lower() == user.email.lower()
+    ):
+        return target_talk
+
     event = (
         db.query(models.Event).filter(models.Event.id == target_talk.event_id).first()
     )

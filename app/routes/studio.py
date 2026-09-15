@@ -127,7 +127,13 @@ def _authorize_studio_talk(
                 detail=not_found_detail,
             )
         authorized = False
-        if user.role == "admin":
+        if (
+            user.role == "admin"
+            or user.role == "speaker"
+            and talk.speaker_email
+            and user.email
+            and talk.speaker_email.lower() == user.email.lower()
+        ):
             authorized = True
         else:
             event = (
@@ -211,8 +217,8 @@ ALL_STATUSES = [
 MILESTONES_DEF = [
     {
         "num": 1,
-        "title": "Upload & Detect",
-        "desc": "Receive recording and detect talk duration",
+        "title": "Upload & Setup",
+        "desc": "Receive recording, approve video, and setup workflow",
     },
     {
         "num": 2,
@@ -234,18 +240,18 @@ MILESTONES_DEF = [
 STAGE_MILESTONE_MAP = {
     "waiting_for_files": 0,
     "detecting": 0,
-    "pending_approval": 1,
+    "pending_approval": 0,
+    "pending_intro_outro": 0,
     "pending_bounds": 1,
-    "rejected": 1,
     "cutting": 2,
     "generating_previews": 2,
     "preview": 2,
     "needs_work": 2,
-    "pending_intro_outro": 3,
     "assembling": 3,
     "transcoding": 3,
     "uploading": 3,
     "done": 4,  # All milestones complete
+    "rejected": 1,
     "broken": 3,
 }
 
@@ -373,6 +379,10 @@ def dashboard(
             elif user.role == "admin":
                 if event_id is not None:
                     query = query.filter(models.Talk.event_id == event_id)
+            elif user.role == "speaker" and user.email:
+                query = query.filter(models.Talk.speaker_email == user.email)
+                if event_id is not None:
+                    query = query.filter(models.Talk.event_id == event_id)
             else:
                 query = query.filter(models.Talk.id == -1)
         elif client is not None:
@@ -410,6 +420,12 @@ def dashboard(
             )
         elif user.role == "admin":
             all_talks = db.query(models.Talk).all()
+        elif user.role == "speaker" and user.email:
+            all_talks = (
+                db.query(models.Talk)
+                .filter(models.Talk.speaker_email == user.email)
+                .all()
+            )
         else:
             all_talks = []
     elif client is not None:
@@ -727,6 +743,8 @@ def studio(
             "final_asset": final_asset,
             "preview_urls": preview_urls,
             "all_statuses": ALL_STATUSES,
+            "is_speaker": getattr(request.state, "user", None)
+            and request.state.user.role == "speaker",
         },
         headers={"Cache-Control": "no-store"},
     )

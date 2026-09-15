@@ -707,6 +707,16 @@ window.approveTalk = async function(id) {
       if (includeIntro && introSource === 'custom') customIntroPath = await uploadCustomBumper('intro', customIntroPath);
       if (includeOutro && outroSource === 'custom') customOutroPath = await uploadCustomBumper('outro', customOutroPath);
 
+      const speakerEmailInput = document.getElementById('handoff-speaker-email');
+      if (speakerEmailInput) {
+        const emailVal = speakerEmailInput.value.trim();
+        await (window.authFetch || fetch)(`/talks/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ speaker_email: emailVal })
+        });
+      }
+
       await postAPI(`/talks/${id}/assemble`, {
         include_intro: includeIntro,
         include_outro: includeOutro,
@@ -730,14 +740,29 @@ window.approveTalk = async function(id) {
 };
 
 
+window.abortTalk = async function(id) {
+  if (!id || typeof id !== 'number') id = getTalkId();
+  if (!confirm('Abort this talk? This will throw away the recording.')) return;
+  const btn = document.getElementById('btn-abort');
+  setBtnBusy(btn, true, 'Aborting...');
+  try {
+    await postAPI(`/talks/${id}/abort`);
+    location.reload();
+  } catch (err) {
+    alert(`Abort failed: ${err.message}`);
+    setBtnBusy(btn, false);
+  }
+};
+
 window.rejectTalk = async function(id) {
   if (!id || typeof id !== 'number') id = getTalkId();
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
-  if (!confirm('Reject this talk?')) return;
+  const talkStatus = getTalkStatus();
+  const msg = talkStatus === 'preview' ? 'Reset this talk to raw video?' : 'Reject this talk?';
+  if (!confirm(msg)) return;
   const btn = document.getElementById('btn-reject');
-  setBtnBusy(btn, true, 'Rejecting...');
+  setBtnBusy(btn, true, talkStatus === 'preview' ? 'Resetting...' : 'Rejecting...');
   try {
-    const talkStatus = getTalkStatus();
     if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'reject', note: notes || 'Rejected in review studio' });
     } else if (talkStatus === 'pending_approval') {
@@ -747,7 +772,7 @@ window.rejectTalk = async function(id) {
     }
     location.reload();
   } catch (err) {
-    alert(`Rejection failed: ${err.message}`);
+    alert(`Reset failed: ${err.message}`);
     setBtnBusy(btn, false);
   }
 };
@@ -1075,6 +1100,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const retryBtn = e.target.closest('#btn-retry');
       if (retryBtn) {
         window.retryTalk(getTalkId());
+        return;
+      }
+      const abortBtn = e.target.closest('#btn-abort');
+      if (abortBtn) {
+        window.abortTalk(getTalkId());
         return;
       }
     });

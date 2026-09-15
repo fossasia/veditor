@@ -98,6 +98,7 @@ class TalkBase(BaseModel):
     start: datetime
     end: datetime
     status: str = "waiting_for_files"
+    speaker_email: str | None = None
 
 
 class TalkCreate(TalkBase):
@@ -335,7 +336,7 @@ class UserRead(BaseModel):
 
 
 class UserPromoteRequest(BaseModel):
-    role: Literal["user", "organizer", "admin"]
+    role: Literal["user", "organizer", "speaker", "admin"]
 
 
 class SSOTokenResponse(BaseModel):
@@ -353,6 +354,7 @@ class TalkUpdate(BaseModel):
     room: str | None = None
     start: datetime | None = None
     end: datetime | None = None
+    speaker_email: str | None = None
 
 
 class BulkDeleteRequest(BaseModel):
