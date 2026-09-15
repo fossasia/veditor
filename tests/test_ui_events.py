@@ -60,16 +60,21 @@ def authenticate_client(client: TestClient, user: models.User):
 def test_get_events_unauthenticated(client: TestClient):
     response = client.get("/studio/events", follow_redirects=False)
     assert response.status_code == 302
-    assert response.headers["location"] == "/login"
+    assert response.headers["location"] == "/login?next=/studio/events"
 
 
 def test_get_events_forbidden_for_user_role(client: TestClient, db_session):
     user = create_user(db_session, "viewer@test.com", "user")
     authenticate_client(client, user)
 
-    response = client.get("/studio/events")
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Operation requires minimum role 'organizer'"
+    response = client.get("/studio/events", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/studio"
+
+    followed = client.get("/studio/events", follow_redirects=True)
+    assert followed.status_code == 200
+    assert "You do not have the permission to access that page" in followed.text
+    assert "alert alert-danger" in followed.text
 
 
 def test_get_events_organizer_empty(client: TestClient, db_session):
@@ -165,6 +170,7 @@ def test_post_events_success_organizer(client: TestClient, db_session):
     event = (
         db_session.query(models.Event)
         .filter(models.Event.name == "FOSSASIA Summit 2026")
+        .order_by(models.Event.id.desc())
         .first()
     )
     assert event is not None

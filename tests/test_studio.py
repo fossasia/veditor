@@ -212,9 +212,12 @@ def test_dashboard_page(client: TestClient, db_session):
         status="waiting_for_files",
     )
     db_session.add(talk)
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
     db_session.commit()
 
-    response = client.get("/studio")
+    response = client.get("/studio", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert response.headers.get("cache-control") == "no-store"
     assert "text/html" in response.headers.get("content-type", "")
@@ -246,10 +249,10 @@ def test_talk_studio_page(client: TestClient, db_session):
     db_session.add(client_model)
     db_session.commit()
 
-    # Unauthenticated returns 401 without query parameter guidance
-    unauth = client.get(f"/studio/talks/{talk.id}")
-    assert unauth.status_code == 401
-    assert "api_key query param" not in unauth.text
+    # Unauthenticated browser caller redirects to login with next param
+    unauth = client.get(f"/studio/talks/{talk.id}", follow_redirects=False)
+    assert unauth.status_code == 302
+    assert unauth.headers["location"] == f"/login?next=/studio/talks/{talk.id}"
 
     # Query param fallback is rejected (returns 401)
     query_param_res = client.get(f"/studio/talks/{talk.id}?api_key={api_key}")
@@ -349,8 +352,8 @@ def test_talk_studio_not_found(client: TestClient, db_session):
     db_session.add(client_model)
     db_session.commit()
 
-    # Unauthenticated returns 401
-    assert client.get("/studio/talks/999999").status_code == 401
+    # Unauthenticated browser caller redirects to login
+    assert client.get("/studio/talks/999999", follow_redirects=False).status_code == 302
 
     response = client.get("/studio/talks/999999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
@@ -838,7 +841,7 @@ def test_dashboard_and_studio_render_active_job_progress(
     db_session.commit()
 
     # 1. Dashboard should render the progress percentage badge and track
-    dash_res = client.get("/studio")
+    dash_res = client.get("/studio", headers={"X-API-Key": api_key})
     assert dash_res.status_code == 200
     assert "72%" in dash_res.text
     assert "job-progress-fill" in dash_res.text
@@ -1294,7 +1297,7 @@ def test_studio_mode_body_class(client: TestClient, db_session):
     assert 'id="sidebar-toggle-btn"' in res.text
 
     # Talks dashboard view
-    res_dash = client.get("/studio")
+    res_dash = client.get("/studio", headers={"X-API-Key": api_key})
     assert res_dash.status_code == 200
     assert "is-studio-mode" in res_dash.text
 

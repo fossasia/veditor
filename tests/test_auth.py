@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated
 from unittest.mock import MagicMock
 
@@ -5,7 +6,10 @@ import pytest
 from fastapi import HTTPException, status
 
 from app.auth import get_client, hash_api_key, lock_active_admins, verify_event_access
+from app.db import SessionLocal, get_db
+from app.main import app
 from app.models import Client, User
+from app.security import hash_password
 
 
 def test_hash_api_key():
@@ -621,3 +625,97 @@ def test_require_talk_access_success_and_unauthorized():
     )
     resp = client.get("/talks/10")
     assert resp.status_code == 403
+
+
+def test_login_routes_next_redirect_and_open_redirect_protection():
+    db = SessionLocal()
+    app.dependency_overrides[get_db] = lambda: db
+
+    try:
+        user = User(
+            email=f"next_test_{uuid.uuid4().hex[:6]}@example.com",
+            hashed_password=hash_password("Pass1234!"),
+            role="organizer",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        client = TestClient(app)
+
+        # 1. Login page passes next parameter to template context
+        resp_page = client.get("/login?next=/studio/events")
+        assert resp_page.status_code == 200
+        assert (
+            '<input type="hidden" name="next" value="/studio/events">' in resp_page.text
+        )
+
+        # 2. Login submit with next redirects to the specified route (HTTP 303)
+        resp_next = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "/studio/events",
+            },
+            follow_redirects=False,
+        )
+        assert resp_next.status_code == 303
+        assert resp_next.headers["location"] == "/studio/events"
+
+        # 3. Missing next parameter defaults to /studio
+        resp_default = client.post(
+            "/login",
+            data={"email": user.email, "password": "Pass1234!"},
+            follow_redirects=False,
+        )
+        assert resp_default.status_code == 303
+        assert resp_default.headers["location"] == "/studio"
+
+        # 4. Open-redirect prevention: external URL is rejected and safely defaults to /studio
+        resp_malicious_ext = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "https://attacker.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp_malicious_ext.status_code == 303
+        assert resp_malicious_ext.headers["location"] == "/studio"
+
+        # 5. Open-redirect prevention: protocol-relative URL is rejected and safely defaults to /studio
+        resp_malicious_proto = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "//attacker.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp_malicious_proto.status_code == 303
+        assert resp_malicious_proto.headers["location"] == "/studio"
+
+        # 6. Failed login re-renders page preserving next hidden input
+        resp_fail = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "WrongPassword!",
+                "next": "/studio/talks/10",
+            },
+            follow_redirects=False,
+        )
+        assert resp_fail.status_code == 400
+        assert (
+            '<input type="hidden" name="next" value="/studio/talks/10">'
+            in resp_fail.text
+        )
+    finally:
+        db.query(User).filter(User.id == user.id).delete()
+        db.commit()
+        app.dependency_overrides.pop(get_db, None)
+        db.close()

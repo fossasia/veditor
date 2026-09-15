@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import urllib.parse
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -27,6 +28,42 @@ router = APIRouter(tags=["auth"])
 _DUMMY_HASH = hash_password("veditor-timing-defense-sentinel")
 
 
+def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> str:
+    """Validate and return a safe internal redirect path.
+
+    Strictly verifies that scheme and netloc are empty, the path begins with a
+    single '/', and prevents open-redirect attacks or infinite redirect loops
+    back to authentication endpoints.
+    """
+    if not target or not isinstance(target, str):
+        return default
+
+    cleaned = target.strip()
+    if not cleaned:
+        return default
+
+    try:
+        parsed = urllib.parse.urlsplit(cleaned)
+    except ValueError:
+        return default
+
+    if parsed.scheme or parsed.netloc:
+        return default
+
+    if not parsed.path.startswith("/") or parsed.path.startswith(("//", "/\\")):
+        return default
+
+    unquoted_path = urllib.parse.unquote(parsed.path)
+    if not unquoted_path.startswith("/") or unquoted_path.startswith(("//", "/\\")):
+        return default
+
+    normalized_path = parsed.path.rstrip("/")
+    if normalized_path in ("/login", "/logout", "/signup"):
+        return default
+
+    return cleaned
+
+
 def _get_authenticated_user_from_cookie(
     request: Request, db: Session
 ) -> models.User | None:
@@ -49,13 +86,15 @@ def _get_authenticated_user_from_cookie(
 def login_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
+    next: str | None = None,
 ):
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        return RedirectResponse(url="/studio", status_code=status.HTTP_302_FOUND)
+        target = _get_safe_redirect_target(next, default="/studio")
+        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
     return templates.TemplateResponse(
         request,
         "login.html.jinja",
-        {"error": None, "email": ""},
+        {"error": None, "email": "", "next": next or ""},
     )
 
 
@@ -65,13 +104,18 @@ def login_submit(
     db: Annotated[Session, Depends(get_db)],
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
+    next: Annotated[str, Form()] = "",
 ):
     clean_email = email.strip().lower()
     if not clean_email or not password:
         return templates.TemplateResponse(
             request,
             "login.html.jinja",
-            {"error": "Invalid email or password.", "email": clean_email},
+            {
+                "error": "Invalid email or password.",
+                "email": clean_email,
+                "next": next or "",
+            },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -83,12 +127,19 @@ def login_submit(
         return templates.TemplateResponse(
             request,
             "login.html.jinja",
-            {"error": "Invalid email or password.", "email": clean_email},
+            {
+                "error": "Invalid email or password.",
+                "email": clean_email,
+                "next": next or "",
+            },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
     token = create_session_token(user.id, user.role)
-    response = RedirectResponse(url="/studio", status_code=status.HTTP_303_SEE_OTHER)
+    redirect_target = _get_safe_redirect_target(next, default="/studio")
+    response = RedirectResponse(
+        url=redirect_target, status_code=status.HTTP_303_SEE_OTHER
+    )
     is_secure = (request.url.scheme == "https") or (
         settings.environment.lower() in ("production", "prod")
     )

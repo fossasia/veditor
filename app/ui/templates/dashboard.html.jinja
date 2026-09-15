@@ -30,6 +30,12 @@
 {% block content %}
 <div class="page-body">
 
+  {% if error %}
+    <div class="alert alert-danger" role="alert">
+      <span>{{ error }}</span>
+    </div>
+  {% endif %}
+
   <!-- Stats Summary Row -->
   <div class="stats-grid">
     <div class="stat-card">

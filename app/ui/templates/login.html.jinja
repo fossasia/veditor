@@ -25,6 +25,7 @@
     {% endif %}
 
     <form class="auth-form" method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next or '' }}">
       <div class="form-group">
         <label class="form-label" for="email">Email</label>
         <input type="email" id="email" name="email" class="input-field" required autofocus value="{{ email or '' }}" placeholder="name@example.com">
