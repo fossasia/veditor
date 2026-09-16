@@ -231,7 +231,7 @@ def test_no_db_session_held_during_detect(dummy_talk, mock_storage):
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_detect(raw_path, scheduled_start, scheduled_end):
+    def fake_detect(raw_path, scheduled_start, scheduled_end, tolerance_seconds):
         assert db_ctx.open_sessions == 0, "DB session was open during detect!"
         return DetectResult(
             passed=True,
@@ -292,7 +292,7 @@ def test_failure_on_already_broken_talk_does_not_crash(dummy_talk, mock_storage)
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_detect(raw_path, scheduled_start, scheduled_end):
+    def fake_detect(raw_path, scheduled_start, scheduled_end, tolerance_seconds):
         dummy_talk.status = "broken"
         raise RuntimeError("Unexpected error")
 
@@ -315,7 +315,7 @@ def test_failure_on_done_talk_does_not_transition_to_broken(dummy_talk, mock_sto
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_detect(raw_path, scheduled_start, scheduled_end):
+    def fake_detect(raw_path, scheduled_start, scheduled_end, tolerance_seconds):
         dummy_talk.status = "done"
         raise RuntimeError("Late job error")
 
@@ -339,7 +339,7 @@ def test_failure_on_rejected_talk_does_not_transition_to_broken(
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_detect(raw_path, scheduled_start, scheduled_end):
+    def fake_detect(raw_path, scheduled_start, scheduled_end, tolerance_seconds):
         dummy_talk.status = "rejected"
         raise RuntimeError("Late job error")
 
@@ -545,7 +545,7 @@ def test_loudness_enqueues_transcode_on_heavy(dummy_talk, mock_storage):
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_loudness(input_path, output_path):
+    def fake_loudness(input_path, output_path, target_lufs):
         assert db_ctx.open_sessions == 0, "DB session was open during loudness!"
 
     with (
@@ -599,7 +599,7 @@ def test_transcode_enqueues_publish_on_light(dummy_talk, mock_storage):
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_transcode(input_path, output_path, on_progress=None):
+    def fake_transcode(input_path, output_path, preset=None, on_progress=None):
         assert db_ctx.open_sessions == 0, "DB session was open during transcode!"
 
     with (
@@ -629,7 +629,7 @@ def test_transcode_progress_callback_updates_job_progress(dummy_talk, mock_stora
 
     progress_history: list[float] = []
 
-    def fake_transcode(input_path, output_path, on_progress=None):
+    def fake_transcode(input_path, output_path, preset=None, on_progress=None):
         assert db_ctx.open_sessions == 0, "DB session was open during transcode!"
         if on_progress:
             on_progress(0.25)
@@ -743,7 +743,7 @@ def test_job_detect_discards_when_talk_aborted(dummy_talk, mock_storage):
     jobs = {}
     db_ctx = MockDBContext(dummy_talk, jobs)
 
-    def fake_detect(raw_path, scheduled_start, scheduled_end):
+    def fake_detect(raw_path, scheduled_start, scheduled_end, tolerance_seconds):
         # Simulate /abort occurring during pure video processing
         dummy_talk.status = "waiting_for_files"
         jobs.clear()
@@ -991,7 +991,7 @@ def test_concat_to_loudness_to_transcode_all_combinations(
     def fake_concat(cut_path, intro_path, outro_path, output_path, backend):
         assert db_ctx.open_sessions == 0, "DB session open during concat!"
 
-    def fake_loudness(input_path, output_path):
+    def fake_loudness(input_path, output_path, target_lufs):
         assert db_ctx.open_sessions == 0, "DB session open during loudness!"
 
     intro_key = "1/intro/intro.mp4" if include_intro else None

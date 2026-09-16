@@ -261,3 +261,30 @@ class Review(Base):
 
     talk: Mapped[Talk] = relationship(back_populates="reviews")
     user: Mapped[User | None] = relationship(back_populates="reviews")
+
+
+class SystemSetting(Base):
+    """Admin-managed override for a runtime-tunable setting (see app.runtime_settings)."""
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "users.id",
+            name="fk_system_settings_updated_by_user_id_users",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
+
+    updated_by_user: Mapped[User | None] = relationship()

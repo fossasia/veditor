@@ -32,9 +32,10 @@ from app.pipeline.loudness import normalize
 from app.pipeline.outro import generate_outro_clip
 from app.pipeline.preview import generate_preview
 from app.pipeline.publish import publish
-from app.pipeline.transcode import transcode
+from app.pipeline.transcode import TRANSCODE_PRESETS, transcode
 from app.pipeline.waveform import extract_waveform_peaks
 from app.queue import heavy_queue, light_queue
+from app.runtime_settings import get_setting
 from app.states import advance
 from app.storage import cleanup_intermediates, get_storage_backend
 
@@ -215,6 +216,7 @@ def job_detect(talk_id: int, raw_key: str) -> None:
             raw_path,
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_end,
+            tolerance_seconds=get_setting("detect_duration_tolerance_seconds"),
         )
         if not result.passed:
             raise ValueError(f"Detection failed: {result.reason}")
@@ -607,7 +609,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
 
         cut_path = storage.get(cut_key)
         preset = (
-            settings.preview_presets.get("small_video")
+            settings.preview_presets.get(get_setting("preview_preset"))
             or PREVIEW_PRESETS["small_video"]
         )
 
@@ -684,11 +686,12 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             job_id = job.id
 
         cut_path = storage.get(cut_key)
+        target_lufs = get_setting("loudness_target_lufs")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_out = Path(tmpdir) / "loudness.mp4"
             try:
-                normalize(cut_path, tmp_out)
+                normalize(cut_path, tmp_out, target_lufs=target_lufs)
             except ValueError as val_err:
                 if "No audio stream found" in str(val_err):
                     logger.warning(
@@ -788,6 +791,7 @@ def job_transcode(
             job_id = job.id
 
         loud_path = storage.get(loud_key)
+        preset = TRANSCODE_PRESETS[get_setting("transcode_preset")]
         last_update_time = [0.0]
 
         def _on_progress(pct: float) -> None:
@@ -809,7 +813,7 @@ def job_transcode(
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_out = Path(tmpdir) / "final.mp4"
-            transcode(loud_path, tmp_out, on_progress=_on_progress)
+            transcode(loud_path, tmp_out, preset=preset, on_progress=_on_progress)
             storage.put(final_key, tmp_out)
             _cache_waveform(storage, final_key, tmp_out)
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import av
 
 from app.config import settings
+from app.runtime_settings import get_setting
 from app.schemas import RecordingIngestRequest
 from app.storage import StorageBackend
 
@@ -79,7 +80,7 @@ def stage_recording(
     file_size = resolved_path.stat().st_size
     required_bytes = int(
         (
-            Decimal(file_size) * Decimal(str(settings.disk_guard_multiplier))
+            Decimal(file_size) * Decimal(str(get_setting("disk_guard_multiplier")))
         ).to_integral_value(rounding=ROUND_CEILING)
     )
     available_bytes = backend.free_bytes()

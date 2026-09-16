@@ -71,6 +71,12 @@ PRESET_4K_MASTER = TranscodePreset(
 )
 
 
+TRANSCODE_PRESETS: dict[str, TranscodePreset] = {
+    preset.name: preset
+    for preset in (PRESET_1080P_DEFAULT, PRESET_720P, PRESET_4K_MASTER)
+}
+
+
 def transcode(
     input_path: Path | str,
     output_path: Path | str,

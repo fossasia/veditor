@@ -1,0 +1,98 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Runtime Settings — VEditor{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin_settings.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <span>Admin</span>
+  <span class="sep">/</span>
+  <span class="current">Settings</span>
+{% endblock %}
+
+{% macro fmt(spec, value) -%}
+  {%- if spec.kind == "float" -%}{{ "%g" | format(value) }}{%- else -%}{{ value }}{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-body">
+  <div class="settings-header">
+    <h1 class="settings-title">Runtime Settings</h1>
+    <p class="settings-desc">
+      Overrides take effect on the next pipeline job or ingest request. No restart needed.
+      Secrets and connection settings stay in environment variables.
+    </p>
+  </div>
+
+  {% if notice %}
+    <div class="alert alert-success" role="status" id="settings-notice">{{ notice }}</div>
+  {% endif %}
+  {% for key, message in errors.items() %}
+    <div class="alert alert-danger" role="alert">{{ message }}</div>
+  {% endfor %}
+
+  <div class="settings-list">
+    {% for item in items %}
+    {% set spec = item.spec %}
+    {% set has_error = spec.key in errors %}
+    <form method="post" action="/admin/settings/{{ spec.key }}" class="setting-card{% if has_error %} has-error{% endif %}" id="setting-{{ spec.key }}">
+      <div class="setting-info">
+        <div class="setting-name-row">
+          <label class="setting-label" for="input-{{ spec.key }}">{{ spec.label }}</label>
+          {% if item.overridden %}
+            <span class="badge badge-info">Override</span>
+          {% else %}
+            <span class="badge badge-waiting">Default</span>
+          {% endif %}
+        </div>
+        <code class="setting-key">{{ spec.key }}</code>
+        <p class="setting-desc">{{ spec.description }}</p>
+        <p class="setting-meta">
+          Default: <strong>{{ fmt(spec, item.default) }}{% if spec.unit %} {{ spec.unit }}{% endif %}</strong>
+          {% if spec.kind == "float" %}
+            · Range: {{ "%g" | format(spec.min_value) }} to {{ "%g" | format(spec.max_value) }}
+          {% endif %}
+          {% if item.row %}
+            · Updated {{ item.row.updated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC") }}
+            {% if item.row.updated_by_user %}by {{ item.row.updated_by_user.email }}{% endif %}
+          {% endif %}
+        </p>
+      </div>
+
+      <div class="setting-controls">
+        <div class="setting-input-row">
+          {% set current = submitted[spec.key] if spec.key in submitted else fmt(spec, item.value) %}
+          {% if spec.kind == "choice" %}
+            <select name="value" id="input-{{ spec.key }}" class="select-field setting-input">
+              {% for choice in spec.choices() %}
+                <option value="{{ choice }}" {% if choice == current %}selected{% endif %}>{{ choice }}</option>
+              {% endfor %}
+            </select>
+          {% else %}
+            <input
+              type="number"
+              name="value"
+              id="input-{{ spec.key }}"
+              class="input-field setting-input"
+              value="{{ current }}"
+              min="{{ '%g' | format(spec.min_value) }}"
+              max="{{ '%g' | format(spec.max_value) }}"
+              step="any"
+              required
+              {% if has_error %}aria-invalid="true"{% endif %}
+            >
+          {% endif %}
+          {% if spec.unit %}<span class="setting-unit">{{ spec.unit }}</span>{% endif %}
+        </div>
+        <div class="setting-actions">
+          <button type="submit" name="action" value="save" class="btn btn-primary btn-sm">Save</button>
+          <button type="submit" name="action" value="reset" class="btn btn-ghost btn-sm" formnovalidate {% if not item.row %}disabled{% endif %}>Reset</button>
+        </div>
+      </div>
+    </form>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

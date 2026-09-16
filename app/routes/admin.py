@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.auth import (
@@ -11,6 +14,8 @@ from app.auth import (
     require_admin,
 )
 from app.db import get_db
+from app.runtime_settings import RUNTIME_SETTINGS, resolve_setting
+from app.ui.templating import templates
 
 router = APIRouter(
     prefix="/admin",
@@ -94,3 +99,116 @@ def deactivate_user(
     db.commit()
     db.refresh(target)
     return target
+
+
+def _render_settings(
+    request: Request,
+    db: Session,
+    *,
+    notice: str | None = None,
+    errors: dict[str, str] | None = None,
+    submitted: dict[str, str] | None = None,
+    status_code: int = status.HTTP_200_OK,
+):
+    overrides = {
+        row.key: row
+        for row in db.query(models.SystemSetting)
+        .options(selectinload(models.SystemSetting.updated_by_user))
+        .filter(models.SystemSetting.key.in_(RUNTIME_SETTINGS))
+    }
+    items = []
+    for spec in RUNTIME_SETTINGS.values():
+        row = overrides.get(spec.key)
+        value, overridden = resolve_setting(spec, row)
+        items.append(
+            {
+                "spec": spec,
+                "value": value,
+                "default": spec.default(),
+                "overridden": overridden,
+                "row": row,
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_settings.html.jinja",
+        {
+            "items": items,
+            "notice": notice,
+            "errors": errors or {},
+            "submitted": submitted or {},
+        },
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    saved: str | None = None,
+    reset: str | None = None,
+):
+    notice = None
+    if saved in RUNTIME_SETTINGS:
+        notice = f"Saved {RUNTIME_SETTINGS[saved].label}."
+    elif reset in RUNTIME_SETTINGS:
+        notice = f"Reset {RUNTIME_SETTINGS[reset].label} to its default."
+    return _render_settings(request, db, notice=notice)
+
+
+@router.post("/settings/{key}", response_class=HTMLResponse)
+def update_setting(
+    key: str,
+    request: Request,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    value: Annotated[str, Form()] = "",
+    action: Annotated[str, Form()] = "save",
+):
+    spec = RUNTIME_SETTINGS.get(key)
+    if spec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown setting",
+        )
+
+    if action == "reset":
+        db.query(models.SystemSetting).filter(models.SystemSetting.key == key).delete()
+        db.commit()
+        return RedirectResponse(
+            url=f"/admin/settings?reset={key}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if action != "save":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported action",
+        )
+
+    try:
+        parsed = spec.parse(value)
+    except ValueError as exc:
+        return _render_settings(
+            request,
+            db,
+            errors={key: f"{spec.label} {exc}."},
+            submitted={key: value},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Upsert so concurrent saves of the same key cannot collide on the primary key.
+    values = {
+        "value": parsed,
+        "description": spec.description,
+        "updated_at": datetime.now(UTC),
+        "updated_by_user_id": current_user.user_id,
+    }
+    stmt = insert(models.SystemSetting).values(key=key, **values)
+    db.execute(stmt.on_conflict_do_update(index_elements=["key"], set_=values))
+    db.commit()
+    return RedirectResponse(
+        url=f"/admin/settings?saved={key}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )

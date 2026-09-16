@@ -1,0 +1,102 @@
+/* ── Admin Runtime Settings (admin_settings.html) ─────────────── */
+
+.settings-header { margin-bottom: 20px; }
+
+.settings-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  margin-bottom: 6px;
+}
+
+.settings-desc {
+  font-size: 0.84rem;
+  color: var(--v-text-muted);
+  max-width: 720px;
+}
+
+.alert-success {
+  background: var(--v-status-success-bg);
+  color: var(--v-status-success-text);
+  border-color: var(--v-status-success-border);
+}
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.setting-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-lg);
+  padding: 16px 20px;
+}
+
+.setting-card.has-error { border-color: var(--v-status-danger-border); }
+
+.setting-info { flex: 1; min-width: 280px; }
+
+.setting-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.setting-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+}
+
+.setting-key {
+  font-family: var(--v-font-mono);
+  font-size: 0.72rem;
+  color: var(--v-text-muted);
+}
+
+.setting-desc {
+  font-size: 0.82rem;
+  color: var(--v-text-secondary);
+  margin: 6px 0 4px;
+}
+
+.setting-meta {
+  font-size: 0.74rem;
+  color: var(--v-text-muted);
+}
+
+.setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.setting-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-input { width: 160px; }
+
+.setting-card.has-error .setting-input { border-color: var(--v-status-danger-text); }
+
+.setting-unit {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  white-space: nowrap;
+}
+
+.setting-actions {
+  display: flex;
+  gap: 6px;
+}
