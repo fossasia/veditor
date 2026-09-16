@@ -155,14 +155,27 @@ def _queue_candidates(
 ) -> list[schemas.AdminJobRead]:
     """Returns up to `limit` pending jobs from one queue for the requested sort.
 
-    Queues are FIFO lists, so list position follows enqueue time and the newest
-    jobs sit at the tail. Every job in a queue shares the same status and queue
-    name, so for those sorts any `limit` jobs are equally valid; the head (next
-    to run) is used.
+    Every job in a queue shares the same status and queue name, so for those
+    sorts any `limit` jobs are equally valid and the head (next to run) is used.
+    List position does not follow creation time (a prioritized job is appended
+    to its priority queue whenever it is moved), so for `created_at` every
+    pending job is fetched and sorted before applying the limit.
     """
-    offset = max(0, q.count - limit) if sort == "created_at" and order == "desc" else 0
-    jobs = RQJob.fetch_many(q.get_job_ids(offset, limit), connection=q.connection)
-    return [_rq_job_row(job, name) for job in jobs if job is not None]
+    if sort != "created_at":
+        jobs = RQJob.fetch_many(q.get_job_ids(0, limit), connection=q.connection)
+        return [_rq_job_row(job, name) for job in jobs if job is not None]
+
+    jobs = [
+        job
+        for job in RQJob.fetch_many(q.get_job_ids(), connection=q.connection)
+        if job is not None
+    ]
+    min_time = datetime.min.replace(tzinfo=UTC)
+    jobs.sort(
+        key=lambda job: _aware(job.created_at) or min_time,
+        reverse=order == "desc",
+    )
+    return [_rq_job_row(job, name) for job in jobs[:limit]]
 
 
 @router.get("/jobs", response_model=list[schemas.AdminJobRead])

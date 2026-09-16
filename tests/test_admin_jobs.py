@@ -198,6 +198,26 @@ def test_list_jobs_limit_keeps_newest_queued_jobs(db_session, queues):
     assert {r["rq_job_id"] for r in rows} == {jobs[0].id, jobs[1].id}
 
 
+def test_list_jobs_limit_keeps_newest_prioritized_jobs(db_session, queues):
+    client = TestClient(app)
+    _login(client, db_session, "admin")
+
+    older = queues["light"].enqueue("app.tasks.job_detect", 7, "old.mp4")
+    newer = queues["light"].enqueue("app.tasks.job_detect", 8, "new.mp4")
+    older.created_at = datetime.now(UTC) - timedelta(hours=1)
+    older.save()
+
+    # Prioritize the newer job first, so the older job ends up at the tail.
+    assert client.post(f"/admin/jobs/{newer.id}/prioritize").status_code == 200
+    assert client.post(f"/admin/jobs/{older.id}/prioritize").status_code == 200
+    assert queues["priority_light"].job_ids == [newer.id, older.id]
+
+    url = "/admin/jobs?status=queued&queue=priority_light&limit=1"
+    assert [r["rq_job_id"] for r in client.get(url).json()] == [newer.id]
+    rows = client.get(url + "&order=asc").json()
+    assert [r["rq_job_id"] for r in rows] == [older.id]
+
+
 def test_list_jobs_limit_applies_requested_sort_to_database_jobs(db_session, queues):
     client = TestClient(app)
     _login(client, db_session, "admin")

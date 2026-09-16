@@ -65,9 +65,13 @@ If you prefer to run the entire stack locally without Docker (for faster reloadi
    uv run uvicorn app.main:app --reload
    ```
 
-7. Start the RQ worker natively (in a separate terminal):
+7. Start the RQ workers natively, one per job class so heavy transcodes never block light jobs (each in a separate terminal):
    ```bash
-   uv run python scripts/run_worker.py priority_light priority_heavy light heavy
+   # Terminal 1: light jobs
+   uv run python scripts/run_worker.py priority_light light
+
+   # Terminal 2: heavy jobs
+   uv run python scripts/run_worker.py priority_heavy heavy
    ```
 
 8. Run the tests natively:
