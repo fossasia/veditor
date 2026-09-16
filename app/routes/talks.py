@@ -39,7 +39,7 @@ from app.ingest import (
     stage_custom_clip,
     stage_recording,
 )
-from app.queue import heavy_queue, light_queue
+from app.queue import heavy_queue, light_queue, priority_queue
 from app.security import create_sso_token
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
@@ -658,7 +658,7 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
     try:
         from rq.registry import StartedJobRegistry
 
-        for q in (light_queue, heavy_queue):
+        for q in (priority_queue, light_queue, heavy_queue):
             # 1. Cancel queued jobs
             for job_id in list(q.job_ids):
                 try:

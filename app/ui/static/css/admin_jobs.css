@@ -1,0 +1,84 @@
+/* ── Admin Jobs Monitor (admin_jobs.html) ─────────────────────── */
+
+.jobs-table-header {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.jobs-count {
+  margin-left: 8px;
+}
+
+.jobs-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.jobs-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+}
+
+.jobs-table tbody tr {
+  cursor: default;
+}
+
+.jobs-sort {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.jobs-sort:hover,
+.jobs-sort.is-active {
+  color: var(--v-text-primary);
+}
+
+.jobs-sort.is-active::after {
+  content: " ↓";
+}
+
+.jobs-sort.is-active.is-asc::after {
+  content: " ↑";
+}
+
+.jobs-alert {
+  margin-bottom: 16px;
+}
+
+.jobs-notice {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: var(--v-radius-md);
+  font-size: 0.84rem;
+  background: var(--v-status-success-bg);
+  color: var(--v-status-success-text);
+  border: 1px solid var(--v-status-success-border);
+}
+
+.jobs-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--v-text-muted);
+  font-size: 0.84rem;
+}
+
+.jobs-muted {
+  color: var(--v-text-muted);
+}
+
+[hidden].jobs-alert,
+[hidden].jobs-notice,
+[hidden].jobs-empty {
+  display: none;
+}

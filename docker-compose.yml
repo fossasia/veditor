@@ -18,7 +18,7 @@ services:
 
   worker-light:
     build: .
-    command: uv run python scripts/run_worker.py light --concurrency 4
+    command: uv run python scripts/run_worker.py priority light --concurrency 4
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
@@ -34,7 +34,7 @@ services:
 
   worker-heavy:
     build: .
-    command: uv run python scripts/run_worker.py heavy --concurrency 2
+    command: uv run python scripts/run_worker.py priority heavy --concurrency 2
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password

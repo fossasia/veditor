@@ -731,6 +731,30 @@ def list_studio_events(
     )
 
 
+@router.get("/admin/jobs", response_class=HTMLResponse)
+def admin_jobs_monitor(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Renders the admin jobs monitor; job data is loaded from GET /admin/jobs."""
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation requires a human administrator",
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "admin_jobs.html.jinja",
+        {},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.post("/events", response_class=HTMLResponse)
 def create_studio_event(
     request: Request,

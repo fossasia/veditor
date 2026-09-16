@@ -132,6 +132,14 @@
         </svg>
         Talks
       </a>
+      {% if user and user.role == 'admin' and not user.is_sso %}
+      <a href="/studio/admin/jobs" class="nav-item {% if request.url.path == '/studio/admin/jobs' %}active{% endif %}" id="nav-admin-jobs-link">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        Jobs Monitor
+      </a>
+      {% endif %}
     </nav>
   </aside>
 

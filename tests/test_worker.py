@@ -63,7 +63,7 @@ def test_worker_default_queues(mock_worker_cls, mock_redis_from_url):
 
     mock_redis.ping.assert_called_once()
     mock_worker_cls.assert_called_once_with(
-        ["light", "heavy"], connection=mock_redis, name=None
+        ["priority", "light", "heavy"], connection=mock_redis, name=None
     )
     mock_worker.work.assert_called_once_with(burst=False)
 

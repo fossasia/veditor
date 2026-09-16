@@ -14,6 +14,9 @@ from rq import Worker
 
 from app.config import settings
 
+# RQ drains queues in the order given, so "priority" must come first.
+DEFAULT_QUEUES = ["priority", "light", "heavy"]
+
 
 def _run_single_worker(
     queues: list[str], redis_url: str, name: str | None, burst: bool
@@ -36,8 +39,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "queues",
         nargs="*",
-        default=["light", "heavy"],
-        help="Queue names to listen on (default: light heavy)",
+        default=DEFAULT_QUEUES,
+        help="Queue names to listen on, in priority order (default: priority light heavy)",
     )
     parser.add_argument(
         "--burst",
@@ -59,7 +62,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
-    queues = args.queues if args.queues else ["light", "heavy"]
+    queues = args.queues if args.queues else DEFAULT_QUEUES
 
     if not settings.redis_url or not settings.redis_url.strip():
         print("Error: REDIS_URL is unset.", file=sys.stderr)

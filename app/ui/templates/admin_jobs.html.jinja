@@ -1,0 +1,73 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Jobs Monitor — VEditor{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin_jobs.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Jobs Monitor</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+
+  <div class="alert alert-danger jobs-alert" role="alert" id="jobs-error" hidden></div>
+  <div class="jobs-notice" role="status" id="jobs-notice" hidden></div>
+
+  <div class="table-wrap">
+    <div class="table-header jobs-table-header">
+      <div>
+        <span class="table-title">Background Jobs</span>
+        <span class="table-count jobs-count" id="jobs-count"></span>
+      </div>
+      <form class="jobs-filters" id="jobs-filters">
+        <label class="jobs-filter">
+          <span>Status</span>
+          <select class="select-field" id="filter-status" name="status">
+            <option value="">All</option>
+            <option value="queued">Queued</option>
+            <option value="running">Running</option>
+            <option value="done">Done</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+        <label class="jobs-filter">
+          <span>Queue</span>
+          <select class="select-field" id="filter-queue" name="queue">
+            <option value="">All</option>
+            <option value="priority">Priority</option>
+            <option value="light">Light</option>
+            <option value="heavy">Heavy</option>
+          </select>
+        </label>
+        <button type="button" class="btn btn-ghost btn-sm" id="jobs-refresh-btn">Refresh</button>
+      </form>
+    </div>
+
+    <table class="jobs-table">
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Talk</th>
+          <th>Kind</th>
+          <th><button type="button" class="jobs-sort" data-sort="status">Status</button></th>
+          <th><button type="button" class="jobs-sort" data-sort="queue">Queue</button></th>
+          <th>Progress</th>
+          <th><button type="button" class="jobs-sort" data-sort="created_at">Created</button></th>
+          <th class="col-actions-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-tbody"></tbody>
+    </table>
+    <div class="jobs-empty" id="jobs-empty" hidden>No jobs match the current filters.</div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/admin_jobs.js"></script>
+{% endblock %}

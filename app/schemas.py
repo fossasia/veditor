@@ -351,6 +351,28 @@ class UserPromoteRequest(BaseModel):
     role: Literal["user", "organizer", "admin"]
 
 
+class AdminJobRead(BaseModel):
+    """A row in the admin jobs monitor.
+
+    Rows come from two sources: `database` rows are jobs a worker has started
+    (tracked in the `jobs` table), while `queue` rows are jobs still pending in
+    an RQ queue and not yet picked up by a worker. Only pending `queue` rows in
+    a standard queue can be prioritized.
+    """
+
+    source: Literal["database", "queue"]
+    job_id: int | None = None
+    rq_job_id: str | None = None
+    talk_id: int | None = None
+    kind: str
+    status: str
+    queue: str | None = None
+    progress_pct: float | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    can_prioritize: bool = False
+
+
 class SSOTokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
