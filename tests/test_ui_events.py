@@ -861,3 +861,275 @@ def test_studio_room_attribute_escaped(client: TestClient, db_session):
         'data-talk-room="Room &#34;Breakout&#34; &lt;script&gt;alert(1)&lt;/script&gt;"'
         in res.text
     )
+
+
+def _seed_room_talks(db_session):
+    from datetime import UTC, datetime, timedelta
+
+    org = create_user(db_session, "room_org@example.com", "organizer")
+    other_org = create_user(db_session, "room_other_org@example.com", "organizer")
+    event = models.Event(name="Room Test Event", created_by_user_id=org.id)
+    other_event = models.Event(
+        name="Other Room Test Event", created_by_user_id=other_org.id
+    )
+    db_session.add_all([event, other_event])
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+
+    def make_talk(event_id: int, title: str, room: str | None, offset: int):
+        return models.Talk(
+            event_id=event_id,
+            title=title,
+            room=room,
+            start=now + timedelta(hours=offset),
+            end=now + timedelta(hours=offset, minutes=30),
+            status="waiting_for_files",
+        )
+
+    talks = {
+        "main_1": make_talk(event.id, "Main Stage Opening", "Main Stage", 0),
+        "main_2": make_talk(event.id, "Main Stage Closing", "Main Stage", 1),
+        "workshop": make_talk(event.id, "Workshop Hands-On", "Room B/2", 2),
+        "no_room": make_talk(event.id, "Roomless Lightning Talk", None, 3),
+        "other_event_main": make_talk(
+            other_event.id, "Other Event Main Stage Talk", "Main Stage", 0
+        ),
+    }
+    db_session.add_all(talks.values())
+    db_session.commit()
+    return org, other_org, event, other_event, talks
+
+
+def _extract_href(page: str, css_class: str) -> str:
+    import html
+    import re
+
+    match = re.search(
+        rf'<a href="([^"]+)" class="[^"]*\b{re.escape(css_class)}\b[^"]*"', page
+    )
+    assert match, f"No link with class {css_class!r} found"
+    return html.unescape(match.group(1))
+
+
+def test_room_page_lists_only_talks_in_that_room(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    authenticate_client(client, org)
+
+    resp = client.get(f"/studio/rooms/Main Stage?event_id={event.id}")
+    assert resp.status_code == 200
+    assert 'id="talks-scope-title">Main Stage</h1>' in resp.text
+    assert "Main Stage Opening" in resp.text
+    assert "Main Stage Closing" in resp.text
+    assert "Workshop Hands-On" not in resp.text
+    assert "Roomless Lightning Talk" not in resp.text
+    assert "Other Event Main Stage Talk" not in resp.text
+    assert "2 results" in resp.text
+    # Stat cards count only the room's talks, not the whole workspace.
+    assert '<span class="stat-value">2</span>' in resp.text
+    # Filters submit back to the room page and keep the event scope.
+    assert 'action="/studio/rooms/Main Stage"' in resp.text
+    assert f'name="event_id" value="{event.id}"' in resp.text
+
+
+def test_room_page_is_scoped_to_callers_events(client: TestClient, db_session):
+    org, other_org, _, other_event, _ = _seed_room_talks(db_session)
+
+    # Without an event filter, a same-named room in another organizer's event
+    # must not leak into the listing.
+    authenticate_client(client, org)
+    resp = client.get("/studio/rooms/Main Stage")
+    assert resp.status_code == 200
+    assert "Main Stage Opening" in resp.text
+    assert "Other Event Main Stage Talk" not in resp.text
+
+    # Asking for an event the caller does not own yields nothing.
+    resp = client.get(f"/studio/rooms/Main Stage?event_id={other_event.id}")
+    assert resp.status_code == 200
+    assert "Other Event Main Stage Talk" not in resp.text
+    assert "0 results" in resp.text
+
+    authenticate_client(client, other_org)
+    resp = client.get(f"/studio/rooms/Main Stage?event_id={other_event.id}")
+    assert "Other Event Main Stage Talk" in resp.text
+    assert "Main Stage Opening" not in resp.text
+    assert "1 result" in resp.text
+
+
+def test_room_page_supports_status_and_search_filters(client: TestClient, db_session):
+    org, _, event, _, talks = _seed_room_talks(db_session)
+    talks["main_2"].status = "done"
+    db_session.commit()
+    authenticate_client(client, org)
+
+    resp = client.get(
+        f"/studio/rooms/Main Stage?event_id={event.id}&status_filter=done"
+    )
+    assert "Main Stage Closing" in resp.text
+    assert "Main Stage Opening" not in resp.text
+
+    resp = client.get(f"/studio/rooms/Main Stage?event_id={event.id}&q=opening")
+    assert "Main Stage Opening" in resp.text
+    assert "Main Stage Closing" not in resp.text
+    clear_href = f'href="/studio/rooms/Main Stage?event_id={event.id}"'
+    assert f'{clear_href} class="btn btn-ghost" id="clear-btn"' in resp.text
+
+
+def test_event_page_shows_event_title_header(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    authenticate_client(client, org)
+
+    resp = client.get(f"/studio?event_id={event.id}")
+    assert resp.status_code == 200
+    assert 'id="talks-scope-title">Room Test Event</h1>' in resp.text
+    assert "Main Stage Opening" in resp.text
+    assert "Other Event Main Stage Talk" not in resp.text
+
+    # The unfiltered dashboard keeps the generic heading.
+    resp = client.get("/studio")
+    assert "talks-scope-title" not in resp.text
+    assert "Conference Talks" in resp.text
+
+    # With a second event owned by the same organizer, the event page stats
+    # count only the selected event's talks.
+    second = models.Event(name="Second Room Test Event", created_by_user_id=org.id)
+    db_session.add(second)
+    db_session.commit()
+    db_session.add(
+        models.Talk(
+            event_id=second.id,
+            title="Second Event Talk",
+            room="Main Stage",
+            start=datetime.now(tz=UTC),
+            end=datetime.now(tz=UTC) + timedelta(minutes=30),
+            status="waiting_for_files",
+        )
+    )
+    db_session.commit()
+    resp = client.get(f"/studio?event_id={event.id}")
+    assert "Second Event Talk" not in resp.text
+    assert '<span class="stat-value">4</span>' in resp.text
+    resp = client.get("/studio")
+    assert '<span class="stat-value">5</span>' in resp.text
+
+
+def test_room_page_requires_authentication(client: TestClient, db_session):
+    _, _, event, _, _ = _seed_room_talks(db_session)
+
+    resp = client.get(
+        f"/studio/rooms/Main Stage?event_id={event.id}", follow_redirects=False
+    )
+    assert resp.status_code == 302
+    assert resp.headers["location"] == (
+        f"/login?next=/studio/rooms/Main%2520Stage%3Fevent_id%3D{event.id}"
+    )
+
+    # Without an event filter it still redirects rather than listing talks
+    # from every event that has a room with this name.
+    resp = client.get("/studio/rooms/Main Stage", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login?next=/studio/rooms/Main%2520Stage"
+    followed = client.get("/studio/rooms/Main Stage")
+    assert "Main Stage Opening" not in followed.text
+    assert "Other Event Main Stage Talk" not in followed.text
+
+
+def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
+    _seed_room_talks(db_session)
+    resp = client.get(
+        "/studio/rooms/Main Stage", headers={"X-API-Key": "not-a-real-key"}
+    )
+    assert resp.status_code == 401
+
+
+def test_login_next_returns_to_room_page(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    login_redirect = client.get(
+        f"/studio/rooms/Main Stage?event_id={event.id}", follow_redirects=False
+    ).headers["location"]
+    login_page = client.get(login_redirect)
+    assert login_page.status_code == 200
+
+    resp = client.post(
+        "/login",
+        data={
+            "email": org.email,
+            "password": "testpass123",
+            "next": f"/studio/rooms/Main%20Stage?event_id={event.id}",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 303)
+    assert resp.headers["location"] == (
+        f"/studio/rooms/Main%20Stage?event_id={event.id}"
+    )
+
+
+def test_dashboard_room_and_event_links_navigate(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    authenticate_client(client, org)
+
+    dashboard = client.get("/studio?q=Workshop")
+    assert dashboard.status_code == 200
+
+    room_href = _extract_href(dashboard.text, "talk-room-link")
+    assert room_href == f"/studio/rooms/Room%20B/2?event_id={event.id}"
+    room_page = client.get(room_href)
+    assert room_page.status_code == 200
+    assert 'id="talks-scope-title">Room B/2</h1>' in room_page.text
+    assert "Workshop Hands-On" in room_page.text
+    assert "Main Stage Opening" not in room_page.text
+    # The room page breadcrumb links back to its event.
+    assert _extract_href(room_page.text, "breadcrumb-link") == (
+        f"/studio?event_id={event.id}"
+    )
+
+    event_href = _extract_href(dashboard.text, "talk-event-link")
+    assert event_href == f"/studio?event_id={event.id}"
+    event_page = client.get(event_href)
+    assert 'id="talks-scope-title">Room Test Event</h1>' in event_page.text
+    assert "Main Stage Opening" in event_page.text
+    assert "Other Event Main Stage Talk" not in event_page.text
+
+
+def test_studio_breadcrumb_links_to_event_and_room(client: TestClient, db_session):
+    org, _, event, _, talks = _seed_room_talks(db_session)
+    authenticate_client(client, org)
+
+    studio = client.get(f"/studio/talks/{talks['main_1'].id}")
+    assert studio.status_code == 200
+
+    event_href = _extract_href(studio.text, "breadcrumb-event")
+    assert event_href == f"/studio?event_id={event.id}"
+    event_page = client.get(event_href)
+    assert 'id="talks-scope-title">Room Test Event</h1>' in event_page.text
+
+    room_href = _extract_href(studio.text, "breadcrumb-room")
+    room_page = client.get(room_href)
+    assert room_page.status_code == 200
+    assert 'id="talks-scope-title">Main Stage</h1>' in room_page.text
+    assert "Main Stage Closing" in room_page.text
+    assert "Workshop Hands-On" not in room_page.text
+
+    # A talk without a room renders a placeholder instead of a link.
+    roomless = client.get(f"/studio/talks/{talks['no_room'].id}")
+    assert 'id="breadcrumb-room-link"' not in roomless.text
+    assert 'id="breadcrumb-event-link"' in roomless.text
+
+
+def test_studio_breadcrumb_is_plain_text_for_talk_scoped_sso(
+    client: TestClient, db_session
+):
+    from app.security import create_sso_token
+
+    _, _, _, _, talks = _seed_room_talks(db_session)
+    token = create_sso_token(
+        scope_type="talk", scope_id=talks["main_1"].id, role="speaker"
+    )
+    client.cookies.set("veditor_session", token)
+
+    studio = client.get(f"/studio/talks/{talks['main_1'].id}")
+    assert studio.status_code == 200
+    assert "Room Test Event" in studio.text
+    assert 'id="breadcrumb-event-link"' not in studio.text
+    assert 'id="breadcrumb-room-link"' not in studio.text

@@ -330,22 +330,66 @@ def dashboard(
         )
         return resp
 
-    # Resolve event_id if provided as integer or string external_id/slug
-    resolved_event_id: int | None = None
-    if event_id is not None:
-        if isinstance(event_id, int):
-            resolved_event_id = event_id
-        elif str(event_id).isdigit():
-            resolved_event_id = int(event_id)
-        else:
-            ev = (
-                db.query(models.Event)
-                .filter(models.Event.external_id == str(event_id))
-                .first()
-            )
-            resolved_event_id = ev.id if ev else -1
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=_resolve_event_id(db, event_id),
+        status_filter=status_filter,
+        q=q,
+    )
 
-    # 2. Check for authenticated user or active SSO session in cookie
+
+@router.get("/rooms/{room_name:path}", response_class=HTMLResponse)
+def room_talks(
+    request: Request,
+    room_name: str,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    event_id: str | None = None,
+    status_filter: str | None = None,
+    q: str | None = None,
+):
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=_resolve_event_id(db, event_id),
+        status_filter=status_filter,
+        q=q,
+        room=room_name,
+        login_next=urllib.parse.quote(str(request.url.path), safe="/")
+        + (f"?{request.url.query}" if request.url.query else ""),
+    )
+
+
+def _resolve_event_id(db: Session, event_id: str | int | None) -> int | None:
+    """Resolve an event_id given as a numeric id or as an external_id/slug."""
+    if event_id is None:
+        return None
+    if isinstance(event_id, int):
+        return event_id
+    if str(event_id).isdigit():
+        return int(event_id)
+    ev = (
+        db.query(models.Event).filter(models.Event.external_id == str(event_id)).first()
+    )
+    return ev.id if ev else -1
+
+
+def _render_talks_page(
+    request: Request,
+    db: Session,
+    client: models.Client | None,
+    *,
+    event_id: int | None,
+    status_filter: str | None,
+    q: str | None,
+    room: str | None = None,
+    login_next: str = "/studio",
+):
+    """Render the talks list, scoped to the caller and optionally to an event/room."""
+    # Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
     cookie_token = request.cookies.get("veditor_session")
     sso_user = decode_sso_token(cookie_token) if (not user and cookie_token) else None
@@ -358,7 +402,7 @@ def dashboard(
 
     if not user and not sso_user and client is None:
         resp = RedirectResponse(
-            url="/login?next=/studio",
+            url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
             status_code=status.HTTP_302_FOUND,
         )
         if request.cookies.get("veditor_api_key"):
@@ -378,7 +422,7 @@ def dashboard(
         )
         query = (
             db.query(models.Talk)
-            .options(selectinload(models.Talk.jobs))
+            .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
             .filter(models.Talk.event_id == scoped_event_id)
         )
         if sso_user.get("role") == "speaker":
@@ -386,7 +430,6 @@ def dashboard(
                 func.lower(models.Talk.speaker_email) == sso_user["email"].lower()
             )
     else:
-        event_id = resolved_event_id
         if user:
             if user.role in ("organizer", "admin"):
                 user_events = (
@@ -407,7 +450,9 @@ def dashboard(
         else:
             user_events = []
 
-        query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
+        query = db.query(models.Talk).options(
+            selectinload(models.Talk.jobs), selectinload(models.Talk.event)
+        )
         if user:
             if user.role in ("organizer", "admin"):
                 org_event_ids = [e.id for e in user_events]
@@ -436,6 +481,8 @@ def dashboard(
         else:
             query = query.filter(models.Talk.id == -1)
 
+    if room is not None:
+        query = query.filter(models.Talk.room == room)
     if status_filter:
         query = query.filter(models.Talk.status == status_filter)
 
@@ -480,6 +527,12 @@ def dashboard(
         all_talks = []
 
     all_rooms = sorted({t.room for t in all_talks if t.room})
+    # Stats reflect the scoped view, so event and room pages count only their talks.
+    if event_id is not None:
+        all_talks = [t for t in all_talks if t.event_id == event_id]
+    if room is not None:
+        all_talks = [t for t in all_talks if t.room == room]
+    current_event = next((e for e in user_events if e.id == event_id), None)
     status_counts: dict[str, int] = {}
     for t in all_talks:
         status_counts[t.status] = status_counts.get(t.status, 0) + 1
@@ -511,6 +564,9 @@ def dashboard(
             "event_id": event_id,
             "user_events": user_events,
             "error": flash_error,
+            "current_event": current_event,
+            "room": room,
+            "filter_action": request.url.path,
         },
         headers={"Cache-Control": "no-store"},
     )

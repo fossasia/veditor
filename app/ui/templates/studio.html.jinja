@@ -36,7 +36,7 @@
     <a href="/admin/events">Events</a>
     <span class="sep">/</span>
     {% if talk.event_id %}
-      <a href="/admin/events/{{ talk.event_id }}" class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</a>
+      <a href="/admin/events/{{ talk.event_id }}" class="breadcrumb-event breadcrumb-link">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</a>
     {% else %}
       <span class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else 'Event' }}</span>
     {% endif %}
@@ -49,9 +49,20 @@
   {% else %}
     <a href="/studio" class="breadcrumb-back">&larr; Talks</a>
     <span class="sep">/</span>
-    <span class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</span>
-    <span class="sep">/</span>
-    <span class="breadcrumb-room">{{ talk.room or '—' }}</span>
+    {% set event_label = talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) %}
+    {% if user and user.is_sso and user.scope_type == 'talk' %}
+      <span class="breadcrumb-event">{{ event_label }}</span>
+      <span class="sep">/</span>
+      <span class="breadcrumb-room">{{ talk.room or '—' }}</span>
+    {% else %}
+      <a href="/studio?event_id={{ talk.event_id }}" class="breadcrumb-event breadcrumb-link" id="breadcrumb-event-link">{{ event_label }}</a>
+      <span class="sep">/</span>
+      {% if talk.room %}
+        <a href="/studio/rooms/{{ talk.room | urlencode }}?event_id={{ talk.event_id }}" class="breadcrumb-room breadcrumb-link" id="breadcrumb-room-link">{{ talk.room }}</a>
+      {% else %}
+        <span class="breadcrumb-room">—</span>
+      {% endif %}
+    {% endif %}
     <span class="sep">/</span>
     <span class="current" title="{{ talk.title }}">{{ talk.title }}</span>
   {% endif %}
