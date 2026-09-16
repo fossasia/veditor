@@ -14,8 +14,8 @@ from rq import Worker
 
 from app.config import settings
 
-# RQ drains queues in the order given, so "priority" must come first.
-DEFAULT_QUEUES = ["priority", "light", "heavy"]
+# RQ drains queues in the order given, so priority queues must come first.
+DEFAULT_QUEUES = ["priority_light", "priority_heavy", "light", "heavy"]
 
 
 def _run_single_worker(
@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> None:
         "queues",
         nargs="*",
         default=DEFAULT_QUEUES,
-        help="Queue names to listen on, in priority order (default: priority light heavy)",
+        help="Queue names to listen on, in priority order (default: priority_light priority_heavy light heavy)",
     )
     parser.add_argument(
         "--burst",

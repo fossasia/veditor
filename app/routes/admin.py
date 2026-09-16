@@ -3,11 +3,11 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, WatchError
 from rq.exceptions import NoSuchJobError
 from rq.job import Job as RQJob
 from rq.job import JobStatus
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -18,13 +18,13 @@ from app.auth import (
     require_admin,
 )
 from app.db import get_db
-from app.queue import QUEUES, priority_queue, redis_conn
+from app.queue import PRIORITY_QUEUE_FOR, QUEUES, redis_conn
 from app.tasks import STAGE_CONFIG
 
 logger = logging.getLogger(__name__)
 
-# Queues whose pending jobs an admin may move into the priority queue.
-PRIORITIZABLE_QUEUES = ("light", "heavy")
+# Optimistic-locking retries when other enqueues touch the source queue mid-move.
+MAX_PRIORITIZE_ATTEMPTS = 5
 
 router = APIRouter(
     prefix="/admin",
@@ -131,7 +131,7 @@ def _rq_job_row(rq_job: RQJob, queue_name: str) -> schemas.AdminJobRead:
         queue=queue_name,
         created_at=_aware(rq_job.created_at),
         updated_at=_aware(rq_job.enqueued_at),
-        can_prioritize=queue_name in PRIORITIZABLE_QUEUES,
+        can_prioritize=queue_name in PRIORITY_QUEUE_FOR,
     )
 
 
@@ -148,6 +148,21 @@ def _db_job_row(job: models.Job) -> schemas.AdminJobRead:
         created_at=_aware(job.started_at or job.updated_at),
         updated_at=_aware(job.updated_at),
     )
+
+
+def _queue_candidates(
+    q, name: str, sort: str, order: str, limit: int
+) -> list[schemas.AdminJobRead]:
+    """Returns up to `limit` pending jobs from one queue for the requested sort.
+
+    Queues are FIFO lists, so list position follows enqueue time and the newest
+    jobs sit at the tail. Every job in a queue shares the same status and queue
+    name, so for those sorts any `limit` jobs are equally valid; the head (next
+    to run) is used.
+    """
+    offset = max(0, q.count - limit) if sort == "created_at" and order == "desc" else 0
+    jobs = RQJob.fetch_many(q.get_job_ids(offset, limit), connection=q.connection)
+    return [_rq_job_row(job, name) for job in jobs if job is not None]
 
 
 @router.get("/jobs", response_model=list[schemas.AdminJobRead])
@@ -175,12 +190,14 @@ def list_jobs(
 
     rows: list[schemas.AdminJobRead] = []
 
+    # Each source returns its own top `limit` rows for the requested sort, so
+    # truncating the merged result below never drops a row that should be shown.
     if status_filter in (None, "queued"):
         for name, q in QUEUES.items():
             if queue is not None and name != queue:
                 continue
             try:
-                rows.extend(_rq_job_row(j, name) for j in q.get_jobs(0, limit))
+                rows.extend(_queue_candidates(q, name, sort, order, limit))
             except RedisError as exc:
                 logger.warning(
                     "Failed to read pending jobs from queue %s: %s", name, exc
@@ -192,11 +209,21 @@ def list_jobs(
     if queue is not None:
         kinds = [kind for kind, cfg in STAGE_CONFIG.items() if cfg["queue"] == queue]
         query = query.filter(models.Job.kind.in_(kinds))
+    created_at = func.coalesce(models.Job.started_at, models.Job.updated_at)
+    sort_column = {
+        "created_at": created_at,
+        "status": models.Job.status,
+        "queue": case(
+            {kind: str(cfg["queue"]) for kind, cfg in STAGE_CONFIG.items()},
+            value=models.Job.kind,
+            else_=None,
+        ),
+    }[sort]
+    primary = sort_column.desc() if order == "desc" else sort_column.asc()
     db_jobs = (
         query.order_by(
-            func.coalesce(models.Job.started_at, models.Job.updated_at)
-            .desc()
-            .nulls_last(),
+            primary.nulls_last(),
+            created_at.desc().nulls_last(),
             models.Job.id.desc(),
         )
         .limit(limit)
@@ -217,12 +244,15 @@ def list_jobs(
 )
 def prioritize_job(rq_job_id: str):
     """
-    Moves a pending job from its standard queue into the `priority` queue so
-    workers pick it up before other pending jobs.
+    Moves a pending job from its standard queue into the matching priority
+    queue (`light` -> `priority_light`, `heavy` -> `priority_heavy`) so workers
+    of the same class pick it up before other pending jobs.
 
-    The job is removed from its current queue with an atomic LREM; if a worker
-    has already dequeued it in the meantime nothing is removed and 409 is
-    returned, so a job can never run twice. Running jobs cannot be prioritized.
+    The removal from the source queue and the enqueue into the priority queue
+    run in a single WATCH/MULTI transaction: either both happen or neither
+    does, so a failed enqueue can never leave the job outside every queue. If a
+    worker has already dequeued the job, 409 is returned, so a job can never
+    run twice. Running jobs cannot be prioritized.
     """
     try:
         rq_job = RQJob.fetch(rq_job_id, connection=redis_conn)
@@ -231,19 +261,18 @@ def prioritize_job(rq_job_id: str):
             status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
         ) from exc
 
-    if rq_job.origin == priority_queue.name:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Job is already in the priority queue",
-        )
-
     source_name, source_queue = next(
         ((name, q) for name, q in QUEUES.items() if q.name == rq_job.origin),
         (None, None),
     )
+    if source_name in PRIORITY_QUEUE_FOR.values():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job is already in a priority queue",
+        )
     if (
         source_queue is None
-        or source_name not in PRIORITIZABLE_QUEUES
+        or source_name not in PRIORITY_QUEUE_FOR
         or rq_job.get_status() != JobStatus.QUEUED
     ):
         raise HTTPException(
@@ -251,12 +280,31 @@ def prioritize_job(rq_job_id: str):
             detail="Only pending jobs can be prioritized",
         )
 
-    if not source_queue.remove(rq_job):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Job is no longer pending; a worker has already picked it up",
-        )
+    target_name = PRIORITY_QUEUE_FOR[source_name]
+    target_queue = QUEUES[target_name]
+    with source_queue.connection.pipeline() as pipe:
+        for _ in range(MAX_PRIORITIZE_ATTEMPTS):
+            try:
+                pipe.watch(source_queue.key)
+                if pipe.lpos(source_queue.key, rq_job.id) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Job is no longer pending; a worker has already picked it up",
+                    )
+                pipe.multi()
+                pipe.lrem(source_queue.key, 1, rq_job.id)
+                target_queue.enqueue_job(rq_job, pipeline=pipe)
+                pipe.execute()
+                break
+            except WatchError:
+                continue
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Queue changed repeatedly while moving the job; please retry",
+            )
 
-    priority_queue.enqueue_job(rq_job)
-    logger.info("Admin moved job %s from queue %s to priority", rq_job.id, source_name)
-    return _rq_job_row(rq_job, "priority")
+    logger.info(
+        "Admin moved job %s from queue %s to %s", rq_job.id, source_name, target_name
+    )
+    return _rq_job_row(rq_job, target_name)

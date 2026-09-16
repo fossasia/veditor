@@ -9,7 +9,7 @@
   const queueSelect = document.getElementById('filter-queue');
   const sortButtons = document.querySelectorAll('.jobs-sort');
 
-  const state = { sort: 'created_at', order: 'desc' };
+  const state = { sort: 'created_at', order: 'desc', requestId: 0 };
 
   const STATUS_BADGES = {
     queued: 'badge-pending',
@@ -56,7 +56,7 @@
     tr.appendChild(cell(job.talk_id !== null ? '#' + job.talk_id : '—', 'td-mono'));
     tr.appendChild(cell(job.kind));
     tr.appendChild(cell(badge(job.status, STATUS_BADGES[job.status] || 'badge-waiting')));
-    tr.appendChild(cell(job.queue ? badge(job.queue, job.queue === 'priority' ? 'badge-purple' : 'badge-info') : '—'));
+    tr.appendChild(cell(job.queue ? badge(job.queue, job.queue.startsWith('priority') ? 'badge-purple' : 'badge-info') : '—'));
     tr.appendChild(cell(job.progress_pct !== null ? Math.round(job.progress_pct) + '%' : '—', 'td-mono'));
     tr.appendChild(cell(formatDate(job.created_at), 'jobs-muted'));
 
@@ -74,6 +74,8 @@
   }
 
   async function loadJobs() {
+    // Ignore responses from older requests so they can't overwrite newer filters/sorts.
+    const requestId = ++state.requestId;
     const params = new URLSearchParams({ sort: state.sort, order: state.order });
     if (statusSelect.value) params.set('status', statusSelect.value);
     if (queueSelect.value) params.set('queue', queueSelect.value);
@@ -82,12 +84,13 @@
       const res = await window.authFetch('/admin/jobs?' + params.toString());
       if (!res.ok) throw new Error('Failed to load jobs (HTTP ' + res.status + ')');
       const jobs = await res.json();
+      if (requestId !== state.requestId) return;
       tbody.replaceChildren(...jobs.map(renderRow));
       countEl.textContent = jobs.length + ' job' + (jobs.length === 1 ? '' : 's');
       emptyEl.hidden = jobs.length > 0;
       showError('');
     } catch (err) {
-      showError(err.message);
+      if (requestId === state.requestId) showError(err.message);
     }
   }
 
@@ -102,7 +105,8 @@
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || 'Failed to prioritize job (HTTP ' + res.status + ')');
       }
-      showNotice('Moved ' + job.kind + ' job for talk #' + job.talk_id + ' from "' + job.queue + '" to the priority queue.');
+      const moved = await res.json();
+      showNotice('Moved ' + job.kind + ' job for talk #' + job.talk_id + ' from "' + job.queue + '" to "' + moved.queue + '".');
       showError('');
     } catch (err) {
       showError(err.message);

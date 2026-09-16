@@ -67,7 +67,7 @@ If you prefer to run the entire stack locally without Docker (for faster reloadi
 
 7. Start the RQ worker natively (in a separate terminal):
    ```bash
-   uv run python scripts/run_worker.py priority light heavy
+   uv run python scripts/run_worker.py priority_light priority_heavy light heavy
    ```
 
 8. Run the tests natively:

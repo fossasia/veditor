@@ -47,18 +47,15 @@ def db_session():
 
 @pytest.fixture
 def queues():
-    """Isolated priority/light/heavy queues patched into the admin routes."""
+    """Isolated queues, keyed by their real names, patched into the admin routes."""
     suffix = uuid4().hex
-    priority = Queue(f"test_priority_{suffix}", connection=redis_conn)
-    light = Queue(f"test_light_{suffix}", connection=redis_conn)
-    heavy = Queue(f"test_heavy_{suffix}", connection=redis_conn)
-    mapping = {"priority": priority, "light": light, "heavy": heavy}
-    with (
-        patch("app.routes.admin.QUEUES", mapping),
-        patch("app.routes.admin.priority_queue", priority),
-    ):
+    mapping = {
+        name: Queue(f"test_{name}_{suffix}", connection=redis_conn)
+        for name in ("priority_light", "priority_heavy", "light", "heavy")
+    }
+    with patch("app.routes.admin.QUEUES", mapping):
         yield mapping
-    for q in (priority, light, heavy):
+    for q in mapping.values():
         q.empty()
         q.delete(delete_jobs=True)
 
@@ -187,6 +184,45 @@ def test_list_jobs_filters_and_sorting(db_session, queues):
     assert client.get("/admin/jobs?sort=bogus").status_code == 422
 
 
+def test_list_jobs_limit_keeps_newest_queued_jobs(db_session, queues):
+    client = TestClient(app)
+    _login(client, db_session, "admin")
+
+    jobs = [
+        queues["light"].enqueue("app.tasks.job_detect", i, "x.mp4") for i in range(3)
+    ]
+    rows = client.get("/admin/jobs?status=queued&queue=light&limit=2").json()
+    assert {r["rq_job_id"] for r in rows} == {jobs[1].id, jobs[2].id}
+
+    rows = client.get("/admin/jobs?status=queued&queue=light&limit=2&order=asc").json()
+    assert {r["rq_job_id"] for r in rows} == {jobs[0].id, jobs[1].id}
+
+
+def test_list_jobs_limit_applies_requested_sort_to_database_jobs(db_session, queues):
+    client = TestClient(app)
+    _login(client, db_session, "admin")
+    talk = _create_talk(db_session)
+    oldest = models.Job(
+        talk_id=talk.id,
+        kind="detect",
+        status="zzz-sort-test",
+        started_at=datetime(2000, 1, 1, tzinfo=UTC),
+    )
+    db_session.add(oldest)
+    db_session.add(
+        models.Job(
+            talk_id=talk.id,
+            kind="detect",
+            status="done",
+            started_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    rows = client.get("/admin/jobs?sort=status&order=desc&limit=1").json()
+    assert [r["job_id"] for r in rows] == [oldest.id]
+
+
 def test_prioritize_moves_pending_job_to_priority_queue(db_session, queues):
     client = TestClient(app)
     _login(client, db_session, "admin")
@@ -197,19 +233,50 @@ def test_prioritize_moves_pending_job_to_priority_queue(db_session, queues):
     res = client.post(f"/admin/jobs/{target.id}/prioritize")
     assert res.status_code == 200
     body = res.json()
-    assert body["queue"] == "priority"
+    assert body["queue"] == "priority_light"
     assert body["can_prioritize"] is False
 
     assert queues["light"].job_ids == [first.id]
-    assert queues["priority"].job_ids == [target.id]
+    assert queues["priority_light"].job_ids == [target.id]
+    assert queues["priority_heavy"].job_ids == []
     target.refresh()
-    assert target.origin == queues["priority"].name
+    assert target.origin == queues["priority_light"].name
     assert target.get_status() == "queued"
 
     # A second click must not enqueue the job twice.
     res = client.post(f"/admin/jobs/{target.id}/prioritize")
     assert res.status_code == 409
-    assert queues["priority"].job_ids == [target.id]
+    assert queues["priority_light"].job_ids == [target.id]
+
+
+def test_prioritize_keeps_heavy_jobs_on_heavy_workers(db_session, queues):
+    client = TestClient(app)
+    _login(client, db_session, "admin")
+
+    job = queues["heavy"].enqueue("app.tasks.job_transcode", 5)
+    res = client.post(f"/admin/jobs/{job.id}/prioritize")
+    assert res.status_code == 200
+    assert res.json()["queue"] == "priority_heavy"
+    assert queues["priority_heavy"].job_ids == [job.id]
+    assert queues["priority_light"].job_ids == []
+
+
+def test_prioritize_failed_enqueue_leaves_job_in_source_queue(db_session, queues):
+    client = TestClient(app)
+    _login(client, db_session, "admin")
+
+    job = queues["light"].enqueue("app.tasks.job_detect", 6, "c.mp4")
+    with (
+        patch.object(
+            queues["priority_light"], "enqueue_job", side_effect=RuntimeError("boom")
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        client.post(f"/admin/jobs/{job.id}/prioritize")
+
+    # Removal and enqueue share one transaction, so the job was not lost.
+    assert queues["light"].job_ids == [job.id]
+    assert queues["priority_light"].job_ids == []
 
 
 def test_prioritize_rejects_missing_and_already_dequeued_jobs(db_session, queues):
@@ -224,7 +291,7 @@ def test_prioritize_rejects_missing_and_already_dequeued_jobs(db_session, queues
 
     res = client.post(f"/admin/jobs/{job.id}/prioritize")
     assert res.status_code == 409
-    assert queues["priority"].job_ids == []
+    assert queues["priority_heavy"].job_ids == []
 
 
 def test_admin_jobs_page_access(db_session):
