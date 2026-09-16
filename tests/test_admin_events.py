@@ -195,7 +195,10 @@ def test_admin_event_detail_lists_talks_with_studio_links(client, db_session):
     admin = create_user(db_session, "detail_admin@example.com", "admin")
     organizer = create_user(db_session, "detail_org@example.com", "organizer")
     event = add_event(
-        db_session, "Drilldown Summit", organizer, ["done", "broken", "preview"]
+        db_session,
+        "Drilldown Summit",
+        organizer,
+        ["done", "broken", "preview", "assembling"],
     )
     talks = db_session.query(models.Talk).filter_by(event_id=event.id).all()
     authenticate(client, admin)
@@ -209,6 +212,10 @@ def test_admin_event_detail_lists_talks_with_studio_links(client, db_session):
     assert "Published" in response.text
     assert "Broken" in response.text
     assert "Preview Ready" in response.text
+    assert (
+        '<span class="badge badge-processing">'
+        '<span class="spinner spinner-sm"></span>Assembling</span>'
+    ) in response.text
 
 
 def test_admin_event_detail_404_for_unknown_event(client, db_session):

@@ -5,7 +5,7 @@
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
   {% elif status in ['pending_approval', 'pending_bounds'] %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>
-  {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
+  {% elif status in ['cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
     <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
   {% elif status == 'preview' %}
     <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>
