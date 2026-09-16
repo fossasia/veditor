@@ -1,0 +1,73 @@
+{% extends "base.html.jinja" %}
+{% from "_admin_event_macros.html.jinja" import progress_bar, count_badges %}
+
+{% block title %}All Events — Admin{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin_events.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <span>Admin</span>
+  <span class="sep">/</span>
+  <span class="current">All Events</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span class="table-title">All Events</span>
+        <span class="table-count admin-events-count">{{ total_events }} event{% if total_events != 1 %}s{% endif %}</span>
+      </div>
+      <div class="event-legend">
+        <span><i class="legend-dot seg-done"></i>Done</span>
+        <span><i class="legend-dot seg-processing"></i>Processing</span>
+        <span><i class="legend-dot seg-pending"></i>Pending</span>
+        <span><i class="legend-dot seg-rejected"></i>Rejected</span>
+        <span><i class="legend-dot seg-broken"></i>Broken</span>
+      </div>
+    </div>
+
+    {% if events %}
+    <table>
+      <thead>
+        <tr>
+          <th class="admin-col-id">ID</th>
+          <th>Event</th>
+          <th>Owner</th>
+          <th class="admin-col-num">Talks</th>
+          <th class="admin-col-progress">Progress</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+        <tr class="{% if event.broken %}event-row-broken{% endif %}">
+          <td class="td-mono admin-col-id">#{{ event.id }}</td>
+          <td class="td-title">
+            <a href="/admin/events/{{ event.id }}" class="admin-event-link"><strong>{{ event.name }}</strong></a>
+          </td>
+          <td>{% if event.owner_email %}{{ event.owner_email }}{% else %}<span class="admin-muted">—</span>{% endif %}</td>
+          <td class="td-mono admin-col-num">{{ event.total }}</td>
+          <td class="admin-col-progress">
+            {{ progress_bar(event) }}
+            {{ count_badges(event) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if total_pages > 1 %}
+    <nav class="admin-pagination" aria-label="Pagination">
+      {% if page > 1 %}<a class="btn btn-ghost btn-sm" href="/admin/events?page={{ page - 1 }}">← Previous</a>{% endif %}
+      <span class="admin-muted">Page {{ page }} of {{ total_pages }}</span>
+      {% if page < total_pages %}<a class="btn btn-ghost btn-sm" href="/admin/events?page={{ page + 1 }}">Next →</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% else %}
+    <div class="admin-empty-state">No events on the platform yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

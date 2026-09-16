@@ -1,0 +1,66 @@
+{% extends "base.html.jinja" %}
+{% from "_admin_event_macros.html.jinja" import progress_bar, count_badges %}
+{% from "_status_badge.html.jinja" import status_badge %}
+
+{% block title %}{{ event.name }} — Admin{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin_events.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin/events">All Events</a>
+  <span class="sep">/</span>
+  <span class="current">{{ event.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+  <div class="admin-event-summary">
+    <div>
+      <h2 class="admin-event-title">{{ event.name }} <span class="td-mono admin-muted">#{{ event.id }}</span></h2>
+      <p class="admin-muted admin-small">Owner: {{ event.owner_email or '—' }} · {{ event.total }} talk{% if event.total != 1 %}s{% endif %}</p>
+    </div>
+    <div class="admin-event-summary-stats">
+      {{ progress_bar(event) }}
+      {{ count_badges(event) }}
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <span class="table-title">Talks</span>
+    </div>
+    {% if talks %}
+    <table>
+      <thead>
+        <tr>
+          <th class="admin-col-id">ID</th>
+          <th>Title</th>
+          <th>Room</th>
+          <th>Start</th>
+          <th>Status</th>
+          <th class="admin-col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for talk in talks %}
+        <tr>
+          <td class="td-mono admin-col-id">#{{ talk.id }}</td>
+          <td class="td-title">{{ talk.title }}</td>
+          <td>{{ talk.room or '—' }}</td>
+          <td class="td-mono">{{ talk.start.strftime('%b %d, %H:%M') if talk.start else '—' }}</td>
+          <td>{{ status_badge(talk.status) }}</td>
+          <td class="admin-col-actions">
+            <a href="/studio/talks/{{ talk.id }}" class="btn btn-ghost btn-sm">Open in Studio</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="admin-empty-state">This event has no talks yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

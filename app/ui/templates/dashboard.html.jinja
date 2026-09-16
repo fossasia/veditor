@@ -5,27 +5,7 @@
 <link rel="stylesheet" href="/static/css/dashboard.css">
 {% endblock %}
 
-{% macro status_badge(status) %}
-  {% if status == 'waiting_for_files' %}
-    <span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>
-  {% elif status == 'detecting' %}
-    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
-  {% elif status in ['pending_approval', 'pending_bounds'] %}
-    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>
-  {% elif status in ['cutting', 'generating_previews', 'transcoding', 'uploading'] %}
-    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
-  {% elif status == 'preview' %}
-    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>
-  {% elif status == 'needs_work' %}
-    <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
-  {% elif status == 'done' %}
-    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
-  {% elif status in ['rejected', 'broken'] %}
-    <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
-  {% else %}
-    <span class="badge badge-waiting"><span class="badge-dot"></span>{{ status }}</span>
-  {% endif %}
-{% endmacro %}
+{% from "_status_badge.html.jinja" import status_badge %}
 
 {% block content %}
 <div class="page-body">

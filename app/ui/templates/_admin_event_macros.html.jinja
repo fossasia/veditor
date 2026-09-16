@@ -1,0 +1,31 @@
+{% macro progress_bar(stats) %}
+{%- set total = stats.total -%}
+{%- set offset = namespace(x=0) -%}
+<div class="event-progress">
+  <svg class="event-progress-svg" viewBox="0 0 100 1" preserveAspectRatio="none" role="img" aria-label="{{ stats.done }} of {{ total }} talks done, {{ stats.broken }} broken">
+    {% if total %}
+      {% for key in ['done', 'processing', 'pending', 'rejected', 'broken'] %}
+        {% if stats[key] %}
+        {%- set width = stats[key] * 100 / total -%}
+        <rect class="seg-{{ key }}" x="{{ offset.x | round(3) }}" y="0" width="{{ width | round(3) }}" height="1"><title>{{ key | title }}: {{ stats[key] }}</title></rect>
+        {%- set offset.x = offset.x + width -%}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  </svg>
+</div>
+{% endmacro %}
+
+{% macro count_badges(stats) %}
+{% if not stats.total %}
+<span class="admin-muted admin-small">No talks yet</span>
+{% else %}
+<div class="event-count-badges">
+  <span class="badge badge-done" title="Published">{{ stats.done }} done</span>
+  <span class="badge badge-processing" title="Being processed by a worker">{{ stats.processing }} processing</span>
+  <span class="badge badge-pending" title="Waiting for files or a review decision">{{ stats.pending }} pending</span>
+  {% if stats.rejected %}<span class="badge badge-waiting">{{ stats.rejected }} rejected</span>{% endif %}
+  <span class="badge {% if stats.broken %}badge-danger{% else %}badge-waiting{% endif %}">{{ stats.broken }} broken</span>
+</div>
+{% endif %}
+{% endmacro %}

@@ -1,0 +1,80 @@
+/* ── Admin Events Overview (admin_events.html, admin_event_detail.html) ── */
+
+.admin-events-count { margin-left: 8px; }
+.admin-muted { color: var(--v-text-muted); }
+.admin-small { font-size: 0.82rem; }
+
+.admin-col-id { width: 80px; padding-left: 18px; }
+.admin-col-num { width: 80px; text-align: right; }
+.admin-col-progress { width: 45%; min-width: 280px; }
+.admin-col-actions { text-align: right; padding-right: 18px; }
+
+.admin-event-link { color: var(--v-text-primary); text-decoration: none; }
+.admin-event-link:hover { color: var(--v-primary); text-decoration: underline; }
+
+.event-row-broken td:first-child { box-shadow: inset 3px 0 0 var(--v-status-danger-text); }
+
+/* Stacked progress bar (SVG so segment widths need no inline styles) */
+.event-progress {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--v-status-waiting-bg);
+  border: 1px solid var(--v-border-subtle);
+  margin-bottom: 8px;
+}
+.event-progress-svg { display: block; width: 100%; height: 100%; }
+
+.seg-done       { background: var(--v-status-success-text); fill: var(--v-status-success-text); }
+.seg-processing { background: var(--v-status-active-text);  fill: var(--v-status-active-text); }
+.seg-pending    { background: var(--v-status-pending-text); fill: var(--v-status-pending-text); }
+.seg-rejected   { background: var(--v-status-waiting-text); fill: var(--v-status-waiting-text); }
+.seg-broken     { background: var(--v-status-danger-text);  fill: var(--v-status-danger-text); }
+
+.event-count-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.event-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.75rem;
+  color: var(--v-text-muted);
+}
+.legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.admin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--v-border-subtle);
+}
+
+.admin-empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--v-text-muted);
+}
+
+/* Drill-down summary card */
+.admin-event-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px 32px;
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-lg);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+.admin-event-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 4px; }
+.admin-event-summary-stats { flex: 1; min-width: 280px; max-width: 520px; }
