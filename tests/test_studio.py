@@ -266,6 +266,20 @@ def test_talk_studio_page(client: TestClient, db_session):
     assert "text/html" in response.headers.get("content-type", "")
     assert "Test Studio Detail Talk" in response.text
     assert "Room 101" in response.text
+    assert "Test Studio Page Event" in response.text
+    assert "breadcrumb-event" in response.text
+    assert "breadcrumb-room" in response.text
+    assert "topbar-time-meta" in response.text
+    assert "(30m)" in response.text
+    assert response.text.index("topbar-time-meta") < response.text.index(
+        "topbar-control-group"
+    )
+    assert "broadcast-banner" not in response.text
+    assert f"Talk #{talk.id}" not in response.text
+    assert "Talk Metadata" not in response.text
+    assert "Generated Media Assets" not in response.text
+    assert "Gate 1" not in response.text
+    assert "Gate 2" not in response.text
 
 
 def test_talk_studio_human_session_user_access(client: TestClient, db_session):
@@ -305,6 +319,12 @@ def test_talk_studio_human_session_user_access(client: TestClient, db_session):
     assert res.status_code == 200
     assert "Human Session Talk" in res.text
     assert "Main Hall" in res.text
+    assert "user-menu-btn" in res.text
+    assert "user-dropdown-menu" in res.text
+    assert "Dark Mode" in res.text
+    assert "Log out" in res.text
+    assert "Gate 1" not in res.text
+    assert "Gate 2" not in res.text
 
     # 2. Admin can access talk via session cookie even if created by someone else
     admin = models.User(
@@ -1569,3 +1589,400 @@ def test_studio_done_talk_download_actions(
         assert "attachment" not in stream_res.headers.get("content-disposition", "")
     finally:
         clip.unlink(missing_ok=True)
+
+
+def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
+    """When viewed with a speaker token, studio scrubber omits INTRO/OUTRO and enables speaker mode."""
+    from app.security import create_sso_token
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Speaker Talk",
+        room="Room 1",
+        start=now,
+        end=now + timedelta(minutes=45),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    speaker_token = create_sso_token(
+        scope_type="talk", scope_id=talk.id, role="speaker"
+    )
+    client.cookies.set("veditor_session", speaker_token)
+
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+
+    # Speaker must NOT see INTRO or OUTRO bumper blocks
+    assert 'id="tl-intro"' not in res.text
+    assert 'id="tl-outro"' not in res.text
+
+    # Timeline scrubber is present
+    assert 'id="timeline-track"' in res.text
+
+
+def test_studio_organizer_timeline_omits_bumpers(client: TestClient, db_session):
+    """When viewed by an organizer, studio scrubber also omits INTRO and OUTRO bumper blocks from timeline."""
+    from app.security import create_session_token
+
+    org = models.User(
+        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Organizer Talk",
+        room="Room 1",
+        start=now,
+        end=now + timedelta(minutes=45),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    token = create_session_token(org.id, org.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+
+    # INTRO and OUTRO bumper blocks are NOT on the timeline
+    assert 'id="tl-intro"' not in res.text
+    assert 'id="tl-outro"' not in res.text
+
+    # Timeline scrubber is present
+    assert 'id="timeline-track"' in res.text
+
+
+def test_studio_upload_pending_state_hides_timeline(client: TestClient, db_session):
+    from app.security import create_session_token
+
+    org = models.User(
+        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    # 1. Talk in waiting_for_files state (upload pending)
+    pending_talk = models.Talk(
+        event_id=event.id,
+        title="Pending Upload Talk",
+        room="Hall 1",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    # 2. Talk in preview state (video available)
+    ready_talk = models.Talk(
+        event_id=event.id,
+        title="Ready Preview Talk",
+        room="Hall 2",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="preview",
+    )
+    db_session.add(pending_talk)
+    db_session.add(ready_talk)
+    db_session.commit()
+
+    token = create_session_token(org.id, org.role)
+    client.cookies.set("veditor_session", token)
+
+    # When upload is pending:
+    res_pending = client.get(f"/studio/talks/{pending_talk.id}")
+    assert res_pending.status_code == 200
+    # Shows the upload dropzone box and browse button
+    assert "upload-dropzone-box" in res_pending.text
+    assert "Attach Recording Video" in res_pending.text
+    assert 'id="btn-browse-file"' in res_pending.text
+    assert 'id="video-file-input"' in res_pending.text
+    # Hides timeline track, controls, and timecode bar
+    assert 'id="timeline-track"' not in res_pending.text
+    assert "timeline-section" not in res_pending.text
+    assert "player-controls" not in res_pending.text
+    assert "timecode-bar" not in res_pending.text
+    assert 'id="main-video"' not in res_pending.text
+
+    # When upload is complete / preview ready:
+    res_ready = client.get(f"/studio/talks/{ready_talk.id}")
+    assert res_ready.status_code == 200
+    # Shows video player, timecode bar, player controls, and timeline track
+    assert 'id="main-video"' in res_ready.text
+    assert "timecode-bar" in res_ready.text
+    assert "player-controls" in res_ready.text
+    assert "timeline-section" in res_ready.text
+    assert 'id="timeline-track"' in res_ready.text
+    assert 'id="timeline-ticks"' in res_ready.text
+    # Does NOT show upload-pending-container
+    assert "upload-pending-container" not in res_ready.text
+    # Does NOT show cut bounds controls (only timeline scrub track for video)
+    assert 'id="tl-start-marker"' not in res_ready.text
+    assert 'id="tl-end-marker"' not in res_ready.text
+    assert 'id="tl-content"' not in res_ready.text
+    assert 'id="btn-set-in"' not in res_ready.text
+    assert "timeline-inputs-bar" not in res_ready.text
+
+    # When bounds cutting is needed (pending_bounds or needs_work):
+    bounds_talk = models.Talk(
+        event_id=event.id,
+        title="Bounds Cut Talk",
+        room="Hall 3",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="pending_bounds",
+    )
+    db_session.add(bounds_talk)
+    db_session.commit()
+
+    res_bounds = client.get(f"/studio/talks/{bounds_talk.id}")
+    assert res_bounds.status_code == 200
+    # Shows timeline AND cut bounds markers/inputs
+    assert 'id="timeline-track"' in res_bounds.text
+    assert 'id="tl-start-marker"' in res_bounds.text
+    assert 'id="tl-end-marker"' in res_bounds.text
+    assert 'id="tl-content"' in res_bounds.text
+    assert 'id="btn-set-in"' in res_bounds.text
+    assert 'id="btn-set-out"' in res_bounds.text
+    assert 'id="cut-duration-badge"' in res_bounds.text
+    assert 'id="btn-play-cut"' in res_bounds.text
+    assert "timeline-inputs-bar" in res_bounds.text
+
+
+def test_talk_studio_offset_aware_start_normalizes_to_utc(
+    client: TestClient, db_session
+):
+    from datetime import timezone
+
+    event = models.Event(name=f"TZ Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    # Offset +05:30 (15:30 IST -> 10:00 UTC)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start_ist = datetime(2026, 9, 15, 15, 30, tzinfo=ist)
+    end_ist = start_ist + timedelta(minutes=45)
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="TZ Talk",
+        room="Hall A",
+        start=start_ist,
+        end=end_ist,
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(
+        hashed_key=hash_api_key(api_key),
+        event_ids=[event.id],
+    )
+    db_session.add(client_model)
+    db_session.commit()
+
+    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    assert res.status_code == 200
+    assert "Sep 15, 10:00 – 10:45 UTC" in res.text
+    assert "(45m)" in res.text
+
+
+def test_talk_studio_duration_with_seconds_remainder(client: TestClient, db_session):
+    event = models.Event(name=f"Remainder Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime(2026, 9, 15, 10, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Short Talk",
+        room="Hall B",
+        start=now,
+        end=now + timedelta(seconds=90),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(
+        hashed_key=hash_api_key(api_key),
+        event_ids=[event.id],
+    )
+    db_session.add(client_model)
+    db_session.commit()
+
+    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    assert res.status_code == 200
+    assert "Sep 15, 10:00 – 10:01 UTC" in res.text
+    assert "(1m 30s)" in res.text
+
+
+def test_user_menu_accessibility_attributes(client: TestClient, db_session):
+    from app.security import create_session_token
+
+    user = models.User(
+        email="a11y@test.com",
+        hashed_password="hash",
+        role="organizer",
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    session_token = create_session_token(user_id=user.id, role=user.role)
+    client.cookies.set("veditor_session", session_token)
+
+    res = client.get("/studio")
+    assert res.status_code == 200
+    assert 'aria-label="User menu"' in res.text
+    assert 'aria-expanded="false"' in res.text
+    assert 'aria-controls="user-dropdown-menu"' in res.text
+
+
+def test_talk_studio_media_source_selector_and_download(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    from tests.conftest import generate_clip
+
+    event = models.Event(name=f"Media Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Media Talk",
+        room="Hall C",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(
+        hashed_key=hash_api_key(api_key),
+        event_ids=[event.id],
+    )
+    db_session.add(client_model)
+    db_session.commit()
+
+    # When no media files exist
+    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    assert res.status_code == 200
+    assert 'id="media-source-select"' not in res.text
+
+    # Store raw, preview, cut, and final
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        temp_storage.put(f"{talk.id}/raw/raw.mp4", clip)
+        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
+        temp_storage.put(f"{talk.id}/cut/cut.mp4", clip)
+        temp_storage.put(f"{talk.id}/final/final.mp4", clip)
+
+        res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+        assert res.status_code == 200
+        assert 'id="media-source-select"' in res.text
+        assert 'id="media-download-btn"' in res.text
+        assert "Master Video (Final)" in res.text
+        assert "Preview Video" in res.text
+        assert "Raw Recording" in res.text
+        # Cut is internal intermediate and should NOT be shown in the UI source dropdown
+        assert "Cut Talk Clip" not in res.text
+        assert f"/studio/media/{talk.id}/cut/cut.mp4" not in res.text
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_talk_studio_speaker_mode_body_class(client: TestClient, db_session):
+    from app.security import create_session_token
+
+    org_user = models.User(
+        email=f"org_{uuid.uuid4().hex}@test.com",
+        hashed_password="hash",
+        role="organizer",
+        is_active=True,
+    )
+    db_session.add(org_user)
+    db_session.commit()
+    db_session.refresh(org_user)
+
+    event = models.Event(
+        name=f"Speaker Mode Event {uuid.uuid4().hex}",
+        created_by_user_id=org_user.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Speaker Mode Talk",
+        room="Hall D",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # API key only (no user session) -> treated as speaker mode
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(
+        hashed_key=hash_api_key(api_key),
+        event_ids=[event.id],
+    )
+    db_session.add(client_model)
+    db_session.commit()
+
+    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    assert res.status_code == 200
+    assert "is-speaker" in res.text
+
+    # Organizer session -> NOT speaker mode
+    session_token = create_session_token(user_id=org_user.id, role=org_user.role)
+    client.cookies.set("veditor_session", session_token)
+
+    res_org = client.get(f"/studio/talks/{talk.id}")
+    assert res_org.status_code == 200
+    assert "is-speaker" not in res_org.text

@@ -540,7 +540,7 @@ def submit_cut_bounds(
     "/{talk_id}/bumpers/upload",
     status_code=status.HTTP_200_OK,
 )
-async def upload_bumper_file(
+def upload_bumper_file(
     talk_id: int,
     file: Annotated[UploadFile, File()],
     kind: Annotated[str, Form()] = "intro",
@@ -570,9 +570,15 @@ async def upload_bumper_file(
     max_size = settings.max_bumper_upload_size_bytes
     total_bytes = 0
     try:
+        # Keep only the latest unsubmitted upload for each talk and bumper kind.
+        for previous_path in staging_dir.glob(f"bumper_{talk_id}_{kind}_*"):
+            if previous_path != staged_path and previous_path.is_file():
+                # storage-boundary-exempt: remove superseded bumper staging upload
+                previous_path.unlink()
+
         # storage-boundary-exempt: bumper staging upload
-        with open(staged_path, "wb") as f_out:  # noqa: ASYNC230
-            while chunk := await file.read(1024 * 1024):
+        with open(staged_path, "wb") as f_out:
+            while chunk := file.file.read(1024 * 1024):
                 total_bytes += len(chunk)
                 if total_bytes > max_size:
                     raise HTTPException(

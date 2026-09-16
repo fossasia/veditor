@@ -34,6 +34,20 @@ def db_session():
         yield session
     finally:
         app.dependency_overrides.pop(get_db, None)
+        try:
+            session.rollback()
+            session.query(models.Talk).filter(
+                models.Talk.event.has(models.Event.name.like("%Test Event%"))
+            ).delete(synchronize_session=False)
+            session.query(models.Event).filter(
+                models.Event.name.like("%Test Event%")
+            ).delete(synchronize_session=False)
+            session.query(models.User).filter(
+                models.User.email.like("%@example.com")
+            ).delete(synchronize_session=False)
+            session.commit()
+        except Exception:  # noqa: BLE001
+            session.rollback()
         session.close()
         transaction.rollback()
         connection.close()
@@ -157,14 +171,14 @@ def test_post_events_success_organizer(client: TestClient, db_session):
 
     response = client.post(
         "/studio/events",
-        data={"name": "FOSSASIA Summit 2026"},
+        data={"name": "FOSSASIA Summit 2026 Organizer Post"},
         follow_redirects=False,
     )
     assert response.status_code == 303
 
     event = (
         db_session.query(models.Event)
-        .filter(models.Event.name == "FOSSASIA Summit 2026")
+        .filter(models.Event.name == "FOSSASIA Summit 2026 Organizer Post")
         .first()
     )
     assert event is not None

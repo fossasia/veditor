@@ -930,6 +930,34 @@ def test_upload_bumper_file_success(mock_db, auth_client, pending_talk):
     staged_file.unlink(missing_ok=True)
 
 
+def test_upload_bumper_file_replaces_previous_staged_file(
+    mock_db, auth_client, pending_talk
+):
+    """A new upload removes an older unsubmitted bumper of the same kind."""
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    staging_dir = get_bumper_staging_dir()
+    previous_file = staging_dir / "bumper_1_intro_previous.mp4"
+    previous_file.write_bytes(b"old bumper")
+    try:
+        response = client.post(
+            "/talks/1/bumpers/upload",
+            files={"file": ("test_intro.mp4", b"new bumper", "video/mp4")},
+            data={"kind": "intro"},
+            headers={"X-API-Key": "valid_key"},
+        )
+
+        assert response.status_code == 200
+        assert not previous_file.exists()
+        staged_file = staging_dir / Path(response.json()["path"]).name
+        assert staged_file.is_file()
+        staged_file.unlink(missing_ok=True)
+    finally:
+        previous_file.unlink(missing_ok=True)
+
+
 def test_upload_bumper_file_exceeds_max_size(
     mock_db, auth_client, pending_talk, monkeypatch
 ):

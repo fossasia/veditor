@@ -120,7 +120,12 @@ def _authorize_studio_talk(
 
     user = _get_authenticated_user_from_cookie(request, db)
     if user:
-        talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        talk = (
+            db.query(models.Talk)
+            .options(selectinload(models.Talk.event))
+            .filter(models.Talk.id == talk_id)
+            .first()
+        )
         if not talk:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -178,20 +183,16 @@ def _authorize_studio_talk(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
         )
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = (
+        db.query(models.Talk)
+        .options(selectinload(models.Talk.event))
+        .filter(models.Talk.id == talk_id)
+        .first()
+    )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=not_found_detail,
-        )
-    if hasattr(request, "state"):
-        request.state.user = CurrentUser(
-            user_id=None,
-            client_id=client.id,
-            email=None,
-            role="admin",
-            source="api_key",
-            event_ids=list(client.event_ids or []),
         )
     return talk
 
@@ -217,23 +218,23 @@ ALL_STATUSES = [
 MILESTONES_DEF = [
     {
         "num": 1,
-        "title": "Upload & Setup",
-        "desc": "Receive recording, approve video, and setup workflow",
+        "title": "Upload & Detect",
+        "desc": "Receive recording and detect talk duration",
     },
     {
         "num": 2,
         "title": "Timestamp Review",
-        "desc": "Confirm speaker start and end times",
+        "desc": "Human verification of speaker In/Out points",
     },
     {
         "num": 3,
-        "title": "Preview & Review",
-        "desc": "Trim clip, balance audio, and inspect preview",
+        "title": "Processing & Preview",
+        "desc": "Cut, loudness, title slates & low-res preview",
     },
     {
         "num": 4,
         "title": "Transcode & Publish",
-        "desc": "Encode high-definition video and publish final release",
+        "desc": "Final quality master encode & upload",
     },
 ]
 
@@ -681,11 +682,9 @@ def studio(
 
     # Build categorized media assets that can be watched in the studio
     asset_defs = [
-        ("preview", "preview.mp4", "Preview Video"),
-        ("intro", "intro.mp4", "Opening Title Slate"),
-        ("outro", "outro.mp4", "Outro Slate"),
-        ("cut", "cut.mp4", "Cut Talk Clip"),
         ("final", "final.mp4", "Master Video (Final)"),
+        ("preview", "preview.mp4", "Preview Video"),
+        ("raw", "raw.mp4", "Raw Recording"),
     ]
     media_assets = []
     seen_urls = set()
