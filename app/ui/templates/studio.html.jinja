@@ -56,7 +56,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
+<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
 
   <!-- ── CENTER: Video Player or Upload Dropzone ─────────────── -->
   <div class="player-panel">

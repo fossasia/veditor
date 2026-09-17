@@ -51,7 +51,8 @@ if (shellInit) {
     }
   }
 }
-
+const savedCutStart = shellInit?.dataset.cutStart;
+const savedCutEnd = shellInit?.dataset.cutEnd;
 const video           = document.getElementById('main-video');
 const noPreview       = document.getElementById('no-preview-msg');
 const timecode        = document.getElementById('timecode-display');
@@ -501,8 +502,9 @@ if (video) {
     isPlayingCut = false;
   });
   video.addEventListener('loadedmetadata', () => {
-    outPointSec = video.duration || 10;
-    inPointSec = 0;
+    const duration = video.duration || 10;
+    inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
+    outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
     updateTimecode();
     updateTimelineTicks();
     updateCutMarkersUI();
@@ -511,6 +513,12 @@ if (video) {
     if (lbl) lbl.textContent = formatTimecode(video.duration);
     drawWaveform();
   });
+  if (video.readyState >= 1) {
+    const duration = video.duration || 10;
+    inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
+    outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
+    updateCutMarkersUI();
+  }
   video.addEventListener('durationchange', updateTimelineTicks);
 }
 
