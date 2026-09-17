@@ -88,6 +88,7 @@ const btnPlayCut      = document.getElementById('btn-play-cut');
 
 let inPointSec  = 0;
 let outPointSec = 0;
+let boundsEdited = false;
 let isPlayingCut = false;
 let currentWaveformPeaks = [];
 let waveformAbortController = null;
@@ -236,6 +237,7 @@ function initWaveformListeners() {
 window.loadVideoSrc = function(url) {
   if (!video) return;
   video.pause();
+  boundsEdited = false;
   video.src = url;
   video.style.display = 'block';
   if (noPreview) noPreview.style.display = 'none';
@@ -342,12 +344,14 @@ function setInPoint(timeSec) {
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   inPointSec = Math.min(max, Math.max(0, timeSec));
   if (inPointSec > outPointSec) outPointSec = Math.min(max, inPointSec + 1);
+  boundsEdited = true;
   updateCutMarkersUI();
 }
 
 function setOutPoint(timeSec) {
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   outPointSec = Math.min(max, Math.max(inPointSec + 0.1, timeSec));
+  boundsEdited = true;
   updateCutMarkersUI();
 }
 
@@ -504,8 +508,10 @@ if (video) {
 
   function initializeVideoMetadata() {
     const duration = video.duration || 10;
-    inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
-    outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
+    if (!boundsEdited) {
+      inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
+      outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
+    }
     updateTimecode();
     updateTimelineTicks();
     updateCutMarkersUI();
