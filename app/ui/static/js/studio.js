@@ -501,7 +501,8 @@ if (video) {
     if (iconPause) iconPause.style.display = 'none';
     isPlayingCut = false;
   });
-  video.addEventListener('loadedmetadata', () => {
+
+  function initializeVideoMetadata() {
     const duration = video.duration || 10;
     inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
     outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
@@ -512,12 +513,12 @@ if (video) {
     const lbl = document.getElementById('tl-range-label');
     if (lbl) lbl.textContent = formatTimecode(video.duration);
     drawWaveform();
-  });
+  }
+
+  video.addEventListener('loadedmetadata', initializeVideoMetadata);
+
   if (video.readyState >= 1) {
-    const duration = video.duration || 10;
-    inPointSec = savedCutStart !== '' ? Number(savedCutStart) : 0;
-    outPointSec = savedCutEnd !== '' ? Number(savedCutEnd) : duration;
-    updateCutMarkersUI();
+    initializeVideoMetadata();
   }
   video.addEventListener('durationchange', updateTimelineTicks);
 }
