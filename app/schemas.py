@@ -1,5 +1,6 @@
 import re
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -260,18 +261,26 @@ class ApproveRequest(BaseModel):
     decision: Literal["approve", "reject"] = "approve"
 
 
-HHMMSS_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?$")
+HHMMSS_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?\Z")
 
 
-def _parse_hhmmss(value: str) -> float:
-    """Parse HH:MM:SS (with optional subseconds) into seconds (float)."""
-    if not isinstance(value, str) or not HHMMSS_PATTERN.match(value):
+def _parse_hhmmss(value: str) -> Decimal:
+    """Parse HH:MM:SS (with optional subseconds) into total seconds (Decimal).
+
+    Raises ValueError for strings that don't match HH:MM:SS and for
+    out-of-range components (HH ≥ 24, MM ≥ 60, SS ≥ 60).
+    """
+    if not isinstance(value, str) or not HHMMSS_PATTERN.fullmatch(value):
         raise ValueError(f"Invalid time format '{value}', expected HH:MM:SS")
-    try:
-        t = time.fromisoformat(value)
-        return t.hour * 3600 + t.minute * 60 + t.second + t.microsecond / 1_000_000
-    except ValueError as exc:
-        raise ValueError(f"Invalid time format '{value}', expected HH:MM:SS") from exc
+    hh_str, mm_str, ss_str = value.split(":")
+    hh, mm = int(hh_str), int(mm_str)
+    ss = Decimal(ss_str)
+    if hh >= 24 or mm >= 60 or ss >= 60:
+        raise ValueError(
+            f"Time components out of range in '{value}' "
+            "(HH must be 0–23, MM 0–59, SS 0–59)"
+        )
+    return hh * 3600 + mm * 60 + ss
 
 
 class CutBoundsRequest(BaseModel):
@@ -285,10 +294,15 @@ class CutBoundsRequest(BaseModel):
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
             raise ValueError("cut_end must be greater than cut_start")
+
+        if float(end_s) <= float(start_s):
+            raise ValueError(
+                "cut_end must be greater than cut_start (values are too close and lose ordering after float conversion)"
+            )
         return self
 
     def parsed_seconds(self) -> tuple[float, float]:
-        return _parse_hhmmss(self.cut_start), _parse_hhmmss(self.cut_end)
+        return float(_parse_hhmmss(self.cut_start)), float(_parse_hhmmss(self.cut_end))
 
 
 class IntroOutroRequest(BaseModel):

@@ -1,15 +1,21 @@
+import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect
 
 from app import models
 from app.auth import hash_api_key
 from app.db import SessionLocal, get_db
 from app.main import app
+from app.security import create_session_token, create_sso_token
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
+from tests.conftest import generate_clip
 
 
 @pytest.fixture
@@ -64,9 +70,6 @@ def test_static_assets(client: TestClient):
 
 
 def test_templates_have_no_inline_css_or_js():
-    import re
-    from pathlib import Path
-
     templates_dir = Path(__file__).parent.parent / "app" / "ui" / "templates"
     assert templates_dir.is_dir()
 
@@ -101,8 +104,6 @@ def test_templates_have_no_inline_css_or_js():
 
 @pytest.fixture
 def db_session():
-    from sqlalchemy import inspect
-
     db = SessionLocal()
     app.dependency_overrides[get_db] = lambda: db
     created = []
@@ -211,9 +212,12 @@ def test_dashboard_page(client: TestClient, db_session):
         status="waiting_for_files",
     )
     db_session.add(talk)
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
     db_session.commit()
 
-    response = client.get("/studio")
+    response = client.get("/studio", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert response.headers.get("cache-control") == "no-store"
     assert "text/html" in response.headers.get("content-type", "")
@@ -245,10 +249,10 @@ def test_talk_studio_page(client: TestClient, db_session):
     db_session.add(client_model)
     db_session.commit()
 
-    # Unauthenticated returns 401 without query parameter guidance
-    unauth = client.get(f"/studio/talks/{talk.id}")
-    assert unauth.status_code == 401
-    assert "api_key query param" not in unauth.text
+    # Unauthenticated browser caller redirects to login with next param
+    unauth = client.get(f"/studio/talks/{talk.id}", follow_redirects=False)
+    assert unauth.status_code == 302
+    assert unauth.headers["location"] == f"/login?next=/studio/talks/{talk.id}"
 
     # Query param fallback is rejected (returns 401)
     query_param_res = client.get(f"/studio/talks/{talk.id}?api_key={api_key}")
@@ -283,8 +287,6 @@ def test_talk_studio_page(client: TestClient, db_session):
 
 
 def test_talk_studio_human_session_user_access(client: TestClient, db_session):
-    from app.security import create_session_token
-
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
@@ -368,16 +370,14 @@ def test_talk_studio_not_found(client: TestClient, db_session):
     db_session.add(client_model)
     db_session.commit()
 
-    # Unauthenticated returns 401
-    assert client.get("/studio/talks/999999").status_code == 401
+    # Unauthenticated browser caller redirects to login
+    assert client.get("/studio/talks/999999", follow_redirects=False).status_code == 302
 
     response = client.get("/studio/talks/999999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
 
 
 def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
-    from tests.conftest import generate_clip
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -433,6 +433,95 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
             f"/studio/media/{talk.id}/logs/worker.log", headers={"X-API-Key": api_key}
         )
         assert disallowed.status_code == 404
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_talk_waveform_endpoint(client: TestClient, db_session, temp_storage, tmp_path):
+    event = models.Event(name=f"Waveform Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    talk = models.Talk(
+        title="Waveform Talk",
+        room="Auditorium",
+        start=datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 3, 1, 11, 0, tzinfo=UTC),
+        status="preview",
+        event_id=event.id,
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # 1. Unauthenticated request -> 401
+    assert client.get(f"/studio/talks/{talk.id}/waveform").status_code == 401
+
+    # 2. Authenticated but media not created yet -> returns empty peaks
+    res_empty = client.get(
+        f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+    )
+    assert res_empty.status_code == 200
+    assert res_empty.json() == {"peaks": []}
+
+    # 3. Create clip with audio and store as preview.mp4
+    clip = generate_clip(
+        1.0, has_audio=True, audio_waveform="tone", output_dir=tmp_path
+    )
+    try:
+        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
+
+        # A cache miss must not decode media on the request thread.
+        res = client.get(
+            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+        )
+        assert res.status_code == 200
+        assert res.json() == {"peaks": []}
+
+        # Background preview generation stores the waveform cache for later reads.
+        data = {"peaks": [0.25, 1.0, 0.5]}
+        temp_storage.put(
+            f"{talk.id}/preview/preview.mp4.waveform.json",
+            json.dumps(data).encode("utf-8"),
+        )
+        res_cached = client.get(
+            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+        )
+        assert res_cached.status_code == 200
+        assert res_cached.json() == data
+        assert "peaks" in data
+        assert len(data["peaks"]) > 0
+        assert all(0.0 <= p <= 1.0 for p in data["peaks"])
+
+        # Subsequent fetches are served from cached JSON.
+        res_cached_again = client.get(
+            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+        )
+        assert res_cached_again.status_code == 200
+        assert res_cached_again.json() == data
+
+        # Query with explicit category and filename
+        res_explicit = client.get(
+            f"/studio/talks/{talk.id}/waveform?category=preview&filename=preview.mp4",
+            headers={"X-API-Key": api_key},
+        )
+        assert res_explicit.status_code == 200
+        assert res_explicit.json() == data
+
+        # Invalid category -> 404
+        assert (
+            client.get(
+                f"/studio/talks/{talk.id}/waveform?category=invalid&filename=preview.mp4",
+                headers={"X-API-Key": api_key},
+            ).status_code
+            == 404
+        )
     finally:
         clip.unlink(missing_ok=True)
 
@@ -554,8 +643,6 @@ def test_talk_bulk_delete(client: TestClient, db_session):
 
 
 def test_talk_upload_recording(client: TestClient, db_session, temp_storage, tmp_path):
-    from unittest.mock import patch
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -578,8 +665,6 @@ def test_talk_upload_recording(client: TestClient, db_session, temp_storage, tmp
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
-
-    from tests.conftest import generate_clip
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     mock_queue = None
@@ -766,7 +851,7 @@ def test_dashboard_and_studio_render_active_job_progress(
     db_session.commit()
 
     # 1. Dashboard should render the progress percentage badge and track
-    dash_res = client.get("/studio")
+    dash_res = client.get("/studio", headers={"X-API-Key": api_key})
     assert dash_res.status_code == 200
     assert "72%" in dash_res.text
     assert "job-progress-fill" in dash_res.text
@@ -836,10 +921,6 @@ def test_ui_reject_talk_cleans_up_intermediates(
     client: TestClient, db_session, fake_storage
 ):
     """Rejecting a talk in review removes cut/ and preview/ while preserving raw/."""
-    import uuid
-
-    from app.auth import hash_api_key
-
     event = models.Event(name=f"Reject Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -889,11 +970,6 @@ def test_ui_reject_talk_cleans_up_intermediates(
 
 def test_ui_reject_talk_storage_delete_resilient(client: TestClient, db_session):
     """Storage deletion failure on talk rejection does not raise 500."""
-    import uuid
-    from unittest.mock import MagicMock
-
-    from app.auth import hash_api_key
-
     event = models.Event(name=f"Reject Err Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -1126,8 +1202,6 @@ def test_import_schedule_end_time_only(client: TestClient, db_session):
 
 def test_delete_talk_propagates_storage_error(client: TestClient, db_session):
     """When storage fails during talk deletion, an error is raised and the record is not deleted."""
-    from unittest.mock import MagicMock
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -1156,8 +1230,6 @@ def test_delete_talk_propagates_storage_error(client: TestClient, db_session):
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     try:
-        import pytest
-
         with pytest.raises(RuntimeError, match="Cleanup failed"):
             client.delete(f"/talks/{talk.id}", headers={"X-API-Key": api_key})
 
@@ -1223,7 +1295,7 @@ def test_studio_mode_body_class(client: TestClient, db_session):
     assert 'id="sidebar-toggle-btn"' in res.text
 
     # Talks dashboard view
-    res_dash = client.get("/studio")
+    res_dash = client.get("/studio", headers={"X-API-Key": api_key})
     assert res_dash.status_code == 200
     assert "is-studio-mode" in res_dash.text
 
@@ -1593,8 +1665,6 @@ def test_studio_done_talk_download_actions(
 
 def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
     """When viewed with a speaker token, studio scrubber omits INTRO/OUTRO and enables speaker mode."""
-    from app.security import create_sso_token
-
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -1631,8 +1701,6 @@ def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
 
 def test_studio_organizer_timeline_omits_bumpers(client: TestClient, db_session):
     """When viewed by an organizer, studio scrubber also omits INTRO and OUTRO bumper blocks from timeline."""
-    from app.security import create_session_token
-
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
@@ -1675,8 +1743,6 @@ def test_studio_organizer_timeline_omits_bumpers(client: TestClient, db_session)
 
 
 def test_studio_upload_pending_state_hides_timeline(client: TestClient, db_session):
-    from app.security import create_session_token
-
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",

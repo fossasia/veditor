@@ -73,6 +73,16 @@
                 <span id="theme-toggle-label">Dark Mode</span>
               </button>
               <div class="user-dropdown-divider"></div>
+              {% if user.role == 'admin' %}
+              <a href="/admin" class="user-dropdown-item" id="admin-console-btn">
+                <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                  <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                  <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <span>Admin Console</span>
+              </a>
+              {% endif %}
               <form method="post" action="/logout" class="logout-form">
                 <button type="submit" class="user-dropdown-item logout-item" id="logout-btn">
                   <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -102,6 +112,7 @@
   </header>
 
   <!-- ── Sidebar ─────────────────────────────────────────────── -->
+  {% block sidebar %}
   <aside class="sidebar" id="app-sidebar" aria-label="Sidebar navigation">
     <div class="sidebar-header">
       <span class="nav-label">Workspace</span>
@@ -134,6 +145,7 @@
       </a>
     </nav>
   </aside>
+  {% endblock %}
 
   <!-- ── Main Content ─────────────────────────────────────────── -->
   <main class="main-content">

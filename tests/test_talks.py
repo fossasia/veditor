@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
@@ -849,6 +850,56 @@ def test_post_approve_reject_storage_delete_resilient():
         assert response.status_code == 200
         assert response.json()["status"] == "rejected"
         assert mock_storage.delete.call_count == 5
+    finally:
+        app.dependency_overrides.clear()
+
+
+# --- POST /talks/{id}/cut — time-format validation regression tests ---
+
+
+def _make_pending_bounds_talk_db():
+    """Return a (mock_db, mock_talk) pair in pending_bounds state with a known raw_duration."""
+    mock_db = MagicMock()
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Talk for Cut",
+        room="Room 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_bounds",
+        raw_duration_seconds=7200.0,  # 2-hour recording
+    )
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = mock_talk
+    return mock_db, mock_talk
+
+
+@pytest.mark.parametrize(
+    "cut_start,cut_end",
+    [
+        ("24:00:00", "25:00:00"),  # HH == 24 — the reported silent-coercion bug
+        ("25:00:00", "26:00:00"),  # HH > 24
+        ("00:60:00", "01:00:00"),  # MM == 60
+        ("00:00:60", "00:01:00"),  # SS == 60
+        ("99:99:99", "99:99:99"),  # everything out of range
+        ("00:00:00\n", "00:01:00"),  # trailing newline rejected
+    ],
+)
+def test_submit_cut_bounds_out_of_range_returns_422(cut_start: str, cut_end: str):
+    """Regression: out-of-range time strings must yield 422, not be silently coerced."""
+    mock_db, _ = _make_pending_bounds_talk_db()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    try:
+        resp = client.post(
+            "/talks/1/cut",
+            json={"cut_start": cut_start, "cut_end": cut_end},
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert resp.status_code == 422
     finally:
         app.dependency_overrides.clear()
 

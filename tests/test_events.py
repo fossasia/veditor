@@ -207,10 +207,10 @@ def test_get_events_forbidden_for_user():
     assert res.status_code == 403
 
 
-def test_get_events_admin_returns_all(mock_db):
-    ev1 = models.Event(id=1, name="Event 1", created_by_user_id=1)
-    ev2 = models.Event(id=2, name="Event 2", created_by_user_id=2)
-    mock_db.query.return_value.all.return_value = [ev1, ev2]
+def test_get_events_admin_returns_only_own(mock_db):
+    ev2 = models.Event(id=2, name="Event 2", created_by_user_id=99)
+    # The new query applies a filter, so mock_db.query.return_value.filter.return_value.all
+    mock_db.query.return_value.filter.return_value.all.return_value = [ev2]
 
     app.dependency_overrides[get_db] = lambda: mock_db
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
@@ -220,9 +220,8 @@ def test_get_events_admin_returns_all(mock_db):
     res = client.get("/events")
     assert res.status_code == 200
     data = res.json()
-    assert len(data) == 2
-    assert data[0]["id"] == 1
-    assert data[1]["id"] == 2
+    assert len(data) == 1
+    assert data[0]["id"] == 2
 
 
 def test_get_events_organizer_filters_by_user_id(mock_db):

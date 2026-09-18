@@ -1,11 +1,32 @@
+import uuid
 from typing import Annotated
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.testclient import TestClient
 
-from app.auth import get_client, hash_api_key, lock_active_admins, verify_event_access
-from app.models import Client, User
+from app.auth import (
+    CurrentUser,
+    check_event_access,
+    get_client,
+    get_current_user,
+    hash_api_key,
+    lock_active_admins,
+    require_admin,
+    require_event_access,
+    require_role,
+    require_talk_access,
+    verify_event_access,
+)
+from app.db import SessionLocal, get_db
+from app.main import app
+from app.models import Client, Event, Talk, User
+from app.security import (
+    create_access_token,
+    create_session_token,
+    hash_password,
+)
 
 
 def test_hash_api_key():
@@ -62,22 +83,6 @@ def test_verify_event_access_out_of_scope():
 # ---------------------------------------------------------------------------
 # CurrentUser Model Tests
 # ---------------------------------------------------------------------------
-
-
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
-
-from app.auth import (
-    CurrentUser,
-    check_event_access,
-    get_current_user,
-    require_admin,
-    require_event_access,
-    require_role,
-    require_talk_access,
-)
-from app.models import Event, Talk
-from app.security import create_access_token, create_session_token
 
 
 def test_current_user_model_attributes():
@@ -484,9 +489,6 @@ def test_fastapi_route_auth_integration():
     # Override get_db to return a mock DB session
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_event
-
-    from app.db import get_db
-
     test_app.dependency_overrides[get_db] = lambda: mock_db
 
     client = TestClient(test_app)
@@ -576,9 +578,6 @@ def test_require_event_access_query_param_bypass_prevented():
     mock_db.query.return_value.filter.return_value.first.side_effect = [
         mock_event_2,
     ]
-
-    from app.db import get_db
-
     test_app.dependency_overrides[get_db] = lambda: mock_db
     # Caller is authorized for event 1, but requesting /events/2?event_id=1
     client_user = CurrentUser(role="admin", source="api_key", event_ids=[1])
@@ -652,9 +651,6 @@ def test_require_talk_access_success_and_unauthorized():
     mock_talk = Talk(id=10, event_id=1, status="done")
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
-
-    from app.db import get_db
-
     test_app.dependency_overrides[get_db] = lambda: mock_db
 
     # Authorized user (admin)
@@ -672,3 +668,116 @@ def test_require_talk_access_success_and_unauthorized():
     )
     resp = client.get("/talks/10")
     assert resp.status_code == 403
+
+
+def test_login_routes_next_redirect_and_open_redirect_protection():
+    db = SessionLocal()
+    app.dependency_overrides[get_db] = lambda: db
+    user = None
+
+    try:
+        user = User(
+            email=f"next_test_{uuid.uuid4().hex[:6]}@example.com",
+            hashed_password=hash_password("Pass1234!"),
+            role="organizer",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        client = TestClient(app)
+
+        # 1. Login page passes next parameter to template context
+        resp_page = client.get("/login?next=/studio/events")
+        assert resp_page.status_code == 200
+        assert (
+            '<input type="hidden" name="next" value="/studio/events">' in resp_page.text
+        )
+
+        # 2. Login submit with next redirects to the specified route (HTTP 303)
+        resp_next = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "/studio/events",
+            },
+            follow_redirects=False,
+        )
+        assert resp_next.status_code == 303
+        assert resp_next.headers["location"] == "/studio/events"
+
+        # 3. Missing next parameter defaults to /studio
+        resp_default = client.post(
+            "/login",
+            data={"email": user.email, "password": "Pass1234!"},
+            follow_redirects=False,
+        )
+        assert resp_default.status_code == 303
+        assert resp_default.headers["location"] == "/studio"
+
+        # 4. Open-redirect prevention: external URL is rejected and safely defaults to /studio
+        resp_malicious_ext = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "https://attacker.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp_malicious_ext.status_code == 303
+        assert resp_malicious_ext.headers["location"] == "/studio"
+
+        # 5. Open-redirect prevention: protocol-relative URL is rejected and safely defaults to /studio
+        resp_malicious_proto = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "Pass1234!",
+                "next": "//attacker.com",
+            },
+            follow_redirects=False,
+        )
+        assert resp_malicious_proto.status_code == 303
+        assert resp_malicious_proto.headers["location"] == "/studio"
+
+        # 6. Auth loop prevention: case-insensitive auth paths (/Login, /LOGOUT, /Signup) safely default to /studio
+        for auth_target in ("/Login", "/LOGOUT", "/Signup", "/login/", "/Logout/"):
+            resp_loop = client.post(
+                "/login",
+                data={
+                    "email": user.email,
+                    "password": "Pass1234!",
+                    "next": auth_target,
+                },
+                follow_redirects=False,
+            )
+            assert resp_loop.status_code == 303
+            assert resp_loop.headers["location"] == "/studio"
+
+        # 7. Failed login re-renders page preserving next hidden input
+        resp_fail = client.post(
+            "/login",
+            data={
+                "email": user.email,
+                "password": "WrongPassword!",
+                "next": "/studio/talks/10",
+            },
+            follow_redirects=False,
+        )
+        assert resp_fail.status_code == 400
+        assert (
+            '<input type="hidden" name="next" value="/studio/talks/10">'
+            in resp_fail.text
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        try:
+            db.rollback()
+            if user is not None and getattr(user, "id", None):
+                db.query(User).filter(User.id == user.id).delete()
+                db.commit()
+        finally:
+            db.close()

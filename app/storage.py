@@ -67,6 +67,12 @@ class StorageBackend(Protocol):
         """
         ...
 
+    def total_bytes(self) -> int:
+        """
+        Return the total space in bytes.
+        """
+        ...
+
 
 class LocalDiskBackend(StorageBackend):
     def __init__(self, data_dir: Path | str):
@@ -164,6 +170,13 @@ class LocalDiskBackend(StorageBackend):
         # Ensure the data directory exists so we can get its usage
         self.data_dir.mkdir(parents=True, exist_ok=True)
         return shutil.disk_usage(self.data_dir).free
+
+    def total_bytes(self) -> int:
+        """
+        Return the total space in bytes.
+        """
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        return shutil.disk_usage(self.data_dir).total
 
 
 def get_storage_backend() -> StorageBackend:

@@ -87,6 +87,7 @@ const btnPlayCut      = document.getElementById('btn-play-cut');
 
 let inPointSec  = 0;
 let outPointSec = 0;
+let boundsEdited = false;
 let isPlayingCut = false;
 let currentWaveformPeaks = [];
 let waveformAbortController = null;
@@ -245,6 +246,7 @@ function initWaveformListeners() {
 window.loadVideoSrc = function(url) {
   if (!video) return;
   video.pause();
+  boundsEdited = false;
   video.src = url;
   video.style.display = 'block';
   if (noPreview) noPreview.style.display = 'none';
@@ -360,12 +362,14 @@ function setInPoint(timeSec) {
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   inPointSec = Math.min(max, Math.max(0, timeSec));
   if (inPointSec > outPointSec) outPointSec = Math.min(max, inPointSec + 1);
+  boundsEdited = true;
   updateCutMarkersUI();
 }
 
 function setOutPoint(timeSec) {
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   outPointSec = Math.min(max, Math.max(inPointSec + 0.1, timeSec));
+  boundsEdited = true;
   updateCutMarkersUI();
 }
 
@@ -519,26 +523,27 @@ if (video) {
     if (iconPause) iconPause.style.display = 'none';
     isPlayingCut = false;
   });
-  video.addEventListener('loadedmetadata', () => {
+  function initializeVideoMetadata() {
     if (scrubber) scrubber.max = 1000;
-    const dur = video.duration || 10;
-    const shell = getStudioShell();
-    const activeRow = document.querySelector(`.media-asset-row[data-asset-url="${video.src}"]`);
-    const isRaw = (video.src && video.src.includes('/raw/')) || activeRow?.dataset.assetCategory === 'raw';
+    const duration = video.duration || 10;
+    if (!boundsEdited) {
+      const shell = getStudioShell() || shellInit;
+      const activeRow = document.querySelector(`.media-asset-row[data-asset-url="${video.src}"]`);
+      const isRaw = (video.src && video.src.includes('/raw/')) || activeRow?.dataset.assetCategory === 'raw';
 
-    if (isRaw) {
-      const rawStart = shell && shell.dataset.cutStart ? parseFloat(shell.dataset.cutStart) : NaN;
-      const rawEnd = shell && shell.dataset.cutEnd ? parseFloat(shell.dataset.cutEnd) : NaN;
-      inPointSec = (!isNaN(rawStart) && rawStart >= 0) ? rawStart : 0;
-      outPointSec = (!isNaN(rawEnd) && rawEnd > inPointSec) ? rawEnd : dur;
-    } else {
-      inPointSec = 0;
-      outPointSec = dur;
+      if (isRaw) {
+        const rawStart = shell && shell.dataset.cutStart !== undefined && shell.dataset.cutStart !== '' ? parseFloat(shell.dataset.cutStart) : NaN;
+        const rawEnd = shell && shell.dataset.cutEnd !== undefined && shell.dataset.cutEnd !== '' ? parseFloat(shell.dataset.cutEnd) : NaN;
+        inPointSec = (!isNaN(rawStart) && rawStart >= 0) ? rawStart : 0;
+        outPointSec = (!isNaN(rawEnd) && rawEnd > inPointSec) ? rawEnd : duration;
+      } else {
+        inPointSec = 0;
+        outPointSec = duration;
+      }
+
+      inPointSec = Math.max(0, Math.min(inPointSec, duration > 0.1 ? duration - 0.1 : 0));
+      outPointSec = Math.min(duration, Math.max(outPointSec, inPointSec + 0.1));
     }
-
-    inPointSec = Math.max(0, Math.min(inPointSec, dur > 0.1 ? dur - 0.1 : 0));
-    outPointSec = Math.min(dur, Math.max(outPointSec, inPointSec + 0.1));
-
     updateTimecode();
     updateTimelineTicks();
     updateCutMarkersUI();
@@ -546,7 +551,13 @@ if (video) {
     const lbl = document.getElementById('tl-range-label');
     if (lbl) lbl.textContent = formatTimecode(video.duration);
     drawWaveform();
-  });
+  }
+
+  video.addEventListener('loadedmetadata', initializeVideoMetadata);
+
+  if (video.readyState >= 1) {
+    initializeVideoMetadata();
+  }
   video.addEventListener('durationchange', updateTimelineTicks);
 }
 

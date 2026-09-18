@@ -56,8 +56,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}">
-
+<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
 
   <!-- ── CENTER: Video Player or Upload Dropzone ─────────────── -->
   <div class="player-panel">
@@ -454,13 +453,13 @@
                 </div>
               </div>
               <!-- Speaker Assignment -->
-              <div class="bumper-studio-card" style="margin-top: 1rem;">
+              <div class="bumper-studio-card bumper-handoff-card">
                 <div class="bumper-studio-title">SPEAKER HANDOFF</div>
                 <div class="bumper-group">
                   <div class="bumper-group-header">
                     <span class="bumper-group-title">Assign Speaker (Email)</span>
                   </div>
-                  <input type="email" id="handoff-speaker-email" class="input-field" placeholder="speaker@example.com" value="{{ talk.speaker_email or '' }}" style="margin-top: 0.5rem;">
+                  <input type="email" id="handoff-speaker-email" class="input-field handoff-email-input" placeholder="speaker@example.com" value="{{ talk.speaker_email or '' }}">
                 </div>
               </div>
 

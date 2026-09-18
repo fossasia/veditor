@@ -965,6 +965,14 @@
   margin-bottom: 12px;
 }
 
+.bumper-handoff-card {
+  margin-top: 1rem;
+}
+
+.handoff-email-input {
+  margin-top: 0.5rem;
+}
+
 .bumper-studio-title {
   font-size: 0.72rem;
   font-weight: 700;

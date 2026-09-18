@@ -99,6 +99,9 @@ class FakeStorageBackend(StorageBackend):
     def free_bytes(self) -> int:
         return self._free_bytes
 
+    def total_bytes(self) -> int:
+        return self.DEFAULT_FREE_BYTES
+
 
 @pytest.fixture
 def fake_storage() -> FakeStorageBackend:

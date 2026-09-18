@@ -1,0 +1,49 @@
+{% extends "admin_base.html.jinja" %}
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Overview</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-label">PostgreSQL</span>
+      <span class="stat-value {% if db_status == 'Healthy' %}green{% else %}red{% endif %}">
+        {{ db_status }}
+      </span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Redis</span>
+      <span class="stat-value {% if redis_status == 'Healthy' %}green{% else %}red{% endif %}">
+        {{ redis_status }}
+      </span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">RQ Light</span>
+      <span class="stat-value blue">
+        {{ light_workers }}
+      </span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">RQ Heavy</span>
+      <span class="stat-value blue">
+        {{ heavy_workers }}
+      </span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Disk Storage</span>
+      {% if storage_status == 'Unavailable' %}
+      <span class="stat-value stat-value-sm red">Unavailable</span>
+      {% else %}
+      <span class="stat-value stat-value-sm {% if total_bytes > 0 and (free_bytes / total_bytes) < 0.1 %}red{% elif total_bytes > 0 and (free_bytes / total_bytes) < 0.2 %}amber{% else %}green{% endif %}">
+        {% set used_gb = (used_bytes / 1073741824) | round(1) %}
+        {% set total_gb = (total_bytes / 1073741824) | round(1) %}
+        {{ used_gb }} / {{ total_gb }} GB
+      </span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
