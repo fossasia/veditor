@@ -60,6 +60,11 @@
 
   <!-- ── CENTER: Video Player or Upload Dropzone ─────────────── -->
   <div class="player-panel">
+    <button id="btn-expand-right-panel" class="btn btn-ghost btn-icon btn-sm expand-panel-tab" title="Restore Review Panel" aria-label="Restore Review Panel" aria-expanded="false" aria-controls="studio-panel-right">
+      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <polyline points="15 18 9 12 15 6"/>
+      </svg>
+    </button>
 
     {% if talk.status == 'waiting_for_files' %}
     <!-- Upload Dropzone Box (Pending Upload State) -->
@@ -184,7 +189,7 @@
 
       <div class="timeline-track" id="timeline-track">
         <canvas id="tl-waveform" class="tl-waveform" aria-hidden="true"></canvas>
-        {% if talk.status in ['pending_bounds', 'needs_work'] %}
+        {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
         <div class="tl-block tl-content" id="tl-content"></div>
         <div class="tl-marker" id="tl-start-marker" title="Drag Start Point (or press I)"></div>
         <div class="tl-marker end-marker" id="tl-end-marker" title="Drag End Point (or press O)"></div>
@@ -200,7 +205,7 @@
         <span class="tl-tick">—</span>
       </div>
 
-      {% if talk.status in ['pending_bounds', 'needs_work'] %}
+      {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
       <!-- In/Out Bounds Setting Controls -->
       <div class="timeline-inputs-bar">
         <div class="bounds-inputs-group">
@@ -236,97 +241,290 @@
   </div>
 
   <!-- ── RIGHT: 4 Milestones & Review Actions ────────────────── -->
-  <div class="studio-panel">
+  <div class="studio-panel" id="studio-panel-right">
     <div class="studio-panel-header">
-      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-        <polyline points="22 4 12 14.01 9 11.01"/>
-      </svg>
-      <span class="studio-panel-title">Workflow & Review</span>
+      <div class="studio-panel-header-title-wrap">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+          <polyline points="22 4 12 14.01 9 11.01"/>
+        </svg>
+        <span class="studio-panel-title">Workflow & Review</span>
+      </div>
+      <button id="btn-toggle-right-panel" class="btn btn-ghost btn-icon btn-sm" title="Collapse Review Panel" aria-label="Collapse Review Panel" aria-expanded="true" aria-controls="studio-panel-right">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </button>
     </div>
     <div class="studio-panel-body">
 
-      <!-- Action Panel for Human Review Gates -->
+      <!-- Action Panel for Review Actions -->
       <div class="review-box">
         <div class="review-box-title">
           Review Actions
         </div>
 
+        {% if talk.status in ['pending_bounds', 'preview', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
         <div class="review-notes-wrap">
           <label for="review-notes-input" class="review-notes-label">Reviewer Notes</label>
-          <textarea id="review-notes-input" class="input-field" rows="2" placeholder="Optional notes for speaker or reviewer..."></textarea>
+          <textarea id="review-notes-input" class="input-field" rows="2" placeholder="Optional note for organizer"></textarea>
         </div>
+        {% endif %}
+
+        {% if talk.status in ['pending_bounds', 'needs_work'] and not (talk.speaker_email and not is_speaker) %}
+        <div class="submission-timestamps-card" id="submission-timestamps-card">
+          <div class="submission-timestamps-header">
+            <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <span class="submission-timestamps-title">Timestamps to Submit</span>
+          </div>
+          <div class="submission-timestamps-body">
+            <div class="timestamp-range-pill">
+              <div class="timestamp-unit">
+                <span class="timestamp-label">Start (In)</span>
+                <span class="timestamp-val" id="review-in-point">{{ talk.cut_start | timecode }}</span>
+              </div>
+              <span class="timestamp-arrow">→</span>
+              <div class="timestamp-unit">
+                <span class="timestamp-label">End (Out)</span>
+                <span class="timestamp-val" id="review-out-point">{{ talk.cut_end | timecode }}</span>
+              </div>
+            </div>
+            <div class="timestamp-duration-text">
+              <span>Cut Duration:</span>
+              <strong id="review-duration">{% if talk.cut_start is not none and talk.cut_end is not none %}{{ (talk.cut_end - talk.cut_start) | timecode }}{% else %}00:00:00.00{% endif %}</strong>
+            </div>
+          </div>
+        </div>
+        {% endif %}
 
         <div class="action-btns" id="action-btns">
           {% if talk.status == 'waiting_for_files' %}
             <div class="badge badge-waiting badge-status-full">
-              Waiting for video recording upload
+              Status: Awaiting Recording Upload (Drop file in player)
             </div>
-            <button class="btn btn-primary w-full" id="btn-upload-recording">
-              Upload Recording Video
-            </button>
           {% elif talk.status in ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
             <div class="badge badge-processing badge-status-full">
               <span class="spinner spinner-sm"></span> Processing in background ({{ talk.status | replace('_', ' ') | title }})...
             </div>
           {% elif talk.status == 'pending_approval' %}
             <button class="btn btn-success w-full" id="btn-approve">
-              Approve Schedule Alignment
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject Talk
-            </button>
-          {% elif talk.status == 'pending_bounds' %}
-            <button class="btn btn-primary w-full" id="btn-approve">
-              Submit Cut Bounds & Generate Preview
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject / Abort
-            </button>
-          {% elif talk.status == 'needs_work' %}
-            <button class="btn btn-primary w-full" id="btn-approve">
-              Re-cut Bounds & Regenerate Preview
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject Talk
-            </button>
-          {% elif talk.status == 'preview' %}
-            <button class="btn btn-success w-full" id="btn-approve">
-              Approve Preview
-            </button>
-            <button class="btn btn-warning w-full" id="btn-needs-work">
-              Request Changes (Needs Work)
-            </button>
-            <button class="btn btn-danger w-full" id="btn-reject">
-              Reject Talk
-            </button>
-          {% elif talk.status == 'pending_intro_outro' %}
-            <div class="slates-box">
-              <div class="slates-title">Opening & Closing Slates</div>
-              <label class="slates-label">
-                <input type="checkbox" id="check-include-intro" checked>
-                <span>Include Opening Intro Slate</span>
-              </label>
-              <label class="slates-label">
-                <input type="checkbox" id="check-include-outro" checked>
-                <span>Include Closing Outro Slate</span>
-              </label>
-            </div>
-            <button class="btn btn-primary w-full" id="btn-approve">
-              Start Master Assembly & Transcode
+              Approve Raw Video
             </button>
             <button class="btn btn-danger w-full btn-reject-spacing" id="btn-reject">
-              Reject / Abort
+              Reject Raw Video
             </button>
+          {% elif talk.status == 'pending_bounds' %}
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Submit Timestamps
+              </div>
+            {% else %}
+              <button class="btn btn-primary w-full" id="btn-approve">
+                Submit Timestamps
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
+          {% elif talk.status == 'needs_work' %}
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Submit Revised Timestamps
+              </div>
+            {% else %}
+              <button class="btn btn-primary w-full" id="btn-approve">
+                Submit Timestamps
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
+          {% elif talk.status == 'preview' %}
+            {% if talk.speaker_email and not is_speaker %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Speaker to Review Preview
+              </div>
+            {% else %}
+              <button class="btn btn-success w-full" id="btn-approve">
+                Approve Preview
+              </button>
+              <button class="btn btn-warning w-full" id="btn-needs-work">
+                Request Changes (Needs Work)
+              </button>
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-reject">
+                Reset Talk to Raw
+              </button>
+            {% endif %}
+            {% if user and user.role in ['organizer', 'admin'] %}
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% endif %}
+          {% elif talk.status == 'pending_intro_outro' %}
+            {% if user and user.role in ['organizer', 'admin'] and not is_speaker %}
+              <div class="bumper-studio-card">
+                <div class="bumper-studio-title">EVENT BRANDING & BUMPERS</div>
 
+                <!-- Opening Intro -->
+                <div class="bumper-group">
+                  <div class="bumper-group-header">
+                    <span class="bumper-group-title">Opening Intro</span>
+                    <label class="bumper-toggle-label" for="check-include-intro" title="Enable Opening Intro">
+                      <input type="checkbox" id="check-include-intro" class="toggle-checkbox" {% if talk.include_intro %}checked{% endif %}>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="bumper-nested-options {% if not talk.include_intro %}is-hidden{% endif %}" id="intro-options-wrap">
+                    <div class="bumper-segmented-control">
+                      <label class="bumper-segment {% if talk.intro_source != 'custom' %}is-active{% endif %}">
+                        <input type="radio" name="intro_source" value="generated" class="bumper-radio-input" {% if talk.intro_source != 'custom' %}checked{% endif %}>
+                        <span>Generated Title</span>
+                      </label>
+                      <label class="bumper-segment {% if talk.intro_source == 'custom' %}is-active{% endif %}">
+                        <input type="radio" name="intro_source" value="custom" class="bumper-radio-input" {% if talk.intro_source == 'custom' %}checked{% endif %}>
+                        <span>Custom Video</span>
+                      </label>
+                    </div>
+
+                    <div class="bumper-custom-wrap {% if talk.intro_source == 'custom' %}is-visible{% endif %}" id="intro-custom-wrap">
+                      <label for="custom-intro-file" class="bumper-dropzone" id="intro-dropzone" title="Click or drag & drop custom intro clip">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="17 8 12 3 7 8"/>
+                          <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <div class="bumper-dropzone-text">
+                          <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
+                          <span class="bumper-file-name" id="intro-file-name">{% if talk.custom_intro_path %}{{ talk.custom_intro_path.split('/')[-1] }}{% else %}Supports MP4, WebM, MOV{% endif %}</span>
+                        </div>
+                      </label>
+                      <input type="file" id="custom-intro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
+                      <input type="hidden" id="custom-intro-path" value="{{ talk.custom_intro_path or '' }}">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Closing Outro -->
+                <div class="bumper-group">
+                  <div class="bumper-group-header">
+                    <span class="bumper-group-title">Closing Outro</span>
+                    <label class="bumper-toggle-label" for="check-include-outro" title="Enable Closing Outro">
+                      <input type="checkbox" id="check-include-outro" class="toggle-checkbox" {% if talk.include_outro %}checked{% endif %}>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="bumper-nested-options {% if not talk.include_outro %}is-hidden{% endif %}" id="outro-options-wrap">
+                    <div class="bumper-segmented-control">
+                      <label class="bumper-segment {% if talk.outro_source != 'custom' %}is-active{% endif %}">
+                        <input type="radio" name="outro_source" value="generated" class="bumper-radio-input" {% if talk.outro_source != 'custom' %}checked{% endif %}>
+                        <span>Generated Title</span>
+                      </label>
+                      <label class="bumper-segment {% if talk.outro_source == 'custom' %}is-active{% endif %}">
+                        <input type="radio" name="outro_source" value="custom" class="bumper-radio-input" {% if talk.outro_source == 'custom' %}checked{% endif %}>
+                        <span>Custom Video</span>
+                      </label>
+                    </div>
+
+                    <div class="bumper-custom-wrap {% if talk.outro_source == 'custom' %}is-visible{% endif %}" id="outro-custom-wrap">
+                      <label for="custom-outro-file" class="bumper-dropzone" id="outro-dropzone" title="Click or drag & drop custom outro clip">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="17 8 12 3 7 8"/>
+                          <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                        <div class="bumper-dropzone-text">
+                          <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
+                          <span class="bumper-file-name" id="outro-file-name">{% if talk.custom_outro_path %}{{ talk.custom_outro_path.split('/')[-1] }}{% else %}Supports MP4, WebM, MOV{% endif %}</span>
+                        </div>
+                      </label>
+                      <input type="file" id="custom-outro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
+                      <input type="hidden" id="custom-outro-path" value="{{ talk.custom_outro_path or '' }}">
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- Speaker Assignment -->
+              <div class="bumper-studio-card bumper-handoff-card">
+                <div class="bumper-studio-title">SPEAKER HANDOFF</div>
+                <div class="bumper-group">
+                  <div class="bumper-group-header">
+                    <span class="bumper-group-title">Assign Speaker (Email)</span>
+                  </div>
+                  <input type="email" id="handoff-speaker-email" class="input-field handoff-email-input" placeholder="speaker@example.com" value="{{ talk.speaker_email or '' }}">
+                </div>
+              </div>
+
+              <button class="btn btn-primary w-full" id="btn-approve">
+                Handoff to Speaker
+              </button>
+              <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort">
+                Abort Talk
+              </button>
+            {% else %}
+              <div class="badge badge-waiting badge-status-full">
+                Awaiting Organizer Intro/Outro Selection
+              </div>
+            {% endif %}
           {% elif talk.status in ['rejected', 'broken'] %}
             <button class="btn btn-primary w-full" id="btn-retry">
               Retry Talk Lifecycle
             </button>
           {% elif talk.status == 'done' %}
             <div class="badge badge-done badge-status-full">
-              Published & Complete
+              <span class="badge-dot"></span> Published & Complete
             </div>
+
+            <div class="published-download-card">
+              <div class="published-download-header">
+                <span class="published-download-title">Production Video</span>
+                <span class="badge badge-done">READY</span>
+              </div>
+              <p class="published-download-desc">Master broadcast transcode is finished and published.</p>
+
+              <a href="{{ final_asset.url if final_asset else ('/studio/media/' ~ talk.id ~ '/final/final.mp4') }}?download=true" download class="btn btn-primary w-full btn-download-master" id="btn-download-master" title="Download Master Video">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Download Master Video</span>
+              </a>
+            </div>
+
+            {% if media_assets and media_assets | length > 1 %}
+              <div class="published-other-assets">
+                <div class="published-other-title">All Generated Assets</div>
+                <div class="published-assets-list">
+                  {% for asset in media_assets %}
+                    {% if asset.category != 'final' %}
+                      <div class="published-asset-row">
+                        <span class="badge media-asset-badge {% if asset.category == 'intro' or asset.category == 'outro' %}badge-pending{% elif asset.category == 'raw' %}badge-waiting{% else %}badge-preview{% endif %}">
+                          {{ asset.category | upper }}
+                        </span>
+                        <span class="published-asset-name" title="{{ asset.label }}">{{ asset.label }}</span>
+                        <a href="{{ asset.url }}?download=true" download class="btn btn-ghost btn-xs btn-asset-download" title="Download {{ asset.label }}">
+                          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                          </svg>
+                          <span>Download</span>
+                        </a>
+                      </div>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
           {% endif %}
         </div>
 
@@ -348,79 +546,85 @@
 
       <div class="divider"></div>
 
-      <!-- 4 Lifecycle Milestones -->
-      <div class="milestones-title">
-        Pipeline Milestones
-      </div>
-      <div class="milestones-stepper">
-        {% for m in milestones %}
-          <div class="milestone-card {% if m.state == 'active' %}active{% elif m.state == 'completed' %}completed{% elif m.state == 'failed' %}failed{% endif %}">
-            <div class="milestone-header">
-              <span class="milestone-title">
-                {% if m.state == 'completed' %}✓{% else %}{{ m.num }}.{% endif %} {{ m.title }}
-              </span>
-              {% if m.state == 'active' %}
-                <span class="badge badge-processing milestone-badge"><span class="spinner spinner-sm"></span>In Progress</span>
-              {% elif m.state == 'completed' %}
-                <span class="badge badge-done milestone-badge">Done</span>
-              {% elif m.state == 'failed' %}
-                <span class="badge badge-danger milestone-badge">Failed</span>
-              {% endif %}
-            </div>
-            <div class="milestone-substeps">
-              {{ m.desc }}
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-
-      <div class="divider"></div>
-
-      <!-- Recent Jobs -->
-      <div class="recent-jobs-title">
-        Recent Jobs
-      </div>
-      {% if jobs %}
-      <div id="jobs-container">
-        {% for job in jobs %}
-        <div class="job-card" data-job-id="{{ job.id }}">
-          <div class="job-header-flex">
-            <span class="job-kind-mono">{{ job.kind }}</span>
-            <div class="job-badges-flex">
-              {% if job.progress_pct is not none and job.status == 'running' %}
-                <span class="badge badge-info job-badge-sm">{{ "%.0f"|format(job.progress_pct) }}%</span>
-              {% endif %}
-              <span class="badge job-badge-sm {% if job.status == 'done' or job.status == 'success' %}badge-done{% elif job.status == 'running' %}badge-processing{% elif job.status == 'failed' %}badge-danger{% else %}badge-waiting{% endif %}">
-                {% if job.status == 'running' %}<span class="spinner spinner-sm"></span>{% endif %}{{ job.status }}
-              </span>
-            </div>
-          </div>
-          {% if job.status == 'running' and job.progress_pct is not none %}
-          <div class="job-progress-track">
-            <div class="job-progress-fill" data-progress="{{ job.progress_pct }}"></div>
-          </div>
-          {% endif %}
-          {% if job.started_at %}
-          <div class="job-timing-meta">
-            <span>Started {{ job.started_at.strftime('%H:%M:%S UTC') }}</span>
-            {% if job.estimated_remaining is not none and job.status == 'running' %}
-              <span>~{{ "%.0f"|format(job.estimated_remaining) }}s remaining</span>
-            {% elif job.elapsed_time is not none %}
-              <span>{{ "%.0f"|format(job.elapsed_time) }}s elapsed</span>
-            {% endif %}
-          </div>
-          {% endif %}
+      {% if milestones and (not user or user.role != 'speaker') %}
+      {# ── Pipeline Milestones Stepper ────────────────────────── #}
+      <div class="milestones-card">
+        <div class="milestones-header">
+          <span class="milestones-title-label">Pipeline Milestones</span>
+          <span class="milestones-step-count">
+            {% set completed_count = milestones | selectattr('state', 'equalto', 'completed') | list | length %}
+            {{ completed_count }} of {{ milestones | length }} Complete
+          </span>
         </div>
-        {% endfor %}
+        <div class="stepper-timeline">
+          {% for m in milestones %}
+            <div class="stepper-step stepper-step-{{ m.state }}">
+              <div class="stepper-track-col">
+                <div class="stepper-node" title="{{ m.title }} ({{ m.state | replace('_', ' ') | title }})">
+                  {% if m.state == 'completed' %}
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  {% elif m.state == 'active' %}
+                    <span class="stepper-pulse-dot"></span>
+                  {% elif m.state == 'failed' %}
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/>
+                      <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  {% else %}
+                    <span class="stepper-num">{{ m.num }}</span>
+                  {% endif %}
+                </div>
+                {% if not loop.last %}
+                  <div class="stepper-connector {% if m.state == 'completed' %}is-completed{% endif %}"></div>
+                {% endif %}
+              </div>
+              <div class="stepper-info">
+                <div class="stepper-heading">
+                  <span class="stepper-name">{{ m.num }}. {{ m.title }}</span>
+                  {% if m.state == 'completed' %}
+                    <span class="badge badge-done badge-micro">Done</span>
+                  {% elif m.state == 'active' %}
+                    <span class="badge badge-processing badge-micro"><span class="spinner spinner-xs"></span>In Progress</span>
+                  {% elif m.state == 'failed' %}
+                    <span class="badge badge-danger badge-micro">Failed</span>
+                  {% else %}
+                    <span class="badge badge-waiting badge-micro">Pending</span>
+                  {% endif %}
+                </div>
+                <div class="stepper-desc">{{ m.desc }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
       </div>
-      {% else %}
-      <div id="jobs-empty">No pipeline jobs logged yet.</div>
       {% endif %}
 
     </div>
   </div>
 
 </div>
+
+<!-- Abort Confirm Modal -->
+<div id="modal-abort" class="modal-backdrop">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3 class="modal-title">Abort Talk</h3>
+      <button class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-abort-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-warning-text">
+        Are you sure you want to abort this talk? This will throw away the uploaded recording and clear all progress.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="btn-cancel-abort-modal">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-abort">Yes, Abort Talk</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_scripts %}

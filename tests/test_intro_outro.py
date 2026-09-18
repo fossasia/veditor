@@ -6,11 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app import models
 from app.auth import get_client
-from app.config import settings
+from app.config import Settings, settings
 from app.db import get_db
+from app.ingest import get_bumper_staging_dir
 from app.main import app
 from app.storage import get_storage_backend
 from app.tasks import (
@@ -905,3 +907,174 @@ def test_configure_assembly_locks_talk_row_with_for_update(
     assert response.status_code == 202
     mock_db.query.return_value.filter.return_value.with_for_update.assert_called_once()
     mock_dispatch.assert_called_once_with(1, "1/cut/cut.mp4")
+
+
+def test_upload_bumper_file_success(mock_db, auth_client, pending_talk):
+    """POST /talks/{id}/bumpers/upload saves bumper file and returns server path."""
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/1/bumpers/upload",
+        files={"file": ("test_intro.mp4", b"dummy video bytes", "video/mp4")},
+        data={"kind": "intro"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["filename"] == "test_intro.mp4"
+    assert data["path"].startswith("bumpers/bumper_1_intro_")
+    staged_file = get_bumper_staging_dir() / Path(data["path"]).name
+    assert staged_file.is_file()
+    staged_file.unlink(missing_ok=True)
+
+
+def test_upload_bumper_file_replaces_previous_staged_file(
+    mock_db, auth_client, pending_talk
+):
+    """A new upload removes an older unsubmitted bumper of the same kind."""
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    staging_dir = get_bumper_staging_dir()
+    previous_file = staging_dir / "bumper_1_intro_previous.mp4"
+    previous_file.write_bytes(b"old bumper")
+    try:
+        response = client.post(
+            "/talks/1/bumpers/upload",
+            files={"file": ("test_intro.mp4", b"new bumper", "video/mp4")},
+            data={"kind": "intro"},
+            headers={"X-API-Key": "valid_key"},
+        )
+
+        assert response.status_code == 200
+        assert not previous_file.exists()
+        staged_file = staging_dir / Path(response.json()["path"]).name
+        assert staged_file.is_file()
+        staged_file.unlink(missing_ok=True)
+    finally:
+        previous_file.unlink(missing_ok=True)
+
+
+def test_upload_bumper_file_exceeds_max_size(
+    mock_db, auth_client, pending_talk, monkeypatch
+):
+    """POST /talks/{id}/bumpers/upload exceeding max size returns 413 and unlinks partial file."""
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    monkeypatch.setattr(settings, "max_bumper_upload_size_bytes", 10)
+
+    response = client.post(
+        "/talks/1/bumpers/upload",
+        files={
+            "file": (
+                "large_bumper.mp4",
+                b"this payload is longer than 10 bytes",
+                "video/mp4",
+            )
+        },
+        data={"kind": "intro"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 413
+    assert "exceeds maximum allowed size" in response.json()["detail"]
+
+
+def test_settings_max_bumper_upload_size_strictly_positive():
+    """Settings rejects zero and negative values for max_bumper_upload_size_bytes."""
+    with pytest.raises(ValidationError):
+        Settings(max_bumper_upload_size_bytes=0)
+
+    with pytest.raises(ValidationError):
+        Settings(max_bumper_upload_size_bytes=-100)
+
+    valid = Settings(max_bumper_upload_size_bytes=1024)
+    assert valid.max_bumper_upload_size_bytes == 1024
+
+
+def test_upload_bumper_file_invalid_kind(mock_db, auth_client, pending_talk):
+    """POST /talks/{id}/bumpers/upload with invalid kind returns 400."""
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/1/bumpers/upload",
+        files={"file": ("test.mp4", b"dummy video bytes", "video/mp4")},
+        data={"kind": "unsupported"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 400
+    assert "Bumper kind must be 'intro' or 'outro'" in response.json()["detail"]
+
+
+def test_upload_bumper_file_talk_not_found(mock_db, auth_client):
+    """POST /talks/{id}/bumpers/upload for nonexistent talk returns 404."""
+    mock_db.query.return_value.filter.return_value.first.return_value = None
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/999/bumpers/upload",
+        files={"file": ("test.mp4", b"dummy bytes", "video/mp4")},
+        data={"kind": "intro"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 404
+
+
+def test_upload_bumper_and_assemble_flow(
+    mock_db, auth_client, fake_storage, pending_talk, tmp_path
+):
+    """Uploaded custom bumper can be passed directly to /assemble."""
+    valid_clip = generate_clip(0.5, output_dir=tmp_path)
+    mock_db.query.return_value.filter.return_value.first.return_value = pending_talk
+    app.dependency_overrides[get_client] = lambda: auth_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    with open(valid_clip, "rb") as f:
+        upload_resp = client.post(
+            "/talks/1/bumpers/upload",
+            files={"file": ("custom_intro.mp4", f, "video/mp4")},
+            data={"kind": "intro"},
+            headers={"X-API-Key": "valid_key"},
+        )
+    assert upload_resp.status_code == 200
+    uploaded_path = upload_resp.json()["path"]
+
+    db_ctx = MockSessionContext(pending_talk)
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+    ):
+        assemble_resp = client.post(
+            "/talks/1/assemble",
+            json={
+                "include_intro": True,
+                "intro_source": "custom",
+                "custom_intro_path": uploaded_path,
+                "include_outro": False,
+            },
+            headers={"X-API-Key": "valid_key"},
+        )
+    assert assemble_resp.status_code == 202
+    assert fake_storage.exists("1/intro/intro.mp4")
+    assert pending_talk.status == "assembling"
+    mock_enqueue.assert_called_once()
+    Path(uploaded_path).unlink(missing_ok=True)
+
+
+def test_format_timecode_filter_rollover():
+    """format_timecode_filter handles centisecond rollover without emitting .100."""
+    from app.ui.templating import format_timecode_filter
+
+    assert format_timecode_filter(59.996) == "00:01:00.00"
+    assert format_timecode_filter(3599.999) == "01:00:00.00"
+    assert format_timecode_filter(0) == "00:00:00.00"
+    assert format_timecode_filter(None) == "00:00:00.00"
+    assert format_timecode_filter(-1) == "00:00:00.00"
+    assert format_timecode_filter(12.34) == "00:00:12.34"

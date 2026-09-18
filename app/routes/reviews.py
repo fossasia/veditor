@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.auth import (
     CurrentUser,
-    check_event_access,
     check_talk_access,
     get_current_user,
 )
@@ -44,15 +43,8 @@ def review_talk(
             detail="Talk not found",
         )
 
-    if user.source == "sso":
+    if not user.is_machine:
         check_talk_access(talk, user, db)
-    else:
-        if user.role not in ("organizer", "admin") and not user.is_machine:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operation requires minimum role 'organizer'",
-            )
-        check_event_access(talk.event_id, user, db)
 
     if talk.status != "preview":
         raise HTTPException(

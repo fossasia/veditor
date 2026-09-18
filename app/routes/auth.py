@@ -135,6 +135,16 @@ def login_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
+    if user.role == "user":
+        has_talk = (
+            db.query(models.Talk)
+            .filter(models.Talk.speaker_email == clean_email)
+            .first()
+        )
+        if has_talk:
+            user.role = "speaker"
+            db.commit()
+
     token = create_session_token(user.id, user.role)
     redirect_target = _get_safe_redirect_target(next, default="/studio")
     response = RedirectResponse(
@@ -230,10 +240,15 @@ def signup_submit(
 
     hashed = hash_password(password)
 
+    has_talk = (
+        db.query(models.Talk).filter(models.Talk.speaker_email == clean_email).first()
+    )
+    user_role = "speaker" if has_talk else "user"
+
     user = models.User(
         email=clean_email,
         hashed_password=hashed,
-        role="user",
+        role=user_role,
         is_active=True,
     )
     db.add(user)
@@ -342,6 +357,16 @@ async def api_auth_token(
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if user.role == "user":
+        has_talk = (
+            db.query(models.Talk)
+            .filter(models.Talk.speaker_email == clean_email)
+            .first()
+        )
+        if has_talk:
+            user.role = "speaker"
+            db.commit()
 
     token = create_access_token(
         user_id=user.id,

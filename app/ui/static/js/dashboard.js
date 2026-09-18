@@ -327,6 +327,7 @@ window.submitQuickTalk = async function() {
   const room = (document.getElementById('quick-talk-room') || {}).value || 'Auditorium A';
   const startVal = (document.getElementById('quick-talk-start') || {}).value || '';
   const endVal = (document.getElementById('quick-talk-end') || {}).value || '';
+  const speakerEmail = ((document.getElementById('quick-talk-speaker-email') || {}).value || '').trim();
   const btn = document.getElementById('btn-submit-quick-talk');
   const orig = btn ? btn.innerHTML : '';
 
@@ -351,6 +352,9 @@ window.submitQuickTalk = async function() {
       title,
       room,
     };
+    if (speakerEmail) {
+      payload.speaker_email = speakerEmail;
+    }
 
     if (eventId) {
       payload.event_id = eventId;

@@ -11,6 +11,7 @@ from app.config import settings
 from app.ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
+    stage_custom_clip,
     stage_recording,
 )
 from app.schemas import RecordingIngestRequest
@@ -424,3 +425,18 @@ def test_stage_recording_extreme_multiplier_no_overflow(ingest_root, mock_backen
         assert exc_info.value.required_bytes > 1024 * 1024 * 1024
     finally:
         settings.disk_guard_multiplier = original_multiplier
+
+
+def test_stage_custom_clip_rejects_unscoped_shared_staging_path(
+    ingest_root, mock_backend, tmp_path, monkeypatch
+):
+    shared_staging = tmp_path / "veditor_staging"
+    shared_staging.mkdir()
+    unauthorized = shared_staging / "unscoped.mp4"
+    create_test_video(unauthorized)
+    monkeypatch.setattr("app.ingest.tempfile.gettempdir", lambda: str(tmp_path))
+
+    with pytest.raises(IngestPathRejectedError):
+        stage_custom_clip(1, str(unauthorized), "intro", mock_backend)
+
+    mock_backend.put.assert_not_called()

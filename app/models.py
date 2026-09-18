@@ -51,7 +51,7 @@ class User(Base):
     __table_args__ = (
         Index("idx_users_email", "email", unique=True),
         CheckConstraint(
-            "role IN ('user', 'organizer', 'admin')",
+            "role IN ('user', 'organizer', 'admin', 'speaker')",
             name="ck_users_role",
         ),
     )
@@ -145,6 +145,7 @@ class Talk(Base):
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="waiting_for_files"
     )
+    speaker_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_end: Mapped[float | None] = mapped_column(Float, nullable=True)

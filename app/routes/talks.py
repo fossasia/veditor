@@ -2,7 +2,6 @@ import json
 import logging
 import math
 import tempfile
-import traceback
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +11,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Request,
     Response,
@@ -36,6 +36,7 @@ from app.db import get_db
 from app.ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
+    get_bumper_staging_dir,
     stage_custom_clip,
     stage_recording,
 )
@@ -45,7 +46,6 @@ from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
 from app.tasks import (
     STAGE_CONFIG,
-    dispatch_assembly,
     job_cut,
     job_deliver_webhook,
     job_detect,
@@ -92,6 +92,8 @@ def create_or_update_talk(
     if talk:
         talk.room = payload.room
         talk.end = payload.end
+        if payload.speaker_email is not None:
+            talk.speaker_email = payload.speaker_email
         db.commit()
         db.refresh(talk)
         response.status_code = status.HTTP_200_OK
@@ -103,6 +105,7 @@ def create_or_update_talk(
         room=payload.room,
         start=payload.start,
         end=payload.end,
+        speaker_email=payload.speaker_email,
         status="waiting_for_files",
     )
     db.add(talk)
@@ -298,7 +301,7 @@ def approve_talk(
     if decision == "reject":
         advance(talk, "rejected")
     else:
-        advance(talk, "pending_bounds")
+        advance(talk, "pending_intro_outro")
 
     db.commit()
     db.refresh(talk)
@@ -469,15 +472,8 @@ def submit_cut_bounds(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
-    if user.source == "sso":
+    if not user.is_machine:
         check_talk_access(talk, user, db)
-    else:
-        if user.role not in ("organizer", "admin") and not user.is_machine:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operation requires minimum role 'organizer'",
-            )
-        check_event_access(talk.event_id, user, db)
 
     if talk.status != "pending_bounds":
         raise HTTPException(
@@ -516,6 +512,15 @@ def submit_cut_bounds(
     talk.cut_start = cut_start_s
     talk.cut_end = cut_end_s
     advance(talk, "cutting")
+    if payload.note:
+        user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
+        review = models.Review(
+            talk_id=talk.id,
+            decision="cut",
+            note=payload.note,
+            user_id=user_id,
+        )
+        db.add(review)
     db.commit()
     db.refresh(talk)
 
@@ -529,6 +534,67 @@ def submit_cut_bounds(
     _dispatch_talk_cut_webhook(talk, user, db)
 
     return schemas.TalkRead.model_validate(talk)
+
+
+@router.post(
+    "/{talk_id}/bumpers/upload",
+    status_code=status.HTTP_200_OK,
+)
+def upload_bumper_file(
+    talk_id: int,
+    file: Annotated[UploadFile, File()],
+    kind: Annotated[str, Form()] = "intro",
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))] = None,
+    db: Annotated[Session, Depends(get_db)] = None,
+):
+    """Upload a custom bumper and return an opaque key understood by assembly."""
+    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    if not talk or (user.is_machine and talk.event_id not in user.event_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
+        )
+    check_event_access(talk.event_id, user, db)
+
+    if kind not in ("intro", "outro"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bumper kind must be 'intro' or 'outro'",
+        )
+
+    staging_dir = get_bumper_staging_dir()
+    ext = Path(file.filename or "bumper.mp4").suffix or ".mp4"
+    staged_path = (
+        staging_dir / f"bumper_{talk_id}_{kind}_{uuid.uuid4().hex}{ext}"
+    ).resolve()
+
+    max_size = settings.max_bumper_upload_size_bytes
+    total_bytes = 0
+    try:
+        # Keep only the latest unsubmitted upload for each talk and bumper kind.
+        for previous_path in staging_dir.glob(f"bumper_{talk_id}_{kind}_*"):
+            if previous_path != staged_path and previous_path.is_file():
+                # storage-boundary-exempt: remove superseded bumper staging upload
+                previous_path.unlink()
+
+        # storage-boundary-exempt: bumper staging upload
+        with open(staged_path, "wb") as f_out:
+            while chunk := file.file.read(1024 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > max_size:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"Bumper file exceeds maximum allowed size of {max_size} bytes",
+                    )
+                f_out.write(chunk)
+    except Exception:
+        # storage-boundary-exempt: bumper staging cleanup
+        staged_path.unlink(missing_ok=True)
+        raise
+
+    return {
+        "path": f"bumpers/{staged_path.name}",
+        "filename": file.filename,
+    }
 
 
 @router.post(
@@ -571,18 +637,6 @@ def configure_assembly(
             detail=f"Cannot configure intro/outro for talk in status '{talk.status}'; talk must be in 'pending_intro_outro'",
         )
 
-    cut_keys = storage.list_keys(f"{talk.id}/cut/")
-    default_cut_key = f"{talk.id}/cut/cut.mp4"
-    if cut_keys:
-        cut_key = cut_keys[0]
-    elif storage.exists(default_cut_key):
-        cut_key = default_cut_key
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No cut recording found for talk",
-        )
-
     # Validate and stage custom clips before any DB mutation
     if payload.include_intro and payload.intro_source == "custom":
         try:
@@ -617,32 +671,9 @@ def configure_assembly(
         else None
     )
 
-    advance(talk, "assembling")
+    advance(talk, "pending_bounds")
     db.commit()
     db.refresh(talk)
-
-    try:
-        dispatch_assembly(talk.id, cut_key)
-    except Exception:
-        advance(talk, "broken")
-        log_key = f"{talk.id}/logs/assembly.log"
-        log_content = traceback.format_exc()
-        try:
-            storage.put(log_key, log_content.encode("utf-8"))
-        except Exception as log_err:  # noqa: BLE001
-            logger.warning(
-                "Failed to persist dispatch failure log to storage: %s", log_err
-            )
-            log_key = None
-        job = models.Job(
-            talk_id=talk.id,
-            kind="assembly",
-            status="failed",
-            log_path=log_key,
-        )
-        db.add(job)
-        db.commit()
-        raise
 
     return schemas.TalkRead.model_validate(talk)
 
@@ -811,6 +842,8 @@ def update_talk(
         talk.start = payload.start
     if payload.end is not None:
         talk.end = payload.end
+    if payload.speaker_email is not None:
+        talk.speaker_email = payload.speaker_email if payload.speaker_email else None
 
     try:
         db.commit()
@@ -1137,6 +1170,12 @@ async def import_schedule(
             for day in conf.get("days", []):
                 for room_name, room_talks in day.get("rooms", {}).items():
                     for t in room_talks:
+                        speaker_email = t.get("speaker_email")
+                        if not speaker_email and isinstance(t.get("persons"), list):
+                            for p in t["persons"]:
+                                if isinstance(p, dict) and p.get("email"):
+                                    speaker_email = p["email"]
+                                    break
                         talks_to_create.append(
                             {
                                 "title": t.get("title", "Untitled Session"),
@@ -1144,6 +1183,7 @@ async def import_schedule(
                                 "start": t.get("date") or t.get("start"),
                                 "end": t.get("end"),
                                 "duration": t.get("duration"),
+                                "speaker_email": speaker_email,
                             }
                         )
         elif "talks" in data:
@@ -1239,6 +1279,7 @@ async def import_schedule(
                 "room": room,
                 "start": start_dt,
                 "end": end_dt,
+                "speaker_email": t_info.get("speaker_email"),
             }
         )
 
@@ -1341,6 +1382,8 @@ async def import_schedule(
         if existing:
             existing.room = v_talk["room"]
             existing.end = v_talk["end"]
+            if v_talk.get("speaker_email"):
+                existing.speaker_email = v_talk["speaker_email"]
             created_count += 1
             continue
 
@@ -1350,6 +1393,7 @@ async def import_schedule(
             room=v_talk["room"],
             start=v_talk["start"],
             end=v_talk["end"],
+            speaker_email=v_talk.get("speaker_email"),
             status="waiting_for_files",
         )
         db.add(talk)

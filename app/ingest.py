@@ -1,3 +1,4 @@
+import tempfile
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
@@ -97,6 +98,18 @@ def stage_recording(
     return key
 
 
+def get_bumper_staging_dir() -> Path:
+    """Return the absolute staging directory for uploaded custom bumper clips."""
+    base = (
+        Path(settings.ingest_roots[0])
+        if settings.ingest_roots
+        else Path(tempfile.gettempdir()) / "veditor_staging"
+    ).resolve() / "bumpers"
+    # storage-boundary-exempt: bumper staging directory
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 def stage_custom_clip(
     talk_id: int, path_str: str, stage: str, backend: StorageBackend
 ) -> str:
@@ -107,20 +120,34 @@ def stage_custom_clip(
     if not path_str or "\0" in path_str:
         raise IngestPathRejectedError("Invalid path")
 
-    target_path = Path(path_str)
-    if not target_path.is_absolute():
-        raise IngestPathRejectedError(f"custom_{stage}_path must be absolute")
-
     roots = [Path(r).resolve() for r in settings.ingest_roots]
     resolved_path = None
-    try:
-        candidate = target_path.resolve(strict=True)
-        for root in roots:
-            if candidate.is_relative_to(root):
+    target_path = Path(path_str)
+    if target_path.is_absolute():
+        try:
+            candidate = target_path.resolve(strict=True)
+            for root in roots:
+                if candidate.is_relative_to(root):
+                    resolved_path = candidate
+                    break
+        except OSError, RuntimeError:
+            pass
+    elif (
+        len(target_path.parts) == 2
+        and target_path.parts[0] == "bumpers"
+        and target_path.name.startswith(f"bumper_{talk_id}_{stage}_")
+    ):
+        bumper_root = get_bumper_staging_dir().parent.resolve()
+        try:
+            candidate = (bumper_root / target_path).resolve(strict=True)
+            if candidate.is_relative_to(bumper_root):
                 resolved_path = candidate
-                break
-    except OSError, RuntimeError:
-        pass
+        except OSError, RuntimeError:
+            pass
+    else:
+        raise IngestPathRejectedError(
+            f"custom_{stage}_path must be an absolute ingest path or staging key"
+        )
 
     if not resolved_path or not resolved_path.is_file():
         raise IngestPathRejectedError(

@@ -9,6 +9,7 @@ from app.storage import (
     LocalDiskBackend,
     StorageBackend,
     StorageKeyNotFoundError,
+    cleanup_bumpers,
     cleanup_intermediates,
 )
 from tests.conftest import FakeStorageBackend
@@ -220,3 +221,33 @@ def test_cleanup_intermediates_resilient_to_storage_delete_errors():
     # Should not raise exception
     cleanup_intermediates(mock_backend, 42)
     assert mock_backend.delete.call_count == len(INTERMEDIATE_STAGES)
+
+
+def test_cleanup_bumpers_resolves_relative_paths_from_staging_parent(
+    tmp_path: Path, monkeypatch
+):
+    staging_dir = tmp_path / "bumpers"
+    staging_dir.mkdir()
+    staged_bumper = staging_dir / "bumper_1_intro_test.mp4"
+    staged_bumper.write_bytes(b"bumper")
+    backend = mock.MagicMock(spec=StorageBackend)
+    monkeypatch.setattr("app.ingest.get_bumper_staging_dir", lambda: staging_dir)
+
+    cleanup_bumpers(backend, 1, ("bumpers/bumper_1_intro_test.mp4",))
+
+    assert not staged_bumper.exists()
+
+
+def test_cleanup_bumpers_preserves_absolute_paths_outside_staging(
+    tmp_path: Path, monkeypatch
+):
+    staging_dir = tmp_path / "bumpers"
+    staging_dir.mkdir()
+    external_bumper = tmp_path / "external.mp4"
+    external_bumper.write_bytes(b"bumper")
+    backend = mock.MagicMock(spec=StorageBackend)
+    monkeypatch.setattr("app.ingest.get_bumper_staging_dir", lambda: staging_dir)
+
+    cleanup_bumpers(backend, 1, (str(external_bumper),))
+
+    assert external_bumper.exists()

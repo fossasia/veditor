@@ -180,8 +180,6 @@ window.getApiKey = function () {
 
 window.setApiKey = function (key) {
   localStorage.setItem('veditor_api_key', key);
-  const secure = location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = "veditor_api_key=" + encodeURIComponent(key) + "; path=/; max-age=31536000; SameSite=Lax" + secure;
 };
 
 window.getUserRole = function () {
@@ -197,15 +195,14 @@ window.setUserRole = function (role) {
 window.authFetch = function (url, options = {}) {
   options.headers = options.headers || {};
   const isSessionLoggedIn = Boolean(
-    document.querySelector('.user-email') ||
-    document.getElementById('logout-btn')
+    document.querySelector('.user-email')
   );
   if (!isSessionLoggedIn) {
     const key = window.getApiKey();
     if (key) {
       if (options.headers instanceof Headers) {
-        options.headers.set('X-API-Key', key);
-      } else {
+        if (!options.headers.has('X-API-Key')) options.headers.set('X-API-Key', key);
+      } else if (!options.headers['X-API-Key']) {
         options.headers['X-API-Key'] = key;
       }
     }

@@ -250,6 +250,40 @@ def test_cut_bounds_happy_path():
             _clear_deps()
 
 
+def test_cut_bounds_with_note():
+    mock_db = MagicMock()
+    mock_storage = MagicMock()
+    talk = _mock_talk(status="pending_bounds", raw_duration_seconds=3600.0)
+    mock_db.query.return_value.filter.return_value.first.return_value = talk
+    mock_storage.list_keys.return_value = ["1/raw/recording.mp4"]
+    _setup_deps(mock_db, mock_storage)
+
+    with patch("app.routes.talks.light_queue"):
+        try:
+            resp = client.post(
+                "/talks/1/cut",
+                json={
+                    "cut_start": "00:00:10",
+                    "cut_end": "00:45:00",
+                    "note": "Trimmed initial silent intro",
+                },
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp.status_code == 202
+            assert talk.status == "cutting"
+            # Verify Review model was added with the note
+            review_calls = [
+                call[0][0]
+                for call in mock_db.add.call_args_list
+                if isinstance(call[0][0], models.Review)
+            ]
+            assert len(review_calls) == 1
+            assert review_calls[0].note == "Trimmed initial silent intro"
+            assert review_calls[0].decision == "cut"
+        finally:
+            _clear_deps()
+
+
 def test_cut_bounds_subsecond_precision():
     mock_db = MagicMock()
     mock_storage = MagicMock()
