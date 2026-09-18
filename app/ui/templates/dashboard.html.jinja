@@ -99,7 +99,7 @@
   </div>
 
   <!-- Bulk Actions Bar -->
-  {% if not (user and user.is_sso) %}
+  {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
   <div id="bulk-actions-bar">
     <div class="bulk-actions-info">
       <span id="selected-count-text">0 talks selected</span>
@@ -128,7 +128,7 @@
           Events
         </a>
         {% endif %}
-        {% if not (user and user.is_sso) %}
+        {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
         <button class="btn btn-ghost btn-sm" id="btn-open-import">
           <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Import Schedule
@@ -149,7 +149,7 @@
     <table>
       <thead>
         <tr>
-          {% if not (user and user.is_sso) %}
+          {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
           <th class="col-checkbox">
             <input type="checkbox" id="select-all-talks" title="Select all talks">
           </th>
@@ -164,8 +164,8 @@
       </thead>
       <tbody>
         {% for talk in talks %}
-        <tr data-talk-id="{{ talk.id }}" data-status="{{ talk.status }}">
-          {% if not (user and user.is_sso) %}
+        <tr data-talk-id="{{ talk.id }}" data-status="{{ talk.status }}" data-title="{{ talk.title | e }}" data-room="{{ talk.room or '' | e }}" data-start="{{ talk.start.isoformat() if talk.start else '' }}" data-end="{{ talk.end.isoformat() if talk.end else '' }}">
+          {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
           <td class="col-checkbox">
             <input type="checkbox" class="talk-checkbox" value="{{ talk.id }}">
           </td>
@@ -210,7 +210,10 @@
               <a href="/studio/talks/{{ talk.id }}" class="btn btn-ghost btn-sm">
                 Open Studio
               </a>
-              {% if not (user and user.is_sso) %}
+              {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
+              <button class="btn btn-ghost btn-sm btn-edit-talk" data-talk-id="{{ talk.id }}" title="Edit Talk">
+                <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
               <button class="btn btn-ghost btn-sm btn-delete-talk" data-talk-id="{{ talk.id }}" data-talk-title="{{ talk.title }}" title="Delete Talk">
                 <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
@@ -243,7 +246,7 @@
 
 </div>
 
-{% if not (user and user.is_sso) %}
+{% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
 <!-- ── MODAL: Import Schedule ────────────────────────────────────── -->
 <div id="modal-import" class="dashboard-modal-backdrop">
   <div class="dashboard-modal-card modal-import-card">
@@ -333,22 +336,22 @@
     </div>
 
     <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Talk Title</label>
+      <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-title">Talk Title</label>
       <input type="text" id="quick-talk-title" class="input-field" placeholder="e.g. Building Open Video Systems" required>
     </div>
 
     <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Room</label>
+      <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-room">Room</label>
       <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
     </div>
 
     <div class="dashboard-modal-grid-2">
       <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight">Start Time (Optional)</label>
+        <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-start">Start Time (Optional)</label>
         <input type="datetime-local" id="quick-talk-start" class="input-field">
       </div>
       <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight">End Time (Optional)</label>
+        <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-end">End Time (Optional)</label>
         <input type="datetime-local" id="quick-talk-end" class="input-field">
       </div>
     </div>

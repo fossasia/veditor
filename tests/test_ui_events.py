@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -5,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app import models
 from app.db import Base, engine, get_db
 from app.main import app
-from app.security import create_session_token, hash_password
+from app.security import create_session_token, create_sso_token, hash_password
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
@@ -379,7 +381,7 @@ def test_post_events_delete_success_and_permissions(client: TestClient, db_sessi
 def test_delete_studio_event_teardown_and_failure_resilience(
     client: TestClient, db_session
 ):
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
     from unittest.mock import MagicMock
 
     from app.storage import get_storage_backend
@@ -472,7 +474,7 @@ def test_delete_studio_event_teardown_and_failure_resilience(
 def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
     client: TestClient, db_session
 ):
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
     from unittest.mock import MagicMock
 
     from app.storage import get_storage_backend
@@ -598,7 +600,7 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
 
 
 def test_dashboard_talks_scoped_to_organizers_events(client: TestClient, db_session):
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     org1 = create_user(db_session, "scope_org1@test.com", "organizer")
     org2 = create_user(db_session, "scope_org2@test.com", "organizer")
@@ -721,3 +723,95 @@ def test_create_quick_talk_unauthorized_event(client: TestClient, db_session):
         },
     )
     assert res.status_code == 403
+
+
+def test_dashboard_edit_button_visible_for_organizer(client: TestClient, db_session):
+    org = create_user(db_session, "org_edit_btn@test.com", "organizer")
+    ev = models.Event(name="Edit Btn Conf", created_by_user_id=org.id)
+    db_session.add(ev)
+    db_session.commit()
+    db_session.refresh(ev)
+    talk = models.Talk(
+        event_id=ev.id,
+        title="Edit Me",
+        room="Main",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    authenticate_client(client, org)
+    res = client.get("/studio")
+    assert res.status_code == 200
+    assert "btn-edit-talk" in res.text
+
+
+def test_dashboard_edit_button_hidden_for_sso(client: TestClient, db_session):
+    org = create_user(db_session, "org_sso_btn@test.com", "organizer")
+    ev = models.Event(name="SSO Btn Conf", created_by_user_id=org.id)
+    db_session.add(ev)
+    db_session.commit()
+    db_session.refresh(ev)
+    talk = models.Talk(
+        event_id=ev.id,
+        title="SSO Me",
+        room="Main",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    sso_token = create_sso_token(scope_type="talk", scope_id=talk.id, role="speaker")
+    client.cookies.set("veditor_session", sso_token)
+
+    res = client.get("/studio")
+    assert res.status_code == 200
+    assert "btn-edit-talk" not in res.text
+
+
+def test_studio_edit_button_visible_for_organizer(client: TestClient, db_session):
+    org = create_user(db_session, "org_edit_studio_btn@test.com", "organizer")
+    ev = models.Event(name="Edit Studio Conf", created_by_user_id=org.id)
+    db_session.add(ev)
+    db_session.commit()
+    db_session.refresh(ev)
+    talk = models.Talk(
+        event_id=ev.id,
+        title="Edit Me Studio",
+        room="Main",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    authenticate_client(client, org)
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+    assert "btn-edit-talk-studio" in res.text
+
+
+def test_studio_edit_button_hidden_for_sso(client: TestClient, db_session):
+    org = create_user(db_session, "org_sso_studio_btn@test.com", "organizer")
+    ev = models.Event(name="SSO Studio Conf", created_by_user_id=org.id)
+    db_session.add(ev)
+    db_session.commit()
+    db_session.refresh(ev)
+    talk = models.Talk(
+        event_id=ev.id,
+        title="SSO Me Studio",
+        room="Main",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    sso_token = create_sso_token(scope_type="talk", scope_id=talk.id, role="speaker")
+    client.cookies.set("veditor_session", sso_token)
+
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+    assert "btn-edit-talk-studio" not in res.text

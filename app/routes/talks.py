@@ -788,29 +788,31 @@ def update_talk(
         )
     check_event_access(talk.event_id, user, db)
 
-    if payload.title is not None:
-        title = payload.title.strip()
+    update_data = payload.model_dump(exclude_unset=True)
+
+    if "title" in update_data:
+        title = (update_data["title"] or "").strip()
         if not title:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Talk title cannot be empty",
             )
         talk.title = title
-    if payload.room is not None:
-        talk.room = payload.room
+    if "room" in update_data:
+        talk.room = update_data["room"]
 
-    new_start = payload.start if payload.start is not None else talk.start
-    new_end = payload.end if payload.end is not None else talk.end
+    new_start = update_data.get("start", talk.start)
+    new_end = update_data.get("end", talk.end)
     if new_start and new_end and new_end <= new_start:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Talk end time must be after start time",
         )
 
-    if payload.start is not None:
-        talk.start = payload.start
-    if payload.end is not None:
-        talk.end = payload.end
+    if "start" in update_data:
+        talk.start = new_start
+    if "end" in update_data:
+        talk.end = new_end
 
     try:
         db.commit()

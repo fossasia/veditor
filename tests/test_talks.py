@@ -907,6 +907,122 @@ def test_submit_cut_bounds_out_of_range_returns_422(cut_start: str, cut_end: str
 # --- Full Path Test: recordings -> detect -> pending_approval -> approve -> cut -> preview -> preview halt ---
 
 
+def test_patch_talk_unauthorized():
+    resp = client.patch("/talks/1", json={"title": "New Title"})
+    assert resp.status_code == 401
+
+
+def test_patch_talk_not_found():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    mock_db.query.return_value.filter.return_value.first.return_value = None
+
+    resp = client.patch(
+        "/talks/9999",
+        json={"title": "New Title"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_updates_fields():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        room="Old Room",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"title": "New Title", "room": "New Room"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 200
+    assert existing_talk.title == "New Title"
+    assert existing_talk.room == "New Room"
+    assert mock_db.commit.called
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_empty_title_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"title": "   "},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "cannot be empty" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_end_before_start_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)  # 9:00 is before 10:00 start
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"end": end_time.isoformat()},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "after start time" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
 def test_full_pipeline_flow_recordings_to_preview_halt():
     """
     Simulates full pipeline flow from ingest to preview halt (Phase 4):

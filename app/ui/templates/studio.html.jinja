@@ -35,6 +35,11 @@
   <span class="breadcrumb-room">{{ talk.room or '—' }}</span>
   <span class="sep">/</span>
   <span class="current" title="{{ talk.title }}">{{ talk.title }}</span>
+  {% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
+  <button class="btn btn-ghost btn-sm breadcrumb-edit-btn" id="btn-edit-talk-studio" title="Edit Talk">
+    <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+  </button>
+  {% endif %}
 {% endblock %}
 
 {% block topbar_actions %}
@@ -56,7 +61,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
+<div class="studio-shell" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-talk-title="{{ talk.title | e }}" data-talk-room="{{ talk.room or '' | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}">
 
   <!-- ── CENTER: Video Player or Upload Dropzone ─────────────── -->
   <div class="player-panel">
@@ -421,6 +426,39 @@
   </div>
 
 </div>
+{% if user and user.role in ['organizer', 'admin'] and not user.is_sso %}
+<!-- ── MODAL: Edit Talk ────────────────────────────────────── -->
+<div id="modal-edit-talk-studio" class="dashboard-modal-backdrop">
+  <div class="dashboard-modal-card modal-quick-card">
+    <div class="dashboard-modal-header">
+      <h3 class="dashboard-modal-title">Edit Talk</h3>
+      <button class="btn btn-ghost btn-sm btn-close-edit-talk dashboard-modal-close">✕</button>
+    </div>
+    <div class="dashboard-modal-field-sm">
+      <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-title">Talk Title</label>
+      <input type="text" id="edit-talk-title" class="input-field" required>
+    </div>
+    <div class="dashboard-modal-field-sm">
+      <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-room">Room</label>
+      <input type="text" id="edit-talk-room" class="input-field">
+    </div>
+    <div class="dashboard-modal-grid-2">
+      <div>
+        <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-start">Start Time</label>
+        <input type="datetime-local" id="edit-talk-start" class="input-field">
+      </div>
+      <div>
+        <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-end">End Time</label>
+        <input type="datetime-local" id="edit-talk-end" class="input-field">
+      </div>
+    </div>
+    <div class="dashboard-modal-footer">
+      <button class="btn btn-ghost btn-sm btn-close-edit-talk">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="btn-submit-edit-talk-studio">Save Changes</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}

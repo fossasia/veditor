@@ -98,9 +98,14 @@
   gap: 6px;
 }
 
+.btn-edit-talk,
+.btn-delete-talk {
+  color: var(--v-text-secondary);
+  padding: 3px 7px;
+}
+
 .btn-delete-talk {
   color: #ef4444;
-  padding: 3px 7px;
 }
 
 #no-client-matches-row {
@@ -149,106 +154,3 @@
   font-size: 0.82rem;
 }
 
-/* Modals */
-.dashboard-modal-backdrop {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 100;
-  align-items: center;
-  justify-content: center;
-}
-
-.dashboard-modal-card {
-  background: var(--v-bg-surface);
-  border: 1px solid var(--v-border);
-  border-radius: var(--v-radius-md);
-  width: 90%;
-  padding: 24px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-}
-
-.modal-import-card {
-  max-width: 520px;
-}
-
-.modal-attach-card {
-  max-width: 480px;
-}
-
-.modal-quick-card {
-  max-width: 440px;
-}
-
-.dashboard-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.dashboard-modal-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--v-text-primary);
-  margin: 0;
-}
-
-.dashboard-modal-close {
-  padding: 2px 8px;
-}
-
-.dashboard-modal-desc {
-  font-size: 0.8rem;
-  color: var(--v-text-muted);
-  margin-bottom: 12px;
-}
-
-.dashboard-modal-field {
-  margin-bottom: 12px;
-}
-
-.dashboard-modal-field-lg {
-  margin-bottom: 16px;
-}
-
-.dashboard-modal-field-sm {
-  margin-bottom: 10px;
-}
-
-.dashboard-modal-label {
-  font-size: 0.75rem;
-  color: var(--v-text-muted);
-  display: block;
-  margin-bottom: 4px;
-}
-
-.dashboard-modal-label-tight {
-  margin-bottom: 3px;
-}
-
-.dashboard-modal-file-input {
-  padding: 6px;
-}
-
-.dashboard-modal-textarea {
-  font-family: var(--v-font-mono);
-  font-size: 0.75rem;
-}
-
-.dashboard-modal-grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.dashboard-modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}

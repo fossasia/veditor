@@ -24,6 +24,11 @@
   max-width: 340px;
 }
 
+.breadcrumb-edit-btn {
+  padding: 2px 6px;
+  color: var(--v-text-muted);
+}
+
 .topbar-time-meta {
   display: inline-flex;
   align-items: center;
