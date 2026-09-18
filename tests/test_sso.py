@@ -410,6 +410,8 @@ def test_sso_speaker_submits_review_success(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
 
     app.dependency_overrides[get_db] = lambda: mock_db

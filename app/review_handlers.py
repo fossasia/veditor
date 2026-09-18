@@ -27,6 +27,19 @@ def _record_review_and_advance(
             user_id=user_id,
         )
         db.add(review)
+
+        if payload.decision == schemas.ReviewDecision.approve:
+            if talk.cut_start is None or talk.cut_end is None:
+                raise ValueError("Cannot approve a talk without cut bounds.")
+            db.add(
+                models.ApprovedCut(
+                    talk_id=talk.id,
+                    cut_start=talk.cut_start,
+                    cut_end=talk.cut_end,
+                    review=review,
+                )
+            )
+
         advance(talk, target_state)
         db.flush()
         response = schemas.ReviewResponse(

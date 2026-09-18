@@ -96,6 +96,8 @@ def test_review_handlers_forward_user_id(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     payload = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.approve, note="LGTM"
@@ -104,7 +106,8 @@ def test_review_handlers_forward_user_id(mock_db):
     resp = handle_approve(talk, payload, mock_db, user_id=99)
     assert resp.talk.status == "pending_intro_outro"
     assert mock_db.add.called
-    added_review = mock_db.add.call_args[0][0]
+    added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+    added_review = next(obj for obj in added_objs if isinstance(obj, models.Review))
     assert added_review.user_id == 99
     assert added_review.decision == "approve"
 
@@ -255,6 +258,8 @@ def test_review_records_human_user_id(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     event = models.Event(id=1, name="Keynote Event", created_by_user_id=42)
 
@@ -289,6 +294,8 @@ def test_review_records_none_for_machine_client(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 
@@ -312,6 +319,8 @@ def test_review_machine_client_forbidden_event(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 
@@ -342,6 +351,8 @@ def test_legacy_get_client_override_in_get_current_user(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 

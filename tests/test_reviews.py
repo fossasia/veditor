@@ -220,7 +220,22 @@ def test_review_valid_decisions_success(
     assert data["review"]["note"] == note
     assert "created_at" in data["review"]
     assert data["review"]["created_at"] is not None
-    mock_db.add.assert_called_once()
+    if decision == "approve":
+        assert mock_db.add.call_count == 2
+
+        # Verify the second added object is ApprovedCut
+        added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+        review_obj = added_objs[0]
+        approved_cut_obj = added_objs[1]
+
+        assert isinstance(approved_cut_obj, models.ApprovedCut)
+        assert approved_cut_obj.talk_id == preview_talk.id
+        assert approved_cut_obj.cut_start == 10.0
+        assert approved_cut_obj.cut_end == 60.0
+        assert approved_cut_obj.review == review_obj
+    else:
+        mock_db.add.assert_called_once()
+
     mock_db.flush.assert_called_once()
     mock_db.commit.assert_called_once()
 
@@ -579,6 +594,8 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     db.add(talk)
     db.commit()
@@ -982,3 +999,44 @@ def test_review_human_admin_success(mock_db, preview_talk, fake_storage):
     data = response.json()
     assert data["talk"]["status"] == "pending_intro_outro"
     assert data["review"]["user_id"] == 1
+
+
+def test_review_multiple_approvals_create_multiple_rows(
+    mock_db, preview_talk, fake_storage
+):
+    """A talk that goes needs_work and is approved on a later pass has one ApprovedCut row per approval, not one overwritten row."""
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    # First approve
+    req_approve1 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+    handle_approve(preview_talk, req_approve1, mock_db)
+
+    # Then needs work
+    preview_talk.status = "preview"
+    req_needs_work = schemas.ReviewRequest(decision=schemas.ReviewDecision.needs_work)
+    handle_needs_work(preview_talk, req_needs_work, mock_db)
+
+    # Second approve with different bounds
+    preview_talk.status = "preview"
+    preview_talk.cut_start = 12.0
+    preview_talk.cut_end = 55.0
+    req_approve2 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+    handle_approve(preview_talk, req_approve2, mock_db)
+
+    # Verify mock_db.add was called multiple times, creating multiple ApprovedCut rows
+    added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+
+    # We should have two ApprovedCuts (one for each approve)
+    approved_cuts = [obj for obj in added_objs if isinstance(obj, models.ApprovedCut)]
+    assert len(approved_cuts) == 2
+
+    assert approved_cuts[0].cut_start == 10.0
+    assert approved_cuts[0].cut_end == 60.0
+
+    assert approved_cuts[1].cut_start == 12.0
+    assert approved_cuts[1].cut_end == 55.0

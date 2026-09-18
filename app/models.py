@@ -162,6 +162,9 @@ class Talk(Base):
     reviews: Mapped[list[Review]] = relationship(
         back_populates="talk", cascade="all, delete-orphan"
     )
+    approved_cuts: Mapped[list[ApprovedCut]] = relationship(
+        back_populates="talk", cascade="all, delete-orphan"
+    )
 
 
 class Job(Base):
@@ -261,3 +264,26 @@ class Review(Base):
 
     talk: Mapped[Talk] = relationship(back_populates="reviews")
     user: Mapped[User | None] = relationship(back_populates="reviews")
+
+
+class ApprovedCut(Base):
+    __tablename__ = "approved_cuts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    talk_id: Mapped[int] = mapped_column(
+        ForeignKey("talks.id", ondelete="CASCADE"), nullable=False
+    )
+    cut_start: Mapped[float] = mapped_column(Float, nullable=False)
+    cut_end: Mapped[float] = mapped_column(Float, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    review_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+    )
+
+    talk: Mapped[Talk] = relationship(back_populates="approved_cuts")
+    review: Mapped[Review | None] = relationship()
