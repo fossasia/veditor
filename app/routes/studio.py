@@ -321,17 +321,15 @@ def dashboard(
     else:
         user = _get_authenticated_user_from_cookie(request, db)
         if user:
-            if user.role == "admin":
-                user_events = (
-                    db.query(models.Event).order_by(models.Event.name.asc()).all()
-                )
-            else:
+            if user.role in ("organizer", "admin"):
                 user_events = (
                     db.query(models.Event)
                     .filter(models.Event.created_by_user_id == user.id)
                     .order_by(models.Event.name.asc())
                     .all()
                 )
+            else:
+                user_events = []
         elif client is not None:
             user_events = (
                 db.query(models.Event)
@@ -344,7 +342,7 @@ def dashboard(
 
         query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
         if user:
-            if user.role == "organizer":
+            if user.role in ("organizer", "admin"):
                 org_event_ids = [e.id for e in user_events]
                 query = query.filter(models.Talk.event_id.in_(org_event_ids))
                 if event_id is not None:
@@ -352,9 +350,6 @@ def dashboard(
                         query = query.filter(models.Talk.id == -1)
                     else:
                         query = query.filter(models.Talk.event_id == event_id)
-            elif user.role == "admin":
-                if event_id is not None:
-                    query = query.filter(models.Talk.event_id == event_id)
             else:
                 query = query.filter(models.Talk.id == -1)
         elif client is not None:
@@ -383,15 +378,13 @@ def dashboard(
             .all()
         )
     elif user:
-        if user.role == "organizer":
+        if user.role in ("organizer", "admin"):
             org_event_ids = [e.id for e in user_events]
             all_talks = (
                 db.query(models.Talk)
                 .filter(models.Talk.event_id.in_(org_event_ids))
                 .all()
             )
-        elif user.role == "admin":
-            all_talks = db.query(models.Talk).all()
         else:
             all_talks = []
     elif client is not None:
@@ -704,21 +697,13 @@ def list_studio_events(
             detail="Operation requires minimum role 'organizer'",
         )
 
-    if user.role == "admin":
-        events = (
-            db.query(models.Event)
-            .options(selectinload(models.Event.created_by_user))
-            .order_by(models.Event.id.asc())
-            .all()
-        )
-    else:
-        events = (
-            db.query(models.Event)
-            .options(selectinload(models.Event.created_by_user))
-            .filter(models.Event.created_by_user_id == user.id)
-            .order_by(models.Event.id.asc())
-            .all()
-        )
+    events = (
+        db.query(models.Event)
+        .options(selectinload(models.Event.created_by_user))
+        .filter(models.Event.created_by_user_id == user.id)
+        .order_by(models.Event.id.asc())
+        .all()
+    )
 
     return templates.TemplateResponse(
         request,
@@ -756,21 +741,13 @@ def create_studio_event(
 
     clean_name = name.strip()
     if not clean_name:
-        if user.role == "admin":
-            events = (
-                db.query(models.Event)
-                .options(selectinload(models.Event.created_by_user))
-                .order_by(models.Event.id.asc())
-                .all()
-            )
-        else:
-            events = (
-                db.query(models.Event)
-                .options(selectinload(models.Event.created_by_user))
-                .filter(models.Event.created_by_user_id == user.id)
-                .order_by(models.Event.id.asc())
-                .all()
-            )
+        events = (
+            db.query(models.Event)
+            .options(selectinload(models.Event.created_by_user))
+            .filter(models.Event.created_by_user_id == user.id)
+            .order_by(models.Event.id.asc())
+            .all()
+        )
         return templates.TemplateResponse(
             request,
             "events.html.jinja",

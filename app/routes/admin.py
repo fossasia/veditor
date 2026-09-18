@@ -1,6 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
+from rq import Worker
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -11,12 +14,76 @@ from app.auth import (
     require_admin,
 )
 from app.db import get_db
+from app.queue import redis_conn
+from app.storage import StorageBackend, get_storage_backend
+from app.ui.templating import templates
 
 router = APIRouter(
     prefix="/admin",
     tags=["admin"],
     dependencies=[Depends(require_admin)],
 )
+
+
+@router.get("", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
+def admin_dashboard(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+):
+    db_status = "Down"
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "Healthy"
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    redis_status = "Down"
+    try:
+        if redis_conn.ping():
+            redis_status = "Healthy"
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    light_workers = 0
+    heavy_workers = 0
+    try:
+        all_workers = Worker.all(connection=redis_conn)
+        for w in all_workers:
+            queue_names = [q.name for q in w.queues]
+            if "light" in queue_names:
+                light_workers += 1
+            if "heavy" in queue_names:
+                heavy_workers += 1
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    storage_status = "Available"
+    free_bytes = 0
+    total_bytes = 0
+    used_bytes = 0
+    try:
+        free_bytes = storage.free_bytes()
+        total_bytes = storage.total_bytes()
+        used_bytes = total_bytes - free_bytes
+    except OSError:
+        storage_status = "Unavailable"
+
+    return templates.TemplateResponse(
+        request,
+        "admin_dashboard.html.jinja",
+        {
+            "db_status": db_status,
+            "redis_status": redis_status,
+            "light_workers": light_workers,
+            "heavy_workers": heavy_workers,
+            "storage_status": storage_status,
+            "free_bytes": free_bytes,
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+        },
+    )
 
 
 @router.get("/users", response_model=list[schemas.UserRead])

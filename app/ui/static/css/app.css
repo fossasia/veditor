@@ -166,6 +166,10 @@ a:hover { color: var(--v-primary-hover); }
   cursor: pointer;
 }
 
+.push-bottom {
+  margin-top: auto;
+}
+
 .nav-item:hover {
   background: var(--v-bg-surface-hover);
   color: var(--v-text-primary);
@@ -175,6 +179,14 @@ a:hover { color: var(--v-primary-hover); }
   background: var(--v-primary-subtle);
   color: var(--v-primary);
   font-weight: 600;
+}
+
+.nav-item.danger {
+  color: var(--v-status-danger-text);
+}
+.nav-item.danger:hover {
+  background: var(--v-status-danger-bg);
+  color: var(--v-status-danger-text);
 }
 
 /* ── Main Content ─────────────────────────────────────────────── */
@@ -378,6 +390,10 @@ body.is-studio-mode.is-speaker .main-content {
 .stat-value.blue  { color: var(--v-status-active-text); }
 .stat-value.green { color: var(--v-status-success-text); }
 .stat-value.red   { color: var(--v-status-danger-text); }
+
+.stat-value-sm {
+  font-size: 1.25rem;
+}
 
 /* ── Filter Bar & Inputs ──────────────────────────────────────── */
 .filter-bar {
