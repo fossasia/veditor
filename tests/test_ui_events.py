@@ -786,7 +786,7 @@ def test_room_page_lists_only_talks_in_that_room(client: TestClient, db_session)
     # Stat cards count only the room's talks, not the whole workspace.
     assert '<span class="stat-value">2</span>' in resp.text
     # Filters submit back to the room page and keep the event scope.
-    assert 'action="/studio/rooms/Main Stage"' in resp.text
+    assert 'action="/studio/rooms/Main%20Stage"' in resp.text
     assert f'name="event_id" value="{event.id}"' in resp.text
 
 
@@ -829,7 +829,7 @@ def test_room_page_supports_status_and_search_filters(client: TestClient, db_ses
     resp = client.get(f"/studio/rooms/Main Stage?event_id={event.id}&q=opening")
     assert "Main Stage Opening" in resp.text
     assert "Main Stage Closing" not in resp.text
-    clear_href = f'href="/studio/rooms/Main Stage?event_id={event.id}"'
+    clear_href = f'href="/studio/rooms/Main%20Stage?event_id={event.id}"'
     assert f'{clear_href} class="btn btn-ghost" id="clear-btn"' in resp.text
 
 
@@ -948,6 +948,85 @@ def test_login_next_keeps_dashboard_filters(client: TestClient, db_session):
     assert resp.url.params["event_id"] == str(event.id)
     assert resp.url.params["status_filter"] == "done"
     assert "Main Stage Closing" in resp.text
+    assert "Main Stage Opening" not in resp.text
+
+
+def _seed_delimiter_rooms(db_session, event):
+    for title, room in (
+        ("Ask Anything Session", "Ask Me? Anything"),
+        ("Hash Room Session", "Room #5"),
+    ):
+        db_session.add(
+            models.Talk(
+                event_id=event.id,
+                title=title,
+                room=room,
+                start=datetime.now(tz=UTC),
+                end=datetime.now(tz=UTC) + timedelta(minutes=30),
+                status="waiting_for_files",
+            )
+        )
+    db_session.commit()
+
+
+@pytest.mark.parametrize(
+    ("room", "encoded", "title"),
+    [
+        ("Ask Me? Anything", "Ask%20Me%3F%20Anything", "Ask Anything Session"),
+        ("Room #5", "Room%20%235", "Hash Room Session"),
+    ],
+)
+def test_room_page_keeps_question_mark_and_hash_in_room_names(
+    client: TestClient, db_session, room: str, encoded: str, title: str
+):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    _seed_delimiter_rooms(db_session, event)
+    authenticate_client(client, org)
+
+    # The dashboard link escapes the delimiter and lands on the right room.
+    dashboard = client.get(f"/studio?event_id={event.id}&q={title.split()[0]}")
+    room_href = _extract_href(dashboard.text, "talk-room-link")
+    assert room_href == f"/studio/rooms/{encoded}?event_id={event.id}"
+
+    page = client.get(room_href)
+    assert page.status_code == 200
+    assert f'id="talks-scope-title">{room}</h1>' in page.text
+    assert title in page.text
+    assert "Main Stage Opening" not in page.text
+
+    # Filtering submits back to the same room, not to a truncated path.
+    assert f'action="/studio/rooms/{encoded}"' in page.text
+    filtered = client.get(f"/studio/rooms/{encoded}?event_id={event.id}&q=session")
+    assert title in filtered.text
+
+
+@pytest.mark.parametrize(
+    ("encoded", "title"),
+    [
+        ("Ask%20Me%3F%20Anything", "Ask Anything Session"),
+        ("Room%20%235", "Hash Room Session"),
+    ],
+)
+def test_login_next_keeps_question_mark_and_hash_in_room_names(
+    client: TestClient, db_session, encoded: str, title: str
+):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    _seed_delimiter_rooms(db_session, event)
+
+    start_url = f"/studio/rooms/{encoded}?event_id={event.id}"
+    redirect = client.get(start_url, follow_redirects=False)
+    # The delimiter is escaped once inside the path and once more as part of
+    # the `next` value; the space is only encoded once.
+    assert redirect.headers["location"] == (
+        "/login?next=/studio/rooms/"
+        + encoded.replace("%20", " ").replace("%", "%25").replace(" ", "%20")
+        + f"%3Fevent_id%3D{event.id}"
+    )
+
+    resp = _login_via_redirect(client, org.email, start_url)
+    assert resp.status_code == 200
+    assert resp.url.params["event_id"] == str(event.id)
+    assert title in resp.text
     assert "Main Stage Opening" not in resp.text
 
 
