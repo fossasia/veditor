@@ -1,0 +1,166 @@
+/* ── Admin Events View & Drill-down Styles ──────────────────── */
+
+.event-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+progress.event-progress-bar {
+  width: 100%;
+  max-width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  border: none;
+  background-color: var(--v-border-subtle);
+}
+
+progress.event-progress-bar::-webkit-progress-bar {
+  background-color: var(--v-border-subtle);
+  border-radius: 3px;
+}
+
+progress.event-progress-bar::-webkit-progress-value {
+  background-color: var(--v-primary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+progress.event-progress-bar::-moz-progress-bar {
+  background-color: var(--v-primary);
+  border-radius: 3px;
+}
+
+.event-progress-pct {
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: var(--v-font-mono, monospace);
+  color: var(--v-text-secondary);
+  min-width: 38px;
+}
+
+.event-badges-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.event-detail-header {
+  background: var(--v-bg-card);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-md);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.event-detail-info h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--v-text-primary);
+  margin: 0 0 6px 0;
+}
+
+.event-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--v-text-secondary);
+}
+
+
+.event-title-cell {
+  max-width: 340px;
+}
+
+.event-title-cell strong {
+  display: block;
+  font-size: 0.92rem;
+  color: var(--v-text-primary);
+}
+
+.event-title-cell small {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  margin-top: 2px;
+}
+
+.table-count-spaced {
+  margin-left: 8px;
+}
+
+.col-id {
+  width: 80px;
+  padding-left: 18px;
+}
+
+.col-actions-right {
+  text-align: right;
+  padding-right: 18px;
+}
+
+.events-empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--v-text-muted);
+}
+
+.events-empty-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--v-text-primary);
+  margin-bottom: 6px;
+}
+
+.events-empty-desc {
+  font-size: 0.82rem;
+}
+
+/* Pagination Bar */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-top: 1px solid var(--v-border-subtle);
+  background: var(--v-bg-card);
+  border-radius: 0 0 var(--v-radius-md) var(--v-radius-md);
+  font-size: 0.85rem;
+  color: var(--v-text-secondary);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-page-label {
+  font-size: 0.82rem;
+  color: var(--v-text-secondary);
+  padding: 0 4px;
+}
+
+.pagination-btn.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.pagination-info strong {
+  color: var(--v-text-primary);
+}
+
+
+
+

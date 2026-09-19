@@ -1,6 +1,10 @@
 {% extends "base.html.jinja" %}
 {% block title %}Admin Console{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin.css">
+{% endblock %}
+
 {% block breadcrumb %}
   <span class="current">Admin Console</span>
 {% endblock %}
@@ -24,6 +28,15 @@
         <rect x="3" y="14" width="7" height="7"/>
       </svg>
       Overview
+    </a>
+    <a href="/admin/events" class="nav-item {% if request.url.path.startswith('/admin/events') %}active{% endif %}">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/>
+        <line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+      </svg>
+      Events
     </a>
     <a href="/studio" class="nav-item push-bottom danger">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

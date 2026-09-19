@@ -1,13 +1,16 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.auth import CurrentUser, hash_api_key
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.security import create_access_token, create_session_token, hash_password
+
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -23,37 +26,20 @@ def client():
 
 @pytest.fixture
 def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    created = []
-    orig_add = db.add
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(
+        bind=connection, join_transaction_mode="create_savepoint"
+    )
+    app.dependency_overrides[get_db] = lambda: session
 
-    def track_add(instance):
-        created.append(instance)
-        return orig_add(instance)
-
-    db.add = track_add
     try:
-        yield db
+        yield session
     finally:
-        try:
-            db.rollback()
-            for obj in reversed(created):
-                try:
-                    db.delete(obj)
-                    db.commit()
-                except Exception:  # noqa: BLE001
-                    db.rollback()
-            try:
-                db.query(models.User).filter(
-                    models.User.email.like("%@admin-test.com")
-                ).delete()
-                db.commit()
-            except Exception:  # noqa: BLE001
-                db.rollback()
-        finally:
-            app.dependency_overrides.pop(get_db, None)
-            db.close()
+        app.dependency_overrides.pop(get_db, None)
+        session.close()
+        transaction.rollback()
+        connection.close()
 
 
 def _create_test_user(
@@ -85,6 +71,14 @@ def test_admin_routes_unauthenticated(client: TestClient):
     res = client.post("/admin/users/1/deactivate")
     assert res.status_code == 401
 
+    # GET /admin/events
+    res = client.get("/admin/events")
+    assert res.status_code == 401
+
+    # GET /admin/events/{id}
+    res = client.get("/admin/events/1")
+    assert res.status_code == 401
+
 
 def test_admin_routes_forbidden_for_non_admin(client: TestClient, db_session):
     regular_user = _create_test_user(db_session, "regular@admin-test.com", role="user")
@@ -95,6 +89,12 @@ def test_admin_routes_forbidden_for_non_admin(client: TestClient, db_session):
     assert res.status_code == 403
     assert "admin" in res.text
 
+    res = client.get("/admin/events")
+    assert res.status_code == 403
+
+    res = client.get("/admin/events/1")
+    assert res.status_code == 403
+
     organizer_user = _create_test_user(
         db_session, "organizer@admin-test.com", role="organizer"
     )
@@ -102,6 +102,12 @@ def test_admin_routes_forbidden_for_non_admin(client: TestClient, db_session):
     client.cookies.set("veditor_session", token_org)
 
     res = client.get("/admin/users")
+    assert res.status_code == 403
+
+    res = client.get("/admin/events")
+    assert res.status_code == 403
+
+    res = client.get("/admin/events/1")
     assert res.status_code == 403
 
 
@@ -154,6 +160,20 @@ def test_admin_routes_reject_api_key(client: TestClient, db_session):
 
     res = client.get(
         "/admin/users",
+        headers={"X-API-Key": "test-admin-api-key"},
+    )
+    assert res.status_code == 403
+    assert res.json()["detail"] == "Operation requires a human administrator"
+
+    res = client.get(
+        "/admin/events",
+        headers={"X-API-Key": "test-admin-api-key"},
+    )
+    assert res.status_code == 403
+    assert res.json()["detail"] == "Operation requires a human administrator"
+
+    res = client.get(
+        "/admin/events/1",
         headers={"X-API-Key": "test-admin-api-key"},
     )
     assert res.status_code == 403
@@ -511,3 +531,335 @@ def test_concurrent_admin_demotion_prevents_zero_admins():
             models.User.email.like("%@concurrent-test.com")
         ).delete()
         s.commit()
+
+
+def test_admin_events_list_empty(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_e1@admin-test.com", role="admin")
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    class EmptyDbSession:
+        def __getattr__(self, name):
+            return getattr(db_session, name)
+
+        def query(self, *args, **kwargs):
+            if args and args[0] is models.User:
+                return db_session.query(*args, **kwargs)
+
+            class QueryMock:
+                def outerjoin(self, *a, **kw):
+                    return self
+
+                def group_by(self, *a, **kw):
+                    return self
+
+                def order_by(self, *a, **kw):
+                    return self
+
+                def offset(self, *a, **kw):
+                    return self
+
+                def limit(self, *a, **kw):
+                    return self
+
+                def scalar(self):
+                    return 0
+
+                def first(self):
+                    return None
+
+                def all(self):
+                    return []
+
+            return QueryMock()
+
+    app.dependency_overrides[get_db] = lambda: EmptyDbSession()
+    try:
+        res = client.get("/admin/events")
+        assert res.status_code == 200
+        assert "Events Overview" in res.text
+        assert "Platform Events" in res.text
+        assert "0 events" in res.text
+        assert "No events found" in res.text
+    finally:
+        app.dependency_overrides[get_db] = lambda: db_session
+
+
+def test_admin_events_list_and_aggregation(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_e2@admin-test.com", role="admin")
+    creator_user = _create_test_user(
+        db_session, "creator@admin-test.com", role="organizer"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    event1 = models.Event(
+        name="FOSSASIA Summit 2026",
+        created_by_user_id=creator_user.id,
+    )
+    event2 = models.Event(
+        name="Empty Event 2026",
+        created_by_user_id=creator_user.id,
+    )
+    db_session.add_all([event1, event2])
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talks = [
+        models.Talk(
+            event_id=event1.id,
+            title="Keynote Talk",
+            room="Main Hall",
+            start=now,
+            end=now + timedelta(minutes=45),
+            status="done",
+        ),
+        models.Talk(
+            event_id=event1.id,
+            title="FastAPI Deep Dive",
+            room="Room A",
+            start=now + timedelta(hours=1),
+            end=now + timedelta(hours=1, minutes=45),
+            status="done",
+        ),
+        models.Talk(
+            event_id=event1.id,
+            title="Video Pipeline Architecture",
+            room="Room B",
+            start=now + timedelta(hours=2),
+            end=now + timedelta(hours=2, minutes=45),
+            status="cutting",
+        ),
+        models.Talk(
+            event_id=event1.id,
+            title="PyAV Bindings Review",
+            room="Room C",
+            start=now + timedelta(hours=3),
+            end=now + timedelta(hours=3, minutes=45),
+            status="pending_approval",
+        ),
+        models.Talk(
+            event_id=event1.id,
+            title="Hardware Acceleration Issues",
+            room="Room D",
+            start=now + timedelta(hours=4),
+            end=now + timedelta(hours=4, minutes=45),
+            status="broken",
+        ),
+    ]
+    db_session.add_all(talks)
+    db_session.commit()
+
+    res = client.get("/admin/events")
+    assert res.status_code == 200
+    html = res.text
+
+    # Verify event names and creator email
+    assert "FOSSASIA Summit 2026" in html
+    assert "Empty Event 2026" in html
+    assert "creator@admin-test.com" in html
+
+    # Verify aggregated stats for event 1 (5 talks, 2 done => 40.0%)
+    assert "5 talks registered" in html
+    assert 'value="40.0"' in html
+    assert "40.0%" in html
+    assert "2 Done" in html
+    assert "1 Processing" in html
+    assert "1 Pending" in html
+    assert "1 Broken" in html
+
+    # Verify empty event
+    assert "0 talks registered" in html
+    assert 'value="0"' in html
+    assert "0%" in html
+    assert "No talks" in html
+
+    # Verify drilldown links
+    assert f"/admin/events/{event1.id}" in html
+    assert f"/admin/events/{event2.id}" in html
+
+
+def test_admin_event_detail_not_found(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_e3@admin-test.com", role="admin")
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin/events/999999")
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Event not found"
+
+
+def test_admin_event_detail_success(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_e4@admin-test.com", role="admin")
+    creator_user = _create_test_user(
+        db_session, "creator2@admin-test.com", role="organizer"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    event = models.Event(
+        name="Open Source Festival",
+        created_by_user_id=creator_user.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk1 = models.Talk(
+        event_id=event.id,
+        title="Intro to Rust",
+        room="Theater 1",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="done",
+    )
+    talk2 = models.Talk(
+        event_id=event.id,
+        title="Scaling Microservices",
+        room="Theater 2",
+        start=now + timedelta(hours=1),
+        end=now + timedelta(hours=1, minutes=30),
+        status="preview",
+    )
+    db_session.add_all([talk1, talk2])
+    db_session.commit()
+
+    res = client.get(f"/admin/events/{event.id}")
+    assert res.status_code == 200
+    html = res.text
+
+    # Header and metadata
+    assert "Open Source Festival" in html
+    assert f"#{event.id}" in html
+    assert "creator2@admin-test.com" in html
+    assert "2 talks" in html
+    assert "50.0% Done" in html
+
+    # Talk rows
+    assert "Intro to Rust" in html
+    assert "Theater 1" in html
+    assert "Published" in html
+
+    assert "Scaling Microservices" in html
+    assert "Theater 2" in html
+    assert "Preview Ready" in html
+
+    # Quick action links to studio with from=admin query parameter
+    assert f"/studio/talks/{talk1.id}?from=admin" in html
+    assert f"/studio/talks/{talk2.id}?from=admin" in html
+
+
+def test_admin_studio_editor_bypass(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_e5@admin-test.com", role="admin")
+    other_organizer = _create_test_user(
+        db_session, "other_org@admin-test.com", role="organizer"
+    )
+
+    event = models.Event(
+        name="Independent Conference",
+        created_by_user_id=other_organizer.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Community Keynote",
+        room="Auditorium",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    # Admin visits Studio Editor for a talk they didn't create
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+    assert "Community Keynote" in res.text
+    assert "Auditorium" in res.text
+
+
+def test_admin_event_detail_empty_talks(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_empty_talks@admin-test.com", role="admin"
+    )
+    creator_user = _create_test_user(
+        db_session, "creator_empty@admin-test.com", role="organizer"
+    )
+    event = models.Event(
+        name="Empty Talks Conference",
+        created_by_user_id=creator_user.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get(f"/admin/events/{event.id}")
+    assert res.status_code == 200
+    assert "Empty Talks Conference" in res.text
+    assert "0 talks" in res.text
+    assert "0% Done" in res.text
+    assert "No talks found" in res.text
+    assert "This event does not have any talks scheduled or imported yet." in res.text
+
+
+def test_admin_events_pagination(client: TestClient, db_session):
+    admin_user = _create_test_user(db_session, "admin_pag@admin-test.com", role="admin")
+    creator_user = _create_test_user(
+        db_session, "creator_pag@admin-test.com", role="organizer"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Create 5 distinct events for this test
+    created_events = []
+    for i in range(5):
+        ev = models.Event(
+            name=f"Pagination Test Event {i:02d}",
+            created_by_user_id=creator_user.id,
+        )
+        created_events.append(ev)
+    db_session.add_all(created_events)
+    db_session.commit()
+
+    # Query with limit=2, page=1
+    res1 = client.get("/admin/events?page=1&limit=2")
+    assert res1.status_code == 200
+    html1 = res1.text
+    assert "Showing 1" in html1
+    assert "Page 1 of" in html1
+    assert "Next &rarr;" in html1
+    assert "page=2&limit=2" in html1
+
+    # Query with limit=2, page=2
+    res2 = client.get("/admin/events?page=2&limit=2")
+    assert res2.status_code == 200
+    html2 = res2.text
+    assert "Showing 3" in html2
+    assert "Page 2 of" in html2
+    assert "&larr; Previous" in html2
+    assert "page=1&limit=2" in html2
+
+    # Page exceeding total_pages returns 404
+    res_page_overflow = client.get("/admin/events?page=999&limit=2")
+    assert res_page_overflow.status_code == 404
+
+    # Query parameter validation
+    res_bad_page = client.get("/admin/events?page=0")
+    assert res_bad_page.status_code == 422
+
+    res_bad_limit = client.get("/admin/events?limit=101")
+    assert res_bad_limit.status_code == 422
+
+    res_bad_limit_zero = client.get("/admin/events?limit=0")
+    assert res_bad_limit_zero.status_code == 422

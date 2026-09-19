@@ -6,6 +6,11 @@ function getStudioShell() {
   return document.querySelector('.studio-shell');
 }
 
+function isStudioViewOnly() {
+  const shell = getStudioShell();
+  return Boolean(shell && shell.classList.contains('is-view-only'));
+}
+
 function getTalkId() {
   if (typeof window.TALK_ID !== 'undefined' && window.TALK_ID) return window.TALK_ID;
   const shell = getStudioShell();
@@ -341,6 +346,7 @@ function updateCutMarkersUI() {
 }
 
 function setInPoint(timeSec) {
+  if (isStudioViewOnly()) return;
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   inPointSec = Math.min(max, Math.max(0, timeSec));
   if (inPointSec > outPointSec) outPointSec = Math.min(max, inPointSec + 1);
@@ -349,6 +355,7 @@ function setInPoint(timeSec) {
 }
 
 function setOutPoint(timeSec) {
+  if (isStudioViewOnly()) return;
   const max = (video && Number.isFinite(video.duration) && video.duration > 0) ? video.duration : Infinity;
   outPointSec = Math.min(max, Math.max(inPointSec + 0.1, timeSec));
   boundsEdited = true;
@@ -397,6 +404,7 @@ function setupMarkerDrag(markerEl, isStart) {
   let activePointerId = null;
 
   markerEl.addEventListener('pointerdown', e => {
+    if (isStudioViewOnly()) return;
     if (activePointerId !== null) return;
     e.preventDefault();
     e.stopPropagation();
@@ -594,7 +602,7 @@ async function postAPI(path, body = {}) {
   return res.json();
 }
 
-function setBtnBusy(btn, isBusy, busyText) {
+function setBtnBusy(btn, isBusy, busyText = 'Processing...') {
   if (!btn) return;
   btn.disabled = isBusy;
   if (isBusy) {
@@ -606,6 +614,7 @@ function setBtnBusy(btn, isBusy, busyText) {
 }
 
 window.approveTalk = async function(id) {
+  if (isStudioViewOnly()) return;
   if (!id || typeof id !== 'number') id = getTalkId();
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-approve');
@@ -670,6 +679,7 @@ window.approveTalk = async function(id) {
 
 
 window.rejectTalk = async function(id) {
+  if (isStudioViewOnly()) return;
   if (!id || typeof id !== 'number') id = getTalkId();
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   if (!confirm('Reject this talk?')) return;
@@ -692,6 +702,7 @@ window.rejectTalk = async function(id) {
 };
 
 window.requestChangesTalk = async function(id) {
+  if (isStudioViewOnly()) return;
   if (!id || typeof id !== 'number') id = getTalkId();
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-needs-work');
@@ -706,6 +717,7 @@ window.requestChangesTalk = async function(id) {
 };
 
 window.retryTalk = async function(id) {
+  if (isStudioViewOnly()) return;
   if (!id || typeof id !== 'number') id = getTalkId();
   const btn = document.getElementById('btn-retry');
   setBtnBusy(btn, true, 'Resetting...');
@@ -719,6 +731,7 @@ window.retryTalk = async function(id) {
 };
 
 window.handleVideoFileUpload = async function(e, talkId) {
+  if (isStudioViewOnly()) return;
   if (!talkId || typeof talkId !== 'number') talkId = getTalkId();
   const file = e.target.files ? e.target.files[0] : (e.dataTransfer ? e.dataTransfer.files[0] : null);
   if (!file) return;
@@ -764,6 +777,112 @@ window.handleVideoFileUpload = async function(e, talkId) {
     if (browseBtn) browseBtn.disabled = false;
   }
 };
+
+// ── Admin View-Only Mode Handling ───────────────────────────────
+function initAdminViewOnlyMode() {
+  const shell = getStudioShell();
+  if (!shell || shell.dataset.isOtherOrganizer !== 'true') return;
+
+  const sessionKey = 'studio_edit_unlocked_' + getTalkId();
+  const banner = document.getElementById('admin-view-only-banner');
+  const badge = document.getElementById('banner-mode-badge');
+  const desc = document.getElementById('banner-mode-text');
+  const toggleBtn = document.getElementById('btn-toggle-edit-mode');
+  const modal = document.getElementById('admin-confirm-edit-modal');
+  const toggleModal = show => { if (modal) modal.hidden = !show; };
+
+  function applyLockState(unlocked) {
+    shell.classList.toggle('is-view-only', !unlocked);
+    if (banner) banner.classList.toggle('is-edit-active', unlocked);
+    if (badge) {
+      badge.className = unlocked ? 'badge badge-success' : 'badge badge-warning';
+      badge.textContent = unlocked ? 'Edit Mode Active' : 'View Only';
+    }
+    if (desc) {
+      if (unlocked) {
+        desc.textContent =
+          'Edit mode enabled. You can now modify cut bounds, upload recordings, and execute pipeline actions.';
+      } else if (desc.dataset.defaultText) {
+        const eventName = desc.dataset.eventName;
+        if (eventName) {
+          desc.textContent = "Viewing another organizer's talk (";
+          const strong = document.createElement('strong');
+          strong.textContent = eventName;
+          desc.appendChild(strong);
+          desc.appendChild(document.createTextNode('). Editing and pipeline actions are locked.'));
+        } else {
+          desc.textContent = desc.dataset.defaultText;
+        }
+      }
+    }
+    if (toggleBtn) {
+      toggleBtn.className = unlocked ? 'btn btn-ghost btn-sm' : 'btn btn-warning btn-sm';
+      toggleBtn.innerHTML = unlocked
+        ? '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> <span>Lock (View Only)</span>'
+        : '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> <span>Enable Edit Mode</span>';
+    }
+    const editControlsSelector =
+      '[data-edit-control], .upload-pending-container input, .upload-pending-container button, .timeline-inputs-bar input, .timeline-inputs-bar button, .review-box input, .review-box button, .review-box textarea, .studio-panel input, .studio-panel button, .studio-panel textarea';
+    shell.querySelectorAll(editControlsSelector).forEach(el => {
+      if (el.closest('#admin-view-only-banner') || el.closest('#admin-confirm-edit-modal')) {
+        return;
+      }
+      if (unlocked) {
+        if (el.dataset.viewLocked === 'true') {
+          el.disabled = el.dataset.operationalDisabled === 'true';
+          if (el.tagName === 'TEXTAREA' || el.type === 'text') {
+            el.readOnly = el.dataset.operationalReadOnly === 'true';
+            delete el.dataset.operationalReadOnly;
+          }
+          delete el.dataset.operationalDisabled;
+          delete el.dataset.viewLocked;
+        }
+      } else {
+        if (el.dataset.viewLocked !== 'true') {
+          el.dataset.viewLocked = 'true';
+          el.dataset.operationalDisabled = el.disabled ? 'true' : 'false';
+          if (el.tagName === 'TEXTAREA' || el.type === 'text') {
+            el.dataset.operationalReadOnly = el.readOnly ? 'true' : 'false';
+          }
+        }
+        el.disabled = true;
+        if (el.tagName === 'TEXTAREA' || el.type === 'text') {
+          el.readOnly = true;
+        }
+      }
+    });
+  }
+
+  applyLockState(sessionStorage.getItem(sessionKey) === 'true');
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      if (sessionStorage.getItem(sessionKey) === 'true') {
+        sessionStorage.removeItem(sessionKey);
+        applyLockState(false);
+      } else {
+        toggleModal(true);
+      }
+    });
+  }
+
+  const cancelBtn = document.getElementById('btn-modal-cancel');
+  const closeXBtn = document.getElementById('btn-modal-close-x');
+  const confirmBtn = document.getElementById('btn-modal-confirm');
+
+  if (cancelBtn) cancelBtn.addEventListener('click', () => toggleModal(false));
+  if (closeXBtn) closeXBtn.addEventListener('click', () => toggleModal(false));
+  if (modal) modal.addEventListener('click', e => { if (e.target === modal) toggleModal(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal && !modal.hidden) toggleModal(false); });
+
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', () => {
+      sessionStorage.setItem(sessionKey, 'true');
+      toggleModal(false);
+      applyLockState(true);
+    });
+  }
+}
 
 // ── Real-time Recent Jobs Polling & Dynamic Rendering ─────────────
 function renderRecentJobs(jobs) {
@@ -898,6 +1017,8 @@ function startStudioPolling() {
 
 // ── Initial Setup & Event Listeners ─────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  initAdminViewOnlyMode();
+
   // Sync progress bars width from data-progress attribute
   document.querySelectorAll('.job-progress-fill[data-progress]').forEach(el => {
     const p = parseFloat(el.getAttribute('data-progress'));

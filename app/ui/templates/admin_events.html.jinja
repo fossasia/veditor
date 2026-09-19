@@ -1,0 +1,146 @@
+{% extends "admin_base.html.jinja" %}
+{% block title %}Events Overview — Admin Console{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin">Admin Console</a>
+  <span class="sep">/</span>
+  <span class="current">Events</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+
+  <!-- Macro Platform Stats Grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-label">Total Events</span>
+      <span class="stat-value">{{ macro_stats.total_events }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Total Talks</span>
+      <span class="stat-value">{{ macro_stats.total_talks }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Completed</span>
+      <span class="stat-value green">{{ macro_stats.total_done }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">In Progress</span>
+      <span class="stat-value blue">{{ macro_stats.total_processing }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Issues / Broken</span>
+      <span class="stat-value {% if macro_stats.total_broken > 0 %}red{% else %}green{% endif %}">{{ macro_stats.total_broken }}</span>
+    </div>
+  </div>
+
+  <!-- Events Overview Table -->
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span class="table-title">Platform Events</span>
+        {% if pagination and pagination.total_items > 0 %}
+          <span class="table-count table-count-spaced">Showing {{ pagination.start_item }}&ndash;{{ pagination.end_item }} of {{ pagination.total_items }} event{% if pagination.total_items != 1 %}s{% endif %}</span>
+        {% else %}
+          <span class="table-count table-count-spaced">0 events</span>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if events %}
+    <table>
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Event Name</th>
+          <th>Owner / Creator</th>
+          <th>Progress</th>
+          <th>Talk Status Breakdown</th>
+          <th class="col-actions-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in events %}
+        <tr>
+          <td class="td-mono col-id">#{{ item.id }}</td>
+          <td class="td-title event-title-cell">
+            <a href="/admin/events/{{ item.id }}">
+              <strong>{{ item.name }}</strong>
+            </a>
+            <small>{{ item.total_talks }} talk{% if item.total_talks != 1 %}s{% endif %} registered</small>
+          </td>
+          <td>
+            {% if item.creator_email %}
+              {{ item.creator_email }}
+            {% elif item.created_by_user_id %}
+              User #{{ item.created_by_user_id }}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="event-progress-wrap">
+              <progress class="event-progress-bar" value="{{ item.progress_pct }}" max="100"></progress>
+              <span class="event-progress-pct">{{ item.progress_pct }}%</span>
+            </div>
+          </td>
+          <td>
+            <div class="event-badges-group">
+              {% if item.done_count > 0 %}
+                <span class="badge badge-done" title="Done / Published"><span class="badge-dot"></span>{{ item.done_count }} Done</span>
+              {% endif %}
+              {% if item.processing_count > 0 %}
+                <span class="badge badge-processing" title="Currently Processing"><span class="spinner spinner-sm"></span>{{ item.processing_count }} Processing</span>
+              {% endif %}
+              {% if item.pending_count > 0 %}
+                <span class="badge badge-pending" title="Pending Review / Bounds"><span class="badge-dot"></span>{{ item.pending_count }} Pending</span>
+              {% endif %}
+              {% if item.preview_count > 0 %}
+                <span class="badge badge-preview" title="Preview Ready"><span class="badge-dot"></span>{{ item.preview_count }} Preview</span>
+              {% endif %}
+              {% if item.broken_count > 0 %}
+                <span class="badge badge-danger" title="Broken or Rejected"><span class="badge-dot"></span>{{ item.broken_count }} Broken</span>
+              {% endif %}
+              {% if item.waiting_count > 0 %}
+                <span class="badge badge-waiting" title="Waiting for Files"><span class="badge-dot"></span>{{ item.waiting_count }} Waiting</span>
+              {% endif %}
+              {% if item.total_talks == 0 %}
+                <span class="text-muted">No talks</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="col-actions-right">
+            <a href="/admin/events/{{ item.id }}" class="btn btn-ghost btn-sm">
+              View Talks
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if events and pagination.total_pages > 1 %}
+    <div class="pagination-bar">
+      <div class="pagination-info">
+        Showing <strong>{{ pagination.start_item }}</strong> &ndash; <strong>{{ pagination.end_item }}</strong> of <strong>{{ pagination.total_items }}</strong> events
+      </div>
+      <div class="pagination-controls">
+        <a href="/admin/events?page={{ pagination.prev_page }}&limit={{ pagination.limit }}" class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_prev %}disabled{% endif %}" {% if not pagination.has_prev %}aria-disabled="true" tabindex="-1"{% endif %}>
+          &larr; Previous
+        </a>
+        <span class="pagination-page-label">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+        <a href="/admin/events?page={{ pagination.next_page }}&limit={{ pagination.limit }}" class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_next %}disabled{% endif %}" {% if not pagination.has_next %}aria-disabled="true" tabindex="-1"{% endif %}>
+          Next &rarr;
+        </a>
+      </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="events-empty-state">
+      <p class="events-empty-title">No events found</p>
+      <p class="events-empty-desc">No events have been created on the platform yet.</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

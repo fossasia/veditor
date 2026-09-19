@@ -9,6 +9,8 @@
 /* ── Reset & Base ─────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+[hidden] { display: none !important; }
+
 html { font-size: 14px; scroll-behavior: smooth; }
 
 body {
@@ -298,7 +300,6 @@ body.is-studio-mode.is-speaker .main-content {
   align-items: center;
   justify-content: center;
   padding: 16px;
-  animation: modal-fade-in 0.15s ease-out;
 }
 
 .modal-dialog {
@@ -309,7 +310,6 @@ body.is-studio-mode.is-speaker .main-content {
   width: 100%;
   max-width: 460px;
   overflow: hidden;
-  animation: modal-pop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .modal-header {
@@ -359,6 +359,10 @@ body.is-studio-mode.is-speaker .main-content {
   grid-template-columns: repeat(5, 1fr);
   gap: 14px;
   margin-bottom: 24px;
+}
+
+.stats-grid-6 {
+  grid-template-columns: repeat(6, 1fr);
 }
 
 .stat-card {
@@ -1103,11 +1107,13 @@ td {
 @media (max-width: 1100px) {
   .studio-shell { grid-template-columns: 240px 1fr 280px; }
   .stats-grid   { grid-template-columns: repeat(3, 1fr); }
+  .stats-grid-6 { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 850px) {
   .studio-shell { grid-template-columns: 1fr; height: auto; }
   .stats-grid   { grid-template-columns: repeat(2, 1fr); }
+  .stats-grid-6 { grid-template-columns: repeat(2, 1fr); }
   .main-content { margin-left: 0; }
   .sidebar { box-shadow: 0 0 20px rgba(0, 0, 0, 0.25); }
 }

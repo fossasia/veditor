@@ -1,13 +1,15 @@
 /* ── Studio Detail View Styles (studio.html) ────────────────────── */
 
-.breadcrumb-back {
+.breadcrumb-back,
+a.breadcrumb-event {
   color: var(--v-text-secondary);
   text-decoration: none;
   font-weight: 500;
   transition: color 0.15s ease;
 }
 
-.breadcrumb-back:hover {
+.breadcrumb-back:hover,
+a.breadcrumb-event:hover {
   color: var(--v-primary);
 }
 
@@ -717,4 +719,90 @@
 
 .slates-label:last-child {
   margin-bottom: 4px;
+}
+
+/* ── Admin View-Only Banner & Locked Controls ──────────────────── */
+.admin-view-only-banner {
+  background: rgba(245, 158, 11, 0.08);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.25);
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.admin-view-only-banner.is-edit-active {
+  background: rgba(34, 197, 94, 0.08);
+  border-bottom-color: rgba(34, 197, 94, 0.25);
+}
+
+.banner-info-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.banner-text-desc {
+  font-size: 0.82rem;
+  color: var(--v-text-primary);
+}
+
+.banner-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* View-Only Mode Disabled Overrides */
+.studio-shell.is-view-only .action-btns,
+.studio-shell.is-view-only .upload-dropzone-box,
+.studio-shell.is-view-only .upload-pending-container,
+.studio-shell.is-view-only .slates-box,
+.studio-shell.is-view-only .review-notes-wrap,
+.studio-shell.is-view-only #btn-set-in,
+.studio-shell.is-view-only #btn-set-out,
+.studio-shell.is-view-only #input-in-point,
+.studio-shell.is-view-only #input-out-point {
+  opacity: 0.5;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+  user-select: none;
+}
+
+.studio-shell.is-view-only #video-file-input {
+  display: none !important;
+}
+
+.studio-shell.is-view-only #tl-start-marker,
+.studio-shell.is-view-only #tl-end-marker {
+  pointer-events: none !important;
+  cursor: default !important;
+  opacity: 0.6;
+}
+
+/* Modal Typography */
+.modal-warning-intro {
+  font-size: 0.92rem;
+  margin-bottom: 10px;
+  color: var(--v-text-primary);
+}
+
+.modal-warning-details {
+  font-size: 0.85rem;
+  color: var(--v-text-secondary);
+  margin-bottom: 14px;
+  line-height: 1.45;
+}
+
+.modal-warning-question {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  margin-bottom: 0;
 }

@@ -1,10 +1,11 @@
+from collections import Counter
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from rq import Worker
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, text
+from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.auth import (
@@ -161,3 +162,179 @@ def deactivate_user(
     db.commit()
     db.refresh(target)
     return target
+
+
+PROCESSING_STATUSES = (
+    "detecting",
+    "cutting",
+    "generating_previews",
+    "assembling",
+    "transcoding",
+    "uploading",
+)
+PENDING_STATUSES = (
+    "pending_approval",
+    "pending_bounds",
+    "needs_work",
+    "pending_intro_outro",
+)
+
+
+@router.get("/events", response_class=HTMLResponse)
+def admin_events(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    total_events = db.query(func.count(models.Event.id)).scalar() or 0
+    macro_row = db.query(
+        func.count(models.Talk.id).label("total_talks"),
+        func.count(case((models.Talk.status == "done", 1))).label("total_done"),
+        func.count(case((models.Talk.status.in_(["broken", "rejected"]), 1))).label(
+            "total_broken"
+        ),
+        func.count(case((models.Talk.status.in_(PROCESSING_STATUSES), 1))).label(
+            "total_processing"
+        ),
+    ).first()
+
+    macro_stats = {
+        "total_events": total_events,
+        "total_talks": 0,
+        "total_done": 0,
+        "total_processing": 0,
+        "total_broken": 0,
+        **({k: v or 0 for k, v in macro_row._asdict().items()} if macro_row else {}),
+    }
+
+    total_pages = max(1, (total_events + limit - 1) // limit) if total_events > 0 else 1
+    if page > total_pages:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Page not found",
+        )
+    offset = (page - 1) * limit
+
+    rows = (
+        db.query(
+            models.Event.id,
+            models.Event.name,
+            models.Event.created_by_user_id,
+            models.User.email.label("creator_email"),
+            func.count(models.Talk.id).label("total_talks"),
+            func.count(case((models.Talk.status == "done", 1))).label("done_count"),
+            func.count(case((models.Talk.status.in_(["broken", "rejected"]), 1))).label(
+                "broken_count"
+            ),
+            func.count(case((models.Talk.status.in_(PROCESSING_STATUSES), 1))).label(
+                "processing_count"
+            ),
+            func.count(case((models.Talk.status.in_(PENDING_STATUSES), 1))).label(
+                "pending_count"
+            ),
+            func.count(case((models.Talk.status == "preview", 1))).label(
+                "preview_count"
+            ),
+            func.count(case((models.Talk.status == "waiting_for_files", 1))).label(
+                "waiting_count"
+            ),
+        )
+        .outerjoin(models.Talk, models.Talk.event_id == models.Event.id)
+        .outerjoin(models.User, models.Event.created_by_user_id == models.User.id)
+        .group_by(
+            models.Event.id,
+            models.Event.name,
+            models.Event.created_by_user_id,
+            models.User.email,
+        )
+        .order_by(models.Event.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    events = [
+        {
+            **r._asdict(),
+            "progress_pct": round(((r.done_count or 0) / r.total_talks) * 100, 1)
+            if r.total_talks
+            else 0,
+        }
+        for r in rows
+    ]
+
+    pagination = {
+        "page": page,
+        "limit": limit,
+        "total_items": total_events,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "prev_page": page - 1,
+        "next_page": page + 1,
+        "start_item": offset + 1 if total_events > 0 and offset < total_events else 0,
+        "end_item": min(offset + limit, total_events) if total_events > 0 else 0,
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "admin_events.html.jinja",
+        {
+            "events": events,
+            "macro_stats": macro_stats,
+            "pagination": pagination,
+        },
+    )
+
+
+@router.get("/events/{event_id}", response_class=HTMLResponse)
+def admin_event_detail(
+    request: Request,
+    event_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    event = (
+        db.query(models.Event)
+        .options(selectinload(models.Event.created_by_user))
+        .filter(models.Event.id == event_id)
+        .first()
+    )
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found",
+        )
+
+    talks = (
+        db.query(models.Talk)
+        .filter(models.Talk.event_id == event_id)
+        .order_by(models.Talk.start.asc(), models.Talk.id.asc())
+        .all()
+    )
+
+    counts = Counter(t.status for t in talks)
+    total = len(talks)
+    done_count = counts["done"]
+    progress_pct = round((done_count / total) * 100, 1) if total > 0 else 0
+
+    event_stats = {
+        "total": total,
+        "done": done_count,
+        "broken": counts["broken"] + counts["rejected"],
+        "processing": sum(counts[s] for s in PROCESSING_STATUSES),
+        "pending": sum(counts[s] for s in PENDING_STATUSES),
+        "preview": counts["preview"],
+        "waiting": counts["waiting_for_files"],
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "admin_event_detail.html.jinja",
+        {
+            "event": event,
+            "talks": talks,
+            "event_stats": event_stats,
+            "progress_pct": progress_pct,
+        },
+    )
