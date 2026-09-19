@@ -217,6 +217,8 @@ def create_sso_token(
     scope_id: int,
     role: str,
     expires_in_seconds: int | None = None,
+    email: str | None = None,
+    display_name: str | None = None,
 ) -> str:
     """
     Generates a short-lived signed SSO token scoped to an event or talk,
@@ -249,6 +251,10 @@ def create_sso_token(
         "iat": now,
         "exp": now + timedelta(seconds=expiry),
     }
+    if email and isinstance(email, str) and email.strip():
+        payload["email"] = email.strip()
+    if display_name and isinstance(display_name, str) and display_name.strip():
+        payload["display_name"] = display_name.strip()
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
@@ -269,7 +275,7 @@ def decode_sso_token(token: str) -> dict | None:
         )
         if payload.get("type") != "sso":
             return None
-        if "user_id" in payload or "sub" in payload or "email" in payload:
+        if "user_id" in payload or "sub" in payload:
             return None
         if payload.get("scope_type") not in ("event", "talk"):
             return None

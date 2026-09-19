@@ -159,3 +159,139 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ── API Keys Modal Styles ─────────────────────────────────────── */
+.events-modal-card-lg {
+  max-width: 620px;
+}
+
+.api-key-info-box {
+  background: var(--v-bg-subtle, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-md, 6px);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.api-key-info-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.api-key-info-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--v-text-secondary);
+}
+
+.api-key-code {
+  font-family: var(--v-font-mono, monospace);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--v-primary, #6366f1);
+  background: rgba(99, 102, 241, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+}
+
+.api-key-alert-hidden {
+  display: none !important;
+}
+
+#new-key-alert {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: var(--v-radius-md, 6px);
+  padding: 14px;
+  margin-bottom: 18px;
+}
+
+.new-key-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.new-key-header strong {
+  color: #10b981;
+  font-size: 0.9rem;
+}
+
+.new-key-warning {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+}
+
+.new-key-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.input-mono {
+  font-family: var(--v-font-mono, monospace);
+  font-size: 0.85rem;
+}
+
+.new-key-tip {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--v-text-secondary);
+}
+
+.api-keys-section {
+  margin-top: 12px;
+}
+
+.api-keys-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.api-keys-subtitle {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  margin: 0;
+}
+
+.api-keys-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.api-keys-table th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--v-text-secondary);
+  font-weight: 500;
+  border-bottom: 1px solid var(--v-border-subtle);
+}
+
+.api-keys-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--v-border-subtle);
+  color: var(--v-text-primary);
+}
+
+.col-key-id {
+  width: 80px;
+}
+
+.api-keys-empty-msg {
+  padding: 16px 0;
+}
+
+.api-keys-modal-footer {
+  margin-top: 20px;
+}

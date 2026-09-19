@@ -876,3 +876,68 @@ def test_import_schedule_rejected_for_sso(mock_db):
     )
     assert resp.status_code == 403
     assert "SSO sessions are not permitted to import schedules" in resp.json()["detail"]
+
+
+def test_sso_token_organizer_role_and_identity():
+    """Verify reviewer role and identity claims (email, display_name) in SSO token."""
+    token = create_sso_token(
+        scope_type="event",
+        scope_id=42,
+        role="organizer",
+        email="organizer@example.org",
+        display_name="Lead Organizer",
+    )
+    payload = decode_sso_token(token)
+    assert payload is not None
+    assert payload["role"] == "organizer"
+    assert payload["email"] == "organizer@example.org"
+    assert payload["display_name"] == "Lead Organizer"
+    assert payload["scope_type"] == "event"
+    assert payload["scope_id"] == 42
+
+
+def test_get_current_user_populates_identity_from_sso(mock_db):
+    """Verify CurrentUser retains email and display_name from SSO JWT."""
+    token = create_sso_token(
+        scope_type="event",
+        scope_id=1,
+        role="organizer",
+        email="organizer@example.org",
+        display_name="Lead Organizer",
+    )
+    request = MagicMock()
+    request.query_params.get.return_value = None
+    request.headers = {"Authorization": f"Bearer {token}"}
+    request.cookies = {}
+
+    bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    user = get_current_user(
+        request=request,
+        db=mock_db,
+        bearer_creds=bearer,
+    )
+    assert user.role == "organizer"
+    assert user.email == "organizer@example.org"
+    assert user.display_name == "Lead Organizer"
+    assert user.is_sso is True
+    assert user.event_ids == [1]
+
+
+def test_studio_dashboard_displays_sso_email_identity(mock_db):
+    """When an SSO token contains an email, the topbar displays the user's email address."""
+    event_token = create_sso_token(
+        scope_type="event",
+        scope_id=1,
+        role="organizer",
+        email="organizer@eventyay.com",
+        display_name="Organizer User",
+    )
+    app.dependency_overrides[get_db] = lambda: mock_db
+    mock_db.query.return_value.filter.return_value.all.return_value = []
+    mock_db.query.return_value.filter.return_value.first.return_value = models.Event(
+        id=1, name="Test Conf"
+    )
+
+    response = client.get("/studio", cookies={"veditor_session": event_token})
+    assert response.status_code == 200
+    assert "organizer@eventyay.com" in response.text

@@ -450,10 +450,24 @@ def test_deactivated_user_immediate_session_and_login_rejection(
 def test_concurrent_admin_demotion_prevents_zero_admins():
     import threading
 
+    other_admin_ids = []
     with SessionLocal() as s:
         s.query(models.User).filter(
             models.User.email.like("%@concurrent-test.com")
         ).delete()
+        other_admins = (
+            s.query(models.User)
+            .filter(
+                models.User.role == "admin",
+                ~models.User.email.like("%@concurrent-test.com"),
+            )
+            .all()
+        )
+        other_admin_ids = [u.id for u in other_admins]
+        if other_admin_ids:
+            s.query(models.User).filter(models.User.id.in_(other_admin_ids)).update(
+                {"role": "organizer"}, synchronize_session=False
+            )
         s.commit()
         admin1 = models.User(
             email="admin1@concurrent-test.com",
@@ -471,43 +485,50 @@ def test_concurrent_admin_demotion_prevents_zero_admins():
         s.commit()
         id1, id2 = admin1.id, admin2.id
 
-    token1 = create_session_token(id1, "admin")
-    token2 = create_session_token(id2, "admin")
+    try:
+        token1 = create_session_token(id1, "admin")
+        token2 = create_session_token(id2, "admin")
 
-    results = []
+        results = []
 
-    def demote_request(token, target_id):
-        t_client = TestClient(app)
-        t_client.cookies.set("veditor_session", token)
-        res = t_client.post(
-            f"/admin/users/{target_id}/promote", json={"role": "organizer"}
-        )
-        results.append((target_id, res.status_code, res.json()))
-
-    t1 = threading.Thread(target=demote_request, args=(token1, id2))
-    t2 = threading.Thread(target=demote_request, args=(token2, id1))
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
-
-    # One succeeds (200), and the other fails (either 400 or 403)
-    status_codes = [r[1] for r in results]
-    assert 200 in status_codes
-    assert any(code in (400, 403) for code in status_codes)
-
-    with SessionLocal() as s:
-        remaining_admins = (
-            s.query(models.User)
-            .filter(
-                models.User.email.like("%@concurrent-test.com"),
-                models.User.role == "admin",
-                models.User.is_active.is_(True),
+        def demote_request(token, target_id):
+            t_client = TestClient(app)
+            t_client.cookies.set("veditor_session", token)
+            res = t_client.post(
+                f"/admin/users/{target_id}/promote", json={"role": "organizer"}
             )
-            .all()
-        )
-        assert len(remaining_admins) == 1
-        s.query(models.User).filter(
-            models.User.email.like("%@concurrent-test.com")
-        ).delete()
-        s.commit()
+            results.append((target_id, res.status_code, res.json()))
+
+        t1 = threading.Thread(target=demote_request, args=(token1, id2))
+        t2 = threading.Thread(target=demote_request, args=(token2, id1))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        # One succeeds (200), and the other fails (either 400 or 403)
+        status_codes = [r[1] for r in results]
+        assert 200 in status_codes
+        assert any(code in (400, 403) for code in status_codes)
+
+        with SessionLocal() as s:
+            remaining_admins = (
+                s.query(models.User)
+                .filter(
+                    models.User.email.like("%@concurrent-test.com"),
+                    models.User.role == "admin",
+                    models.User.is_active.is_(True),
+                )
+                .all()
+            )
+            assert len(remaining_admins) == 1
+    finally:
+        with SessionLocal() as s:
+            s.query(models.User).filter(
+                models.User.email.like("%@concurrent-test.com")
+            ).delete()
+            if other_admin_ids:
+                s.query(models.User).filter(models.User.id.in_(other_admin_ids)).update(
+                    {"role": "admin"}, synchronize_session=False
+                )
+            s.commit()

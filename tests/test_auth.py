@@ -1,6 +1,6 @@
 import uuid
 from typing import Annotated
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -619,6 +619,17 @@ def test_require_talk_access_success_and_unauthorized():
     assert resp.status_code == 403
 
 
+def test_role_hierarchy_levels():
+    """Verify exact role hierarchy: user(0) < speaker(1) < organizer(2) < admin(3)."""
+    from app.auth import ROLE_HIERARCHY
+
+    assert ROLE_HIERARCHY["user"] == 0
+    assert ROLE_HIERARCHY["speaker"] == 1
+    assert ROLE_HIERARCHY["organizer"] == 2
+    assert ROLE_HIERARCHY["admin"] == 3
+    assert len(ROLE_HIERARCHY) == 4
+
+
 def test_login_routes_next_redirect_and_open_redirect_protection():
     db = SessionLocal()
     app.dependency_overrides[get_db] = lambda: db
@@ -730,3 +741,47 @@ def test_login_routes_next_redirect_and_open_redirect_protection():
                 db.commit()
         finally:
             db.close()
+
+
+def test_get_client_throttles_last_used_at_updates():
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock
+
+    from app.auth import get_client
+    from app.models import Client
+
+    mock_db = MagicMock()
+    now = datetime.now(UTC)
+    client_recent = Client(
+        id=1,
+        name="Test",
+        hashed_key="some_hash",
+        last_used_at=now - timedelta(seconds=60),
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = client_recent
+
+    with patch("app.auth.hash_api_key", return_value="some_hash"):
+        resolved = get_client(api_key="valid-key", db=mock_db)
+        assert resolved == client_recent
+        assert not mock_db.commit.called
+
+    client_stale = Client(
+        id=2,
+        name="Test2",
+        hashed_key="stale_hash",
+        last_used_at=now - timedelta(seconds=350),
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = client_stale
+
+    with (
+        patch("app.auth.hash_api_key", return_value="stale_hash"),
+        patch("app.auth.SessionLocal") as mock_session_local,
+    ):
+        mock_isolated_session = MagicMock()
+        mock_session_local.return_value.__enter__.return_value = mock_isolated_session
+        resolved2 = get_client(api_key="valid-key", db=mock_db)
+        assert resolved2 == client_stale
+        # Request session is never prematurely committed
+        assert not mock_db.commit.called
+        # Isolated session is committed out-of-band
+        assert mock_isolated_session.commit.called

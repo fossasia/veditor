@@ -258,7 +258,7 @@ def dashboard(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
-    event_id: int | None = None,
+    event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
     sso_token: str | None = None,
@@ -300,6 +300,21 @@ def dashboard(
         )
         return resp
 
+    # Resolve event_id if provided as integer or string external_id/slug
+    resolved_event_id: int | None = None
+    if event_id is not None:
+        if isinstance(event_id, int):
+            resolved_event_id = event_id
+        elif str(event_id).isdigit():
+            resolved_event_id = int(event_id)
+        else:
+            ev = (
+                db.query(models.Event)
+                .filter(models.Event.external_id == str(event_id))
+                .first()
+            )
+            resolved_event_id = ev.id if ev else -1
+
     # 2. Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
     cookie_token = request.cookies.get("veditor_session")
@@ -337,6 +352,7 @@ def dashboard(
             .filter(models.Talk.event_id == scoped_event_id)
         )
     else:
+        event_id = resolved_event_id
         if user:
             if user.role in ("organizer", "admin"):
                 user_events = (
@@ -552,7 +568,7 @@ def get_talk_waveform(
                 return Response(
                     content=raw_bytes,
                     media_type="application/json",
-                    headers={"Cache-Control": "public, max-age=3600"},
+                    headers={"Cache-Control": "private, max-age=3600"},
                 )
             except OSError:
                 logger.warning("Failed reading cached waveform for %s", waveform_key)
@@ -832,7 +848,7 @@ def create_studio_event(
     db.refresh(event)
 
     return RedirectResponse(
-        url=f"/studio?event_id={event.id}",
+        url="/studio/events",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

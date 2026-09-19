@@ -91,9 +91,14 @@ class User(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_events_source_external_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     retention_overrides: Mapped[dict[str, Any] | None] = mapped_column(
         RetentionOverrides.as_mutable(JSONB), nullable=True, default=None
     )
@@ -120,11 +125,26 @@ class Client(Base):
     __tablename__ = "clients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_platform: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     hashed_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     event_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     webhook_secret: Mapped[str | None] = mapped_column(
         String(255), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
     )
 
 
@@ -134,10 +154,14 @@ class Talk(Base):
         UniqueConstraint(
             "event_id", "title", "start", name="uq_talks_event_id_title_start"
         ),
+        UniqueConstraint(
+            "event_id", "external_id", name="uq_talks_event_id_external_id"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[str | None] = mapped_column(String(255))
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

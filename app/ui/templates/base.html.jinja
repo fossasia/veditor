@@ -45,6 +45,7 @@
       <div class="topbar-control-group">
         <!-- Dynamic Authentication State -->
         {% if user %}
+          <span class="user-email">{{ user.email or user.display_name or (('SSO (' ~ user.role | capitalize ~ ')') if user.is_sso else (user.role | capitalize)) }}</span>
           <span class="badge badge-role badge-{{ user.role }}">{{ user.role | capitalize }}</span>
           <details class="user-menu-wrapper" id="user-menu-wrapper">
             <summary class="user-bubble-btn" id="user-menu-btn" title="User menu" aria-label="User menu" aria-expanded="false" aria-controls="user-dropdown-menu">
@@ -56,10 +57,14 @@
             <div class="user-dropdown" id="user-dropdown-menu">
               <div class="user-dropdown-header">
                 <span class="user-dropdown-label">Signed in as</span>
-                {% if user.is_sso %}
-                  <span class="user-email">SSO ({{ user.role | capitalize }})</span>
-                {% elif user.email %}
+                {% if user.email %}
                   <span class="user-email" title="{{ user.email }}">{{ user.email }}</span>
+                {% elif user.display_name %}
+                  <span class="user-email" title="{{ user.display_name }}">{{ user.display_name }}</span>
+                {% elif user.is_sso %}
+                  <span class="user-email">SSO ({{ user.role | capitalize }})</span>
+                {% else %}
+                  <span class="user-email">{{ user.role | capitalize }}</span>
                 {% endif %}
               </div>
               <div class="user-dropdown-divider"></div>
