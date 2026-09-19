@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     ingest_roots: list[Path] = []
     preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
     disk_guard_multiplier: float = 3.0
+    retention_sweep_interval_seconds: int = 3600
 
     environment: str = "development"
     session_secret: str | None = None
@@ -83,6 +84,13 @@ class Settings(BaseSettings):
     def validate_token_expirations(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("token expiration values must be positive")
+        return value
+
+    @field_validator("retention_sweep_interval_seconds", mode="after")
+    @classmethod
+    def validate_retention_sweep_interval_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("retention_sweep_interval_seconds must be positive")
         return value
 
     @field_validator("disk_guard_multiplier", mode="after")

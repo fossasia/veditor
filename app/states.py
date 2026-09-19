@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+
+
 class InvalidTransitionError(Exception):
     def __init__(self, current_state: str, new_state: str):
         self.current_state = current_state
@@ -40,4 +43,5 @@ def advance(talk, new_state: str):
         raise InvalidTransitionError(current_state, new_state)
 
     talk.status = new_state
+    talk.updated_at = datetime.now(UTC)
     return talk

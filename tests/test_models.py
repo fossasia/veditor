@@ -57,6 +57,7 @@ def test_create_event_and_talk_relationships(db_session):
     assert talk.outro_source is None
     assert talk.custom_intro_path is None
     assert talk.custom_outro_path is None
+    assert talk.updated_at is not None
 
     job = Job(talk_id=talk.id, kind="cut", status="running")
     db_session.add(job)

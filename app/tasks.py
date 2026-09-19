@@ -35,8 +35,17 @@ from app.pipeline.publish import publish
 from app.pipeline.transcode import transcode
 from app.pipeline.waveform import extract_waveform_peaks
 from app.queue import heavy_queue, light_queue
+from app.retention import (
+    enqueue_retention_sweep,  # noqa: F401
+    register_periodic_retention_sweep,  # noqa: F401
+    run_retention_sweep,  # noqa: F401
+)
 from app.states import advance
-from app.storage import cleanup_intermediates, get_storage_backend
+from app.storage import (
+    StorageKeyNotFoundError,
+    cleanup_intermediates,
+    get_storage_backend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -647,7 +656,23 @@ def job_waveform(talk_id: int, media_key: str) -> None:
     if storage.exists(waveform_key):
         return
 
-    _cache_waveform(storage, media_key, storage.get(media_key))
+    if not storage.exists(media_key):
+        logger.info(
+            "Media key %s not found for talk %s; skipping waveform generation",
+            media_key,
+            talk_id,
+        )
+        return
+
+    try:
+        media_path = storage.get(media_key)
+        _cache_waveform(storage, media_key, media_path)
+    except StorageKeyNotFoundError:
+        logger.info(
+            "Media key %s disappeared for talk %s; skipping waveform generation",
+            media_key,
+            talk_id,
+        )
 
 
 def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> None:

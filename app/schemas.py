@@ -118,6 +118,8 @@ class TalkRead(TalkBase):
     outro_source: str | None = None
     custom_intro_path: str | None = None
     custom_outro_path: str | None = None
+    updated_at: datetime | None = None
+    final_cleaned_at: datetime | None = None
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("include_intro", "include_outro", mode="before")

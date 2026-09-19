@@ -19,6 +19,7 @@ from app.tasks import (
     job_preview,
     job_publish,
     job_transcode,
+    job_waveform,
 )
 
 
@@ -1116,3 +1117,74 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(dummy_t
         "1/outro/outro.mp4",
         job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
     )
+
+
+def test_job_waveform_skips_if_waveform_already_exists():
+    mock_storage = MagicMock()
+    mock_storage.exists.side_effect = lambda key: key.endswith(".waveform.json")
+
+    with (
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks._cache_waveform") as mock_cache,
+    ):
+        job_waveform(1, "1/preview/preview.mp4")
+
+    mock_cache.assert_not_called()
+    mock_storage.get.assert_not_called()
+
+
+def test_job_waveform_skips_if_media_key_missing():
+    mock_storage = MagicMock()
+    mock_storage.exists.return_value = False
+
+    with (
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks._cache_waveform") as mock_cache,
+    ):
+        job_waveform(1, "1/preview/preview.mp4")
+
+    mock_cache.assert_not_called()
+    mock_storage.get.assert_not_called()
+
+
+def test_job_waveform_handles_storage_key_not_found_on_get():
+    from app.storage import StorageKeyNotFoundError
+
+    mock_storage = MagicMock()
+
+    def exists_side_effect(key):
+        return not key.endswith(".waveform.json")
+
+    mock_storage.exists.side_effect = exists_side_effect
+    mock_storage.get.side_effect = StorageKeyNotFoundError("preview.mp4")
+
+    with (
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks._cache_waveform") as mock_cache,
+    ):
+        # Should not raise StorageKeyNotFoundError
+        job_waveform(1, "1/preview/preview.mp4")
+
+    mock_cache.assert_not_called()
+
+
+def test_job_waveform_generates_when_needed():
+    mock_storage = MagicMock()
+
+    def exists_side_effect(key):
+        return not key.endswith(".waveform.json")
+
+    mock_storage.exists.side_effect = exists_side_effect
+    mock_storage.get.return_value = Path("/tmp/fake_preview.mp4")
+
+    with (
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks._cache_waveform") as mock_cache,
+    ):
+        job_waveform(1, "1/preview/preview.mp4")
+
+    mock_storage.get.assert_called_once_with("1/preview/preview.mp4")
+    mock_cache.assert_called_once_with(
+        mock_storage, "1/preview/preview.mp4", Path("/tmp/fake_preview.mp4")
+    )
+
