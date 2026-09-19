@@ -32,6 +32,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/studio", tags=["studio"])
 
+# Characters that would end a URL path early. The ASGI path is decoded, so a
+# room named "Q&A?" must have these re-escaped before the path is reused.
+_PATH_DELIMITERS = str.maketrans({"%": "%25", "?": "%3F", "#": "%23"})
+
+
+def _request_path_and_query(request: Request) -> tuple[str, str]:
+    """Return the decoded path and raw query string from the ASGI scope.
+
+    request.url re-parses the decoded path, so a "?" or "#" in a room name
+    would cut the path short there; the scope keeps them intact.
+    """
+    path = request.scope.get("root_path", "") + request.scope["path"]
+    query = request.scope.get("query_string", b"").decode("latin-1")
+    return path, query
+
 
 def get_ui_client(
     request: Request,
@@ -399,10 +414,12 @@ def _render_talks_page(
 
     if not user and not sso_user and client is None:
         # Send the user back to this exact page (path + filters) after login.
-        # request.url.path is already decoded, so the value is encoded once here.
-        login_next = request.url.path
-        if request.url.query:
-            login_next += f"?{request.url.query}"
+        # Only path delimiters are re-escaped so the whole target is encoded
+        # once as the `next` value (spaces become %20, not %2520).
+        path, query = _request_path_and_query(request)
+        login_next = path.translate(_PATH_DELIMITERS)
+        if query:
+            login_next += f"?{query}"
         resp = RedirectResponse(
             url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
             status_code=status.HTTP_302_FOUND,
@@ -560,7 +577,9 @@ def _render_talks_page(
             "error": flash_error,
             "current_event": current_event,
             "room": room,
-            "filter_action": request.url.path,
+            "filter_action": urllib.parse.quote(
+                _request_path_and_query(request)[0], safe="/"
+            ),
         },
         headers={"Cache-Control": "no-store"},
     )
