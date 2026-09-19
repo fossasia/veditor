@@ -13,7 +13,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
-from sqlalchemy import func
+from sqlalchemy import and_, false, func
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
@@ -358,8 +358,6 @@ def room_talks(
         status_filter=status_filter,
         q=q,
         room=room_name,
-        login_next=urllib.parse.quote(str(request.url.path), safe="/")
-        + (f"?{request.url.query}" if request.url.query else ""),
     )
 
 
@@ -386,7 +384,6 @@ def _render_talks_page(
     status_filter: str | None,
     q: str | None,
     room: str | None = None,
-    login_next: str = "/studio",
 ):
     """Render the talks list, scoped to the caller and optionally to an event/room."""
     # Check for authenticated user or active SSO session in cookie
@@ -401,6 +398,11 @@ def _render_talks_page(
         )
 
     if not user and not sso_user and client is None:
+        # Send the user back to this exact page (path + filters) after login.
+        # request.url.path is already decoded, so the value is encoded once here.
+        login_next = request.url.path
+        if request.url.query:
+            login_next += f"?{request.url.query}"
         resp = RedirectResponse(
             url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
             status_code=status.HTTP_302_FOUND,
@@ -491,54 +493,46 @@ def _render_talks_page(
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
 
+    # Stats and the room list are computed in SQL over the caller's scope,
+    # narrowed to the selected event (and room, for the stats).
     if sso_user:
-        all_talks_q = db.query(models.Talk).filter(
-            models.Talk.event_id == sso_user["scope_id"]
-        )
+        scope = models.Talk.event_id == sso_user["scope_id"]
         if sso_user.get("role") == "speaker":
-            all_talks_q = all_talks_q.filter(
-                func.lower(models.Talk.speaker_email) == sso_user["email"].lower()
+            scope = and_(
+                scope,
+                func.lower(models.Talk.speaker_email) == sso_user["email"].lower(),
             )
-        all_talks = all_talks_q.all()
-    elif user:
-        if user.role in ("organizer", "admin"):
-            org_event_ids = [e.id for e in user_events]
-            all_talks = (
-                db.query(models.Talk)
-                .filter(models.Talk.event_id.in_(org_event_ids))
-                .all()
-            )
-        elif user.role == "speaker" and user.email:
-            all_talks = (
-                db.query(models.Talk)
-                .filter(func.lower(models.Talk.speaker_email) == user.email.lower())
-                .all()
-            )
-        else:
-            all_talks = []
-    elif client is not None:
-        client_event_ids = client.event_ids or []
-        all_talks = (
-            db.query(models.Talk)
-            .filter(models.Talk.event_id.in_(client_event_ids))
-            .all()
-        )
+    elif user and user.role in ("organizer", "admin"):
+        scope = models.Talk.event_id.in_([e.id for e in user_events])
+    elif user and user.role == "speaker" and user.email:
+        # Speakers see their own talks, whichever event they belong to.
+        scope = func.lower(models.Talk.speaker_email) == user.email.lower()
+    elif client is not None and not user:
+        scope = models.Talk.event_id.in_(client.event_ids or [])
     else:
-        all_talks = []
-
-    all_rooms = sorted({t.room for t in all_talks if t.room})
-    # Stats reflect the scoped view, so event and room pages count only their talks.
+        scope = false()
     if event_id is not None:
-        all_talks = [t for t in all_talks if t.event_id == event_id]
-    if room is not None:
-        all_talks = [t for t in all_talks if t.room == room]
+        scope = and_(scope, models.Talk.event_id == event_id)
+
+    all_rooms = [
+        r
+        for (r,) in db.query(models.Talk.room)
+        .filter(scope, models.Talk.room.isnot(None), models.Talk.room != "")
+        .distinct()
+        .order_by(models.Talk.room)
+    ]
+
+    stats_scope = scope if room is None else and_(scope, models.Talk.room == room)
+    status_counts: dict[str, int] = dict(
+        db.query(models.Talk.status, func.count(models.Talk.id))
+        .filter(stats_scope)
+        .group_by(models.Talk.status)
+        .all()
+    )
     current_event = next((e for e in user_events if e.id == event_id), None)
-    status_counts: dict[str, int] = {}
-    for t in all_talks:
-        status_counts[t.status] = status_counts.get(t.status, 0) + 1
 
     stats = {
-        "total": len(all_talks),
+        "total": sum(status_counts.values()),
         "pending": status_counts.get("pending_approval", 0),
         "processing": sum(
             status_counts.get(s, 0)

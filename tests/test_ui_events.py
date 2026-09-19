@@ -1020,15 +1020,16 @@ def test_room_page_requires_authentication(client: TestClient, db_session):
         f"/studio/rooms/Main Stage?event_id={event.id}", follow_redirects=False
     )
     assert resp.status_code == 302
+    # The target is percent-encoded exactly once (space -> %20, not %2520).
     assert resp.headers["location"] == (
-        f"/login?next=/studio/rooms/Main%2520Stage%3Fevent_id%3D{event.id}"
+        f"/login?next=/studio/rooms/Main%20Stage%3Fevent_id%3D{event.id}"
     )
 
     # Without an event filter it still redirects rather than listing talks
     # from every event that has a room with this name.
     resp = client.get("/studio/rooms/Main Stage", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["location"] == "/login?next=/studio/rooms/Main%2520Stage"
+    assert resp.headers["location"] == "/login?next=/studio/rooms/Main%20Stage"
     followed = client.get("/studio/rooms/Main Stage")
     assert "Main Stage Opening" not in followed.text
     assert "Other Event Main Stage Talk" not in followed.text
@@ -1042,27 +1043,102 @@ def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     assert resp.status_code == 401
 
 
-def test_login_next_returns_to_room_page(client: TestClient, db_session):
-    org, _, event, _, _ = _seed_room_talks(db_session)
-    login_redirect = client.get(
-        f"/studio/rooms/Main Stage?event_id={event.id}", follow_redirects=False
-    ).headers["location"]
-    login_page = client.get(login_redirect)
+def _login_via_redirect(client: TestClient, email: str, start_url: str):
+    """Hit start_url logged out, then log in with the `next` it hands back."""
+    import urllib.parse
+
+    login_redirect = client.get(start_url, follow_redirects=False)
+    assert login_redirect.status_code == 302
+    location = urllib.parse.urlsplit(login_redirect.headers["location"])
+    assert location.path == "/login"
+    next_target = urllib.parse.parse_qs(location.query)["next"][0]
+
+    login_page = client.get(login_redirect.headers["location"])
     assert login_page.status_code == 200
 
-    resp = client.post(
+    return client.post(
         "/login",
-        data={
-            "email": org.email,
-            "password": "testpass123",
-            "next": f"/studio/rooms/Main%20Stage?event_id={event.id}",
-        },
-        follow_redirects=False,
+        data={"email": email, "password": "testpass123", "next": next_target},
+        follow_redirects=True,
     )
-    assert resp.status_code in (302, 303)
-    assert resp.headers["location"] == (
-        f"/studio/rooms/Main%20Stage?event_id={event.id}"
+
+
+def test_login_next_returns_to_room_page(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+
+    resp = _login_via_redirect(
+        client, org.email, f"/studio/rooms/Main Stage?event_id={event.id}"
     )
+    assert resp.status_code == 200
+    assert resp.url.path == "/studio/rooms/Main Stage"
+    assert resp.url.params["event_id"] == str(event.id)
+    assert 'id="talks-scope-title">Main Stage</h1>' in resp.text
+    assert "Main Stage Opening" in resp.text
+    assert "Workshop Hands-On" not in resp.text
+
+
+def test_login_next_keeps_dashboard_filters(client: TestClient, db_session):
+    org, _, event, _, talks = _seed_room_talks(db_session)
+    talks["main_2"].status = "done"
+    db_session.commit()
+
+    resp = _login_via_redirect(
+        client, org.email, f"/studio?event_id={event.id}&status_filter=done"
+    )
+    assert resp.status_code == 200
+    assert resp.url.path == "/studio"
+    assert resp.url.params["event_id"] == str(event.id)
+    assert resp.url.params["status_filter"] == "done"
+    assert "Main Stage Closing" in resp.text
+    assert "Main Stage Opening" not in resp.text
+
+
+def test_room_page_redirects_talk_scoped_sso_to_its_talk(
+    client: TestClient, db_session
+):
+    from app.security import create_sso_token
+
+    _, _, event, _, talks = _seed_room_talks(db_session)
+    token = create_sso_token(
+        scope_type="talk", scope_id=talks["main_1"].id, role="speaker"
+    )
+    client.cookies.set("veditor_session", token)
+
+    for url in (
+        "/studio/rooms/Main Stage",
+        f"/studio/rooms/Main Stage?event_id={event.id}",
+    ):
+        resp = client.get(url, follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/studio/talks/{talks['main_1'].id}"
+
+
+def test_event_page_room_list_is_scoped_to_event(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    second = models.Event(name="Rooms Second Test Event", created_by_user_id=org.id)
+    db_session.add(second)
+    db_session.commit()
+    db_session.add(
+        models.Talk(
+            event_id=second.id,
+            title="Second Event Annex Talk",
+            room="Annex Hall",
+            start=datetime.now(tz=UTC),
+            end=datetime.now(tz=UTC) + timedelta(minutes=30),
+            status="waiting_for_files",
+        )
+    )
+    db_session.commit()
+    authenticate_client(client, org)
+
+    # The Attach Room Video list only offers rooms from the selected event.
+    resp = client.get(f"/studio?event_id={event.id}")
+    assert '<option value="Main Stage">' in resp.text
+    assert '<option value="Room B/2">' in resp.text
+    assert '<option value="Annex Hall">' not in resp.text
+
+    resp = client.get("/studio")
+    assert '<option value="Annex Hall">' in resp.text
 
 
 def test_dashboard_room_and_event_links_navigate(client: TestClient, db_session):

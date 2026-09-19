@@ -209,12 +209,12 @@
           {% endif %}
           <td class="td-title">
             <strong>{{ talk.title }}</strong>
-            <small>ID #{{ talk.id }} &bull; <a href="/studio?event_id={{ talk.event_id }}" class="talk-meta-link talk-event-link">{{ talk.event.name if talk.event else ('Event #' ~ talk.event_id) }}</a></small>
+            <small>ID #{{ talk.id }}{% if talk.event_id is not none %} &bull; <a href="/studio?event_id={{ talk.event_id }}" class="talk-meta-link talk-event-link">{{ talk.event.name if talk.event else ('Event #' ~ talk.event_id) }}</a>{% endif %}</small>
           </td>
           <td>
-            {% if talk.room %}
+            {% if talk.room and talk.event_id is not none %}
               <a href="/studio/rooms/{{ talk.room | urlencode }}?event_id={{ talk.event_id }}" class="talk-meta-link talk-room-link">{{ talk.room }}</a>
-            {% else %}—{% endif %}
+            {% else %}{{ talk.room or '—' }}{% endif %}
           </td>
           <td class="td-mono">{{ talk.start.strftime('%b %d, %H:%M') if talk.start else '—' }}</td>
           <td class="td-mono">
