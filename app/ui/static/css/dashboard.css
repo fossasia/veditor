@@ -46,6 +46,34 @@
   margin-left: 8px;
 }
 
+.table-kicker {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--v-text-muted);
+}
+
+.table-title-scoped {
+  display: inline;
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.talk-meta-link {
+  color: inherit;
+  text-decoration: underline dotted var(--v-border-strong);
+  text-underline-offset: 3px;
+  transition: color 0.15s ease;
+}
+
+.talk-meta-link:hover,
+.talk-meta-link:focus-visible {
+  color: var(--v-primary);
+  text-decoration: underline solid currentColor;
+}
+
 .table-header-actions {
   display: flex;
   align-items: center;

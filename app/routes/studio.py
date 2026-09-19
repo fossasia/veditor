@@ -13,6 +13,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
+from sqlalchemy import and_, false, func
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
@@ -30,6 +31,21 @@ from app.ui.templating import templates
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/studio", tags=["studio"])
+
+# Characters that would end a URL path early. The ASGI path is decoded, so a
+# room named "Q&A?" must have these re-escaped before the path is reused.
+_PATH_DELIMITERS = str.maketrans({"%": "%25", "?": "%3F", "#": "%23"})
+
+
+def _request_path_and_query(request: Request) -> tuple[str, str]:
+    """Return the decoded path and raw query string from the ASGI scope.
+
+    request.url re-parses the decoded path, so a "?" or "#" in a room name
+    would cut the path short there; the scope keeps them intact.
+    """
+    path = request.scope.get("root_path", "") + request.scope["path"]
+    query = request.scope.get("query_string", b"").decode("latin-1")
+    return path, query
 
 
 def get_ui_client(
@@ -300,7 +316,49 @@ def dashboard(
         )
         return resp
 
-    # 2. Check for authenticated user or active SSO session in cookie
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=event_id,
+        status_filter=status_filter,
+        q=q,
+    )
+
+
+@router.get("/rooms/{room_name:path}", response_class=HTMLResponse)
+def room_talks(
+    request: Request,
+    room_name: str,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    event_id: int | None = None,
+    status_filter: str | None = None,
+    q: str | None = None,
+):
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=event_id,
+        status_filter=status_filter,
+        q=q,
+        room=room_name,
+    )
+
+
+def _render_talks_page(
+    request: Request,
+    db: Session,
+    client: models.Client | None,
+    *,
+    event_id: int | None,
+    status_filter: str | None,
+    q: str | None,
+    room: str | None = None,
+):
+    """Render the talks list, scoped to the caller and optionally to an event/room."""
+    # Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
     cookie_token = request.cookies.get("veditor_session")
     sso_user = decode_sso_token(cookie_token) if (not user and cookie_token) else None
@@ -312,8 +370,15 @@ def dashboard(
         )
 
     if not user and not sso_user and client is None:
+        # Send the user back to this exact page (path + filters) after login.
+        # Only path delimiters are re-escaped so the whole target is encoded
+        # once as the `next` value (spaces become %20, not %2520).
+        path, query = _request_path_and_query(request)
+        login_next = path.translate(_PATH_DELIMITERS)
+        if query:
+            login_next += f"?{query}"
         resp = RedirectResponse(
-            url="/login?next=/studio",
+            url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
             status_code=status.HTTP_302_FOUND,
         )
         if request.cookies.get("veditor_api_key"):
@@ -333,7 +398,7 @@ def dashboard(
         )
         query = (
             db.query(models.Talk)
-            .options(selectinload(models.Talk.jobs))
+            .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
             .filter(models.Talk.event_id == scoped_event_id)
         )
     else:
@@ -357,7 +422,9 @@ def dashboard(
         else:
             user_events = []
 
-        query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
+        query = db.query(models.Talk).options(
+            selectinload(models.Talk.jobs), selectinload(models.Talk.event)
+        )
         if user:
             if user.role in ("organizer", "admin"):
                 org_event_ids = [e.id for e in user_events]
@@ -380,6 +447,8 @@ def dashboard(
         else:
             query = query.filter(models.Talk.id == -1)
 
+    if room is not None:
+        query = query.filter(models.Talk.room == room)
     if status_filter:
         query = query.filter(models.Talk.status == status_filter)
 
@@ -388,39 +457,38 @@ def dashboard(
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
 
+    # Stats and the room list are computed in SQL over the caller's scope,
+    # narrowed to the selected event (and room, for the stats).
     if sso_user:
-        all_talks = (
-            db.query(models.Talk)
-            .filter(models.Talk.event_id == sso_user["scope_id"])
-            .all()
-        )
-    elif user:
-        if user.role in ("organizer", "admin"):
-            org_event_ids = [e.id for e in user_events]
-            all_talks = (
-                db.query(models.Talk)
-                .filter(models.Talk.event_id.in_(org_event_ids))
-                .all()
-            )
-        else:
-            all_talks = []
-    elif client is not None:
-        client_event_ids = client.event_ids or []
-        all_talks = (
-            db.query(models.Talk)
-            .filter(models.Talk.event_id.in_(client_event_ids))
-            .all()
-        )
+        scope = models.Talk.event_id == sso_user["scope_id"]
+    elif user and user.role in ("organizer", "admin"):
+        scope = models.Talk.event_id.in_([e.id for e in user_events])
+    elif client is not None and not user:
+        scope = models.Talk.event_id.in_(client.event_ids or [])
     else:
-        all_talks = []
+        scope = false()
+    if event_id is not None:
+        scope = and_(scope, models.Talk.event_id == event_id)
 
-    all_rooms = sorted({t.room for t in all_talks if t.room})
-    status_counts: dict[str, int] = {}
-    for t in all_talks:
-        status_counts[t.status] = status_counts.get(t.status, 0) + 1
+    all_rooms = [
+        r
+        for (r,) in db.query(models.Talk.room)
+        .filter(scope, models.Talk.room.isnot(None), models.Talk.room != "")
+        .distinct()
+        .order_by(models.Talk.room)
+    ]
+
+    stats_scope = scope if room is None else and_(scope, models.Talk.room == room)
+    status_counts: dict[str, int] = dict(
+        db.query(models.Talk.status, func.count(models.Talk.id))
+        .filter(stats_scope)
+        .group_by(models.Talk.status)
+        .all()
+    )
+    current_event = next((e for e in user_events if e.id == event_id), None)
 
     stats = {
-        "total": len(all_talks),
+        "total": sum(status_counts.values()),
         "pending": status_counts.get("pending_approval", 0),
         "processing": sum(
             status_counts.get(s, 0)
@@ -446,6 +514,11 @@ def dashboard(
             "event_id": event_id,
             "user_events": user_events,
             "error": flash_error,
+            "current_event": current_event,
+            "room": room,
+            "filter_action": urllib.parse.quote(
+                _request_path_and_query(request)[0], safe="/"
+            ),
         },
         headers={"Cache-Control": "no-store"},
     )
