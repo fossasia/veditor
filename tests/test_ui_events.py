@@ -1035,6 +1035,26 @@ def test_room_page_requires_authentication(client: TestClient, db_session):
     assert "Other Event Main Stage Talk" not in followed.text
 
 
+def test_room_page_accepts_event_slug(client: TestClient, db_session):
+    org, _, event, _, _ = _seed_room_talks(db_session)
+    event.source = "eventyay"
+    event.external_id = "room-test-slug-262"
+    db_session.commit()
+    authenticate_client(client, org)
+
+    resp = client.get("/studio/rooms/Main Stage?event_id=room-test-slug-262")
+    assert resp.status_code == 200
+    assert 'id="talks-scope-title">Main Stage</h1>' in resp.text
+    assert "Main Stage Opening" in resp.text
+    assert "Workshop Hands-On" not in resp.text
+
+    # An unknown slug resolves to no event rather than a 422.
+    resp = client.get("/studio/rooms/Main Stage?event_id=no-such-slug")
+    assert resp.status_code == 200
+    assert "Main Stage Opening" not in resp.text
+    assert "0 results" in resp.text
+
+
 def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     _seed_room_talks(db_session)
     resp = client.get(
