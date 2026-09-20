@@ -349,7 +349,7 @@ def dashboard(
         request,
         db,
         client,
-        event_id=_resolve_event_id(db, event_id),
+        event_id=event_id,
         status_filter=status_filter,
         q=q,
     )
@@ -369,24 +369,34 @@ def room_talks(
         request,
         db,
         client,
-        event_id=_resolve_event_id(db, event_id),
+        event_id=event_id,
         status_filter=status_filter,
         q=q,
         room=room_name,
     )
 
 
-def _resolve_event_id(db: Session, event_id: str | int | None) -> int | None:
-    """Resolve an event_id given as a numeric id or as an external_id/slug."""
+def _resolve_event_id(
+    db: Session,
+    event_id: str | int | None,
+    scoped_events: list[models.Event],
+) -> int | None:
+    """Resolve an event_id given as a numeric id or as an external_id/slug.
+
+    external_id is only unique per source, so a slug is matched against the
+    caller's own events first and only then against every event.
+    """
     if event_id is None:
         return None
     if isinstance(event_id, int):
         return event_id
-    if str(event_id).isdigit():
-        return int(event_id)
-    ev = (
-        db.query(models.Event).filter(models.Event.external_id == str(event_id)).first()
-    )
+    slug = str(event_id)
+    if slug.isdigit():
+        return int(slug)
+    for event in scoped_events:
+        if event.external_id == slug:
+            return event.id
+    ev = db.query(models.Event).filter(models.Event.external_id == slug).first()
     return ev.id if ev else -1
 
 
@@ -395,7 +405,7 @@ def _render_talks_page(
     db: Session,
     client: models.Client | None,
     *,
-    event_id: int | None,
+    event_id: str | int | None,
     status_filter: str | None,
     q: str | None,
     room: str | None = None,
@@ -468,6 +478,8 @@ def _render_talks_page(
             )
         else:
             user_events = []
+
+        event_id = _resolve_event_id(db, event_id, user_events)
 
         query = db.query(models.Talk).options(
             selectinload(models.Talk.jobs), selectinload(models.Talk.event)

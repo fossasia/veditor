@@ -1055,6 +1055,53 @@ def test_room_page_accepts_event_slug(client: TestClient, db_session):
     assert "0 results" in resp.text
 
 
+def test_event_slug_resolves_within_callers_own_events(client: TestClient, db_session):
+    """external_id is unique per source, so the caller's own event wins."""
+    org, other_org, event, _, _ = _seed_room_talks(db_session)
+    shared_slug = "shared-slug-262"
+
+    # Another organizer's event, imported from a different source, reuses the
+    # slug and was created first, so a global lookup would find it first.
+    foreign = models.Event(
+        name="Foreign Slug Test Event",
+        source="other-source",
+        external_id=shared_slug,
+        created_by_user_id=other_org.id,
+    )
+    db_session.add(foreign)
+    db_session.commit()
+    db_session.add(
+        models.Talk(
+            event_id=foreign.id,
+            title="Foreign Slug Talk",
+            room="Main Stage",
+            start=datetime.now(tz=UTC),
+            end=datetime.now(tz=UTC) + timedelta(minutes=30),
+            status="waiting_for_files",
+        )
+    )
+    event.source = "eventyay"
+    event.external_id = shared_slug
+    db_session.commit()
+
+    authenticate_client(client, org)
+    for url in (
+        f"/studio?event_id={shared_slug}",
+        f"/studio/rooms/Main Stage?event_id={shared_slug}",
+    ):
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert "Main Stage Opening" in resp.text
+        assert "Foreign Slug Talk" not in resp.text
+
+    # The other organizer resolves the same slug to their own event.
+    authenticate_client(client, other_org)
+    resp = client.get(f"/studio?event_id={shared_slug}")
+    assert resp.status_code == 200
+    assert "Foreign Slug Talk" in resp.text
+    assert "Main Stage Opening" not in resp.text
+
+
 def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     _seed_room_talks(db_session)
     resp = client.get(
