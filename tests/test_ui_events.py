@@ -1102,6 +1102,23 @@ def test_event_slug_resolves_within_callers_own_events(client: TestClient, db_se
     assert "Main Stage Opening" not in resp.text
 
 
+def test_event_slug_owned_by_another_organizer_resolves_to_nothing(
+    client: TestClient, db_session
+):
+    org, _, _, other_event, _ = _seed_room_talks(db_session)
+    other_event.source = "eventyay"
+    other_event.external_id = "foreign-only-slug-262"
+    db_session.commit()
+
+    authenticate_client(client, org)
+    resp = client.get("/studio?event_id=foreign-only-slug-262")
+    assert resp.status_code == 200
+    assert "Other Event Main Stage Talk" not in resp.text
+    assert "Other Room Test Event" not in resp.text
+    assert "0 results" in resp.text
+    assert "talks-scope-title" not in resp.text
+
+
 def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     _seed_room_talks(db_session)
     resp = client.get(

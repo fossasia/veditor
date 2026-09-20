@@ -377,14 +377,13 @@ def room_talks(
 
 
 def _resolve_event_id(
-    db: Session,
     event_id: str | int | None,
     scoped_events: list[models.Event],
 ) -> int | None:
     """Resolve an event_id given as a numeric id or as an external_id/slug.
 
-    external_id is only unique per source, so a slug is matched against the
-    caller's own events first and only then against every event.
+    external_id is only unique per source, so a slug is resolved against the
+    caller's own events. Anything else resolves to -1, which matches no talk.
     """
     if event_id is None:
         return None
@@ -393,11 +392,7 @@ def _resolve_event_id(
     slug = str(event_id)
     if slug.isdigit():
         return int(slug)
-    for event in scoped_events:
-        if event.external_id == slug:
-            return event.id
-    ev = db.query(models.Event).filter(models.Event.external_id == slug).first()
-    return ev.id if ev else -1
+    return next((e.id for e in scoped_events if e.external_id == slug), -1)
 
 
 def _render_talks_page(
@@ -479,7 +474,7 @@ def _render_talks_page(
         else:
             user_events = []
 
-        event_id = _resolve_event_id(db, event_id, user_events)
+        event_id = _resolve_event_id(event_id, user_events)
 
         query = db.query(models.Talk).options(
             selectinload(models.Talk.jobs), selectinload(models.Talk.event)
