@@ -36,7 +36,7 @@
     <a href="/admin/events">Events</a>
     <span class="sep">/</span>
     {% if talk.event_id %}
-      <a href="/admin/events/{{ talk.event_id }}" class="breadcrumb-event breadcrumb-link">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</a>
+      <a href="/admin/events/{{ talk.event_id }}" class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</a>
     {% else %}
       <span class="breadcrumb-event">{{ talk.event.name if talk.event and talk.event.name else 'Event' }}</span>
     {% endif %}

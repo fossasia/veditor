@@ -1,5 +1,18 @@
 /* ── Studio Detail View Styles (studio.html) ────────────────────── */
 
+.breadcrumb-back,
+a.breadcrumb-event {
+  color: var(--v-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.breadcrumb-back:hover,
+a.breadcrumb-event:hover {
+  color: var(--v-primary);
+}
+
 .breadcrumb-event,
 .breadcrumb-room {
   color: var(--v-text-secondary);
