@@ -1119,6 +1119,92 @@ def test_event_slug_owned_by_another_organizer_resolves_to_nothing(
     assert "talks-scope-title" not in resp.text
 
 
+def test_api_client_resolves_slugs_for_its_events(client: TestClient, db_session):
+    from app.auth import hash_api_key
+
+    _, _, event, other_event, _ = _seed_room_talks(db_session)
+    event.source = "eventyay"
+    event.external_id = "client-slug-262"
+    other_event.source = "eventyay"
+    other_event.external_id = "client-foreign-slug-262"
+    db_session.add(
+        models.Client(
+            name="Room Test Client",
+            hashed_key=hash_api_key("room-test-client-key-262"),
+            event_ids=[event.id],
+        )
+    )
+    db_session.commit()
+    headers = {"X-API-Key": "room-test-client-key-262"}
+
+    for url in (
+        "/studio?event_id=client-slug-262",
+        "/studio/rooms/Main Stage?event_id=client-slug-262",
+    ):
+        resp = client.get(url, headers=headers)
+        assert resp.status_code == 200
+        assert 'id="talks-scope-title">' in resp.text
+        assert "Main Stage Opening" in resp.text
+        assert "Other Event Main Stage Talk" not in resp.text
+
+    # A slug for an event outside the key's event_ids resolves to nothing.
+    resp = client.get("/studio?event_id=client-foreign-slug-262", headers=headers)
+    assert resp.status_code == 200
+    assert "Other Event Main Stage Talk" not in resp.text
+    assert "0 results" in resp.text
+
+
+def test_talk_list_is_scoped_for_every_caller_type(client: TestClient, db_session):
+    """The talk list, not just the stats, only ever contains visible events."""
+    from app.auth import hash_api_key
+
+    org, other_org, event, other_event, _ = _seed_room_talks(db_session)
+    admin = create_user(db_session, "room_scope_admin@example.com", "admin")
+    plain = create_user(db_session, "room_scope_user@example.com", "user")
+    db_session.add(
+        models.Client(
+            name="Scope Test Client",
+            hashed_key=hash_api_key("scope-test-client-key-262"),
+            event_ids=[other_event.id],
+        )
+    )
+    db_session.commit()
+    own, foreign = "Main Stage Opening", "Other Event Main Stage Talk"
+
+    def listing(url: str, **kwargs) -> str:
+        resp = client.get(url, **kwargs)
+        assert resp.status_code == 200
+        return resp.text
+
+    authenticate_client(client, org)
+    for url in ("/studio", f"/studio?event_id={event.id}", "/studio/rooms/Main Stage"):
+        page = listing(url)
+        assert own in page and foreign not in page
+    # Filtering on someone else's event lists nothing rather than their talks.
+    page = listing(f"/studio?event_id={other_event.id}")
+    assert own not in page and foreign not in page
+
+    authenticate_client(client, other_org)
+    page = listing("/studio")
+    assert foreign in page and own not in page
+
+    # Admins are scoped to their own events on the studio dashboard.
+    authenticate_client(client, admin)
+    page = listing("/studio")
+    assert own not in page and foreign not in page
+
+    authenticate_client(client, plain)
+    page = listing("/studio/rooms/Main Stage")
+    assert own not in page and foreign not in page
+
+    client.cookies.clear()
+    headers = {"X-API-Key": "scope-test-client-key-262"}
+    page = listing("/studio", headers=headers)
+    assert foreign in page and own not in page
+    page = listing(f"/studio?event_id={event.id}", headers=headers)
+    assert own not in page and foreign not in page
+
+
 def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     _seed_room_talks(db_session)
     resp = client.get(

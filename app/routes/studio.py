@@ -13,7 +13,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
-from sqlalchemy import and_, false, func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
@@ -439,74 +439,49 @@ def _render_talks_page(
                 url=f"/studio/talks/{sso_user['scope_id']}",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
-        scoped_event_id = sso_user["scope_id"]
-        event_id = scoped_event_id
-        user_events = (
-            db.query(models.Event).filter(models.Event.id == scoped_event_id).all()
-        )
-        query = (
-            db.query(models.Talk)
-            .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
-            .filter(models.Talk.event_id == scoped_event_id)
-        )
-        if sso_user.get("role") == "speaker":
-            query = query.filter(
-                func.lower(models.Talk.speaker_email) == sso_user["email"].lower()
-            )
-    else:
-        if user:
-            if user.role in ("organizer", "admin"):
-                user_events = (
-                    db.query(models.Event)
-                    .filter(models.Event.created_by_user_id == user.id)
-                    .order_by(models.Event.name.asc())
-                    .all()
-                )
-            else:
-                user_events = []
-        elif client is not None:
+        event_id = sso_user["scope_id"]
+        user_events = db.query(models.Event).filter(models.Event.id == event_id).all()
+    elif user:
+        if user.role in ("organizer", "admin"):
             user_events = (
                 db.query(models.Event)
-                .filter(models.Event.id.in_(client.event_ids))
+                .filter(models.Event.created_by_user_id == user.id)
                 .order_by(models.Event.name.asc())
                 .all()
             )
         else:
             user_events = []
-
+    else:
+        user_events = (
+            db.query(models.Event)
+            .filter(models.Event.id.in_(client.event_ids or []))
+            .order_by(models.Event.name.asc())
+            .all()
+        )
+    if not sso_user:
         event_id = _resolve_event_id(event_id, user_events)
 
-        query = db.query(models.Talk).options(
-            selectinload(models.Talk.jobs), selectinload(models.Talk.event)
-        )
-        if user:
-            if user.role in ("organizer", "admin"):
-                org_event_ids = [e.id for e in user_events]
-                query = query.filter(models.Talk.event_id.in_(org_event_ids))
-                if event_id is not None:
-                    if event_id not in org_event_ids:
-                        query = query.filter(models.Talk.id == -1)
-                    else:
-                        query = query.filter(models.Talk.event_id == event_id)
-            elif user.role == "speaker" and user.email:
-                query = query.filter(
-                    func.lower(models.Talk.speaker_email) == user.email.lower()
-                )
-                if event_id is not None:
-                    query = query.filter(models.Talk.event_id == event_id)
-            else:
-                query = query.filter(models.Talk.id == -1)
-        elif client is not None:
-            client_event_ids = client.event_ids or []
-            query = query.filter(models.Talk.event_id.in_(client_event_ids))
-            if event_id is not None:
-                if event_id not in client_event_ids:
-                    query = query.filter(models.Talk.id == -1)
-                else:
-                    query = query.filter(models.Talk.event_id == event_id)
-        else:
-            query = query.filter(models.Talk.id == -1)
+    # One scope drives the talk list, the room list and the stats: the talks the
+    # caller may see, narrowed to the selected event. Speakers see their own
+    # talks; everyone else sees the events they have access to (none for plain
+    # users).
+    if user and user.role == "speaker" and user.email:
+        scope = func.lower(models.Talk.speaker_email) == user.email.lower()
+    else:
+        scope = models.Talk.event_id.in_([e.id for e in user_events])
+        if sso_user and sso_user.get("role") == "speaker":
+            scope = and_(
+                scope,
+                func.lower(models.Talk.speaker_email) == sso_user["email"].lower(),
+            )
+    if event_id is not None:
+        scope = and_(scope, models.Talk.event_id == event_id)
 
+    query = (
+        db.query(models.Talk)
+        .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
+        .filter(scope)
+    )
     if room is not None:
         query = query.filter(models.Talk.room == room)
     if status_filter:
@@ -516,27 +491,6 @@ def _render_talks_page(
     if q:
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
-
-    # Stats and the room list are computed in SQL over the caller's scope,
-    # narrowed to the selected event (and room, for the stats).
-    if sso_user:
-        scope = models.Talk.event_id == sso_user["scope_id"]
-        if sso_user.get("role") == "speaker":
-            scope = and_(
-                scope,
-                func.lower(models.Talk.speaker_email) == sso_user["email"].lower(),
-            )
-    elif user and user.role in ("organizer", "admin"):
-        scope = models.Talk.event_id.in_([e.id for e in user_events])
-    elif user and user.role == "speaker" and user.email:
-        # Speakers see their own talks, whichever event they belong to.
-        scope = func.lower(models.Talk.speaker_email) == user.email.lower()
-    elif client is not None and not user:
-        scope = models.Talk.event_id.in_(client.event_ids or [])
-    else:
-        scope = false()
-    if event_id is not None:
-        scope = and_(scope, models.Talk.event_id == event_id)
 
     all_rooms = [
         r
