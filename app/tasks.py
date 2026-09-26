@@ -19,6 +19,9 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+
+import av
 
 from app.config import PREVIEW_PRESETS, settings
 from app.db import SessionLocal
@@ -50,7 +53,6 @@ from app.storage import (
 
 logger = logging.getLogger(__name__)
 
-# ponytail: timeouts are generous defaults; tune per deployment if jobs time out in production
 STAGE_CONFIG: dict[str, dict[str, str | int]] = {
     "ingest": {"queue": "light", "job_timeout": 600},
     "detect": {"queue": "light", "job_timeout": 300},
@@ -103,6 +105,16 @@ def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -
         db.commit()
 
 
+def _get_scratch_dir(storage) -> Path | None:
+    try:
+        d = storage.get_temp_dir()
+        if isinstance(d, Path) and d.is_dir():
+            return d
+    except AttributeError, TypeError, OSError:
+        pass
+    return None
+
+
 def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> None:
     raw_key = raw_key or f"{talk_id}/raw/raw.mp4"
     job_id = None
@@ -153,7 +165,6 @@ def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> No
 
         # Persist to destination storage backend
         storage.put(raw_key, staged)
-        _cache_waveform(storage, raw_key, staged)
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -280,11 +291,22 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
 
         raw_path = storage.get(raw_key)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "cut.mp4"
-            cut(raw_path, tmp_out, start_seconds, end_seconds)
-            storage.put(cut_key, tmp_out)
+            cut_kwargs = (
+                {"threads": settings.encoder_threads}
+                if settings.encoder_threads is not None
+                else {}
+            )
+            cut(
+                raw_path,
+                tmp_out,
+                start_seconds,
+                end_seconds,
+                **cut_kwargs,
+            )
             _cache_waveform(storage, cut_key, tmp_out)
+            storage.put(cut_key, tmp_out)
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -376,6 +398,32 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         )
 
 
+def _probe_media_params(storage, media_key: str | None) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if not media_key:
+        return params
+    try:
+        if not storage.exists(media_key):
+            return params
+        path = storage.get(media_key)
+        with av.open(str(path)) as c:
+            if c.streams.video:
+                v = c.streams.video[0]
+                w, h = v.codec_context.width, v.codec_context.height
+                if w and h:
+                    params["resolution"] = ((w // 2) * 2, (h // 2) * 2)
+                fps = v.average_rate or v.guessed_rate
+                if fps and float(fps) > 0:
+                    params["fps"] = max(1, round(float(fps)))
+            if c.streams.audio:
+                a = c.streams.audio[0]
+                if a.codec_context.sample_rate:
+                    params["audio_sample_rate"] = a.codec_context.sample_rate
+    except (av.FFmpegError, OSError, ValueError) as exc:
+        logger.warning("Failed to probe %s for media parameters: %s", media_key, exc)
+    return params
+
+
 def job_intro(
     talk_id: int,
     cut_key: str | None = None,
@@ -415,14 +463,19 @@ def job_intro(
             else:
                 room_date = ""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        probe_params = _probe_media_params(storage, cut_key)
+        intro_kwargs: dict[str, Any] = {
+            "title": title,
+            "event_name": event_name,
+            "room_date": room_date,
+            **probe_params,
+        }
+        if settings.encoder_threads is not None:
+            intro_kwargs["threads"] = settings.encoder_threads
+
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "intro.mp4"
-            generate_intro_clip(
-                tmp_out,
-                title=title,
-                event_name=event_name,
-                room_date=room_date,
-            )
+            generate_intro_clip(tmp_out, **intro_kwargs)
             storage.put(intro_key, tmp_out)
 
         with SessionLocal() as db:
@@ -485,12 +538,17 @@ def job_outro(
             job_id = job.id
             event_name = talk.event.name if talk.event else ""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        probe_params = _probe_media_params(storage, cut_key)
+        outro_kwargs: dict[str, Any] = {
+            "event_name": event_name,
+            **probe_params,
+        }
+        if settings.encoder_threads is not None:
+            outro_kwargs["threads"] = settings.encoder_threads
+
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "outro.mp4"
-            generate_outro_clip(
-                tmp_out,
-                event_name=event_name,
-            )
+            generate_outro_clip(tmp_out, **outro_kwargs)
             storage.put(outro_key, tmp_out)
 
         with SessionLocal() as db:
@@ -554,14 +612,19 @@ def job_concat(
         intro_path = storage.get(intro_key) if intro_key else None
         outro_path = storage.get(outro_key) if outro_key else None
 
+        concat_kwargs = (
+            {"threads": settings.encoder_threads}
+            if settings.encoder_threads is not None
+            else {}
+        )
         concat(
             cut_path=cut_path,
             intro_path=intro_path,
             outro_path=outro_path,
             output_path=concat_key,
             backend=storage,
+            **concat_kwargs,
         )
-        _cache_waveform(storage, concat_key, storage.get(concat_key))
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -621,11 +684,36 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             or PREVIEW_PRESETS["small_video"]
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "preview.mp4"
-            generate_preview(cut_path, tmp_out, preset=preset)
+            preview_kwargs = (
+                {"threads": settings.encoder_threads}
+                if settings.encoder_threads is not None
+                else {}
+            )
+            generate_preview(
+                cut_path,
+                tmp_out,
+                preset=preset,
+                **preview_kwargs,
+            )
             storage.put(preview_key, tmp_out)
-            _cache_waveform(storage, preview_key, tmp_out)
+            cut_wf_key = f"{cut_key}.waveform.json"
+            if storage.exists(cut_wf_key):
+                try:
+                    cut_wf_path = storage.get(cut_wf_key)
+                    # storage-boundary-exempt: copy cached waveform bytes to preview
+                    wf_data = cut_wf_path.read_bytes()
+                    storage.put(f"{preview_key}.waveform.json", wf_data)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    logger.warning(
+                        "Failed to reuse cut waveform for preview %s: %s",
+                        preview_key,
+                        exc,
+                    )
+                    _cache_waveform(storage, preview_key, storage.get(preview_key))
+            else:
+                _cache_waveform(storage, preview_key, storage.get(preview_key))
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -711,7 +799,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
 
         cut_path = storage.get(cut_key)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "loudness.mp4"
             try:
                 normalize(cut_path, tmp_out)
@@ -752,7 +840,6 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                 else:
                     raise
             storage.put(loud_key, tmp_out)
-            _cache_waveform(storage, loud_key, tmp_out)
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -833,11 +920,20 @@ def job_transcode(
                         progress_err,
                     )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / "final.mp4"
-            transcode(loud_path, tmp_out, on_progress=_on_progress)
+            transcode_kwargs = (
+                {"threads": settings.encoder_threads}
+                if settings.encoder_threads is not None
+                else {}
+            )
+            transcode(
+                loud_path,
+                tmp_out,
+                on_progress=_on_progress,
+                **transcode_kwargs,
+            )
             storage.put(final_key, tmp_out)
-            _cache_waveform(storage, final_key, tmp_out)
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)

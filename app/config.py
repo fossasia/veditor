@@ -14,6 +14,7 @@ class PreviewPreset:
     video_bitrate: int
     audio_bitrate: int = 64_000
     crf: int | None = None
+    preset_speed: str = "veryfast"
 
 
 PREVIEW_PRESETS: dict[str, PreviewPreset] = {
@@ -22,12 +23,14 @@ PREVIEW_PRESETS: dict[str, PreviewPreset] = {
         resolution=(320, 180),
         video_bitrate=150_000,
         audio_bitrate=32_000,
+        preset_speed="veryfast",
     ),
     "big_video": PreviewPreset(
         name="big_video",
         resolution=(640, 360),
         video_bitrate=500_000,
         audio_bitrate=64_000,
+        preset_speed="veryfast",
     ),
 }
 
@@ -51,6 +54,7 @@ class Settings(BaseSettings):
     disk_guard_multiplier: float = 3.0
     retention_sweep_interval_seconds: int = 3600
     max_bumper_upload_size_bytes: PositiveInt = 100 * 1024 * 1024
+    encoder_threads: PositiveInt | None = None
 
     environment: str = "development"
     session_secret: str | None = None

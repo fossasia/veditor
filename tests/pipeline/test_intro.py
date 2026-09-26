@@ -194,6 +194,14 @@ def test_generate_intro_clip_invalid_arguments(tmp_path: Path):
             resolution=(10, 10),
         )
 
+    with pytest.raises(ValueError, match="threads must be positive"):
+        generate_intro_clip(
+            output_path=output_clip,
+            title="Invalid",
+            speakers="Speaker",
+            threads=0,
+        )
+
     with pytest.raises(FileNotFoundError, match="Logo file not found"):
         generate_intro_clip(
             output_path=output_clip,

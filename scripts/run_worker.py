@@ -6,6 +6,7 @@ Redis configuration from app.config.settings and eagerly importing task modules.
 
 import argparse
 import multiprocessing
+import os
 import sys
 
 import redis
@@ -22,7 +23,14 @@ def _run_single_worker(
     name: str | None,
     burst: bool,
     with_scheduler: bool = False,
+    nice_level: int | None = None,
 ) -> None:
+    if nice_level is not None and hasattr(os, "nice"):
+        try:
+            os.nice(nice_level)
+        except OSError as exc:
+            print(f"Warning: Failed to set process niceness: {exc}", file=sys.stderr)
+
     # Eagerly import task modules in the worker process so job code is loaded
     # once at worker boot rather than re-imported per job fork.
     import app.tasks  # noqa: F401
@@ -82,6 +90,12 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Run worker with scheduler enabled for periodic jobs",
     )
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=None,
+        help="Process niceness level (default: None, e.g. 10 to yield CPU priority)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -110,7 +124,14 @@ def main(argv: list[str] | None = None) -> None:
             is_sched = args.with_scheduler and (i == 0)
             p = ctx.Process(
                 target=_run_single_worker,
-                args=(queues, settings.redis_url, worker_name, args.burst, is_sched),
+                args=(
+                    queues,
+                    settings.redis_url,
+                    worker_name,
+                    args.burst,
+                    is_sched,
+                    args.nice,
+                ),
             )
             p.start()
             processes.append(p)
@@ -123,6 +144,7 @@ def main(argv: list[str] | None = None) -> None:
             args.name,
             args.burst,
             args.with_scheduler,
+            args.nice,
         )
 
 

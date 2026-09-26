@@ -52,6 +52,7 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                             ctx.pix_fmt,
                             fps_val,
                             v.time_base,
+                            bytes(ctx.extradata or b""),
                         )
                     )
 
@@ -64,8 +65,9 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                             ctx.name,
                             ctx.sample_rate,
                             ctx.channels,
-                            a.time_base,
                             fmt_name,
+                            a.time_base,
+                            bytes(ctx.extradata or b""),
                         )
                     )
 
@@ -178,6 +180,7 @@ def _concat_reencode(
     segments: list[Path],
     canonical_cut_path: Path,
     output_path: Path,
+    threads: int | None = None,
 ) -> str:
     """Full frame decode, resample, and re-encode concatenation fallback."""
     with av.open(str(canonical_cut_path)) as ref_c:
@@ -227,10 +230,13 @@ def _concat_reencode(
     ) as out_container:
         out_video = None
         if has_video:
+            video_options: dict[str, str] = {"crf": "22", "preset": "veryfast"}
+            if threads is not None:
+                video_options["threads"] = str(threads)
             out_video = out_container.add_stream(
                 "libx264",
                 rate=can_fps,
-                options={"crf": "22", "preset": "veryfast"},
+                options=video_options,
             )
             out_video.width = can_w
             out_video.height = can_h
@@ -380,6 +386,7 @@ def concat(
     backend: StorageBackend | None = None,
     storage: StorageBackend | None = None,
     force_reencode: bool = False,
+    threads: int | None = None,
 ) -> str:
     """Concatenate talk media segments (cut recording with optional intro and outro).
 
@@ -407,6 +414,9 @@ def concat(
         ValueError: If output path matches any input path, or invalid stream configurations.
     """
     storage_backend = backend or storage
+
+    if threads is not None and threads <= 0:
+        raise ValueError(f"threads must be positive, got {threads}")
 
     cut_p = Path(cut_path)
     if not cut_p.is_file():
@@ -458,7 +468,14 @@ def concat(
 
     # Render into a temporary file, then persist via StorageBackend
     out_suffix = out_p.suffix or cut_p.suffix or ".mp4"
-    with tempfile.TemporaryDirectory(prefix="veditor-concat-") as tmpdir:
+    scratch_dir = (
+        getattr(storage_backend, "get_temp_dir", lambda: None)()
+        if storage_backend
+        else None
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="veditor-concat-", dir=scratch_dir
+    ) as tmpdir:
         tmp_target = Path(tmpdir) / f"concat_tmp{out_suffix}"
 
         if not force_reencode and _can_stream_copy(segments):
@@ -469,8 +486,8 @@ def concat(
                     "Stream-copy concat failed (%s); falling back to full re-encode.",
                     exc,
                 )
-                _concat_reencode(segments, cut_p, tmp_target)
+                _concat_reencode(segments, cut_p, tmp_target, threads=threads)
         else:
-            _concat_reencode(segments, cut_p, tmp_target)
+            _concat_reencode(segments, cut_p, tmp_target, threads=threads)
 
         return _persist(tmp_target)

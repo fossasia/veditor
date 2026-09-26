@@ -30,6 +30,9 @@ class FakePath:
         self.key = key
         self._data = data
 
+    def __fspath__(self) -> str:
+        return f"/fake/{self.key}"
+
     def read_bytes(self) -> bytes:
         return self._data
 
@@ -70,6 +73,8 @@ class FakeStorageBackend(StorageBackend):
     def put(self, key: str, source: Path | bytes) -> None:
         if isinstance(source, bytes):
             self.storage[key] = source
+        elif hasattr(source, "read_bytes"):
+            self.storage[key] = source.read_bytes()
         else:
             self.storage[key] = Path(source).read_bytes()
 
@@ -101,6 +106,9 @@ class FakeStorageBackend(StorageBackend):
 
     def total_bytes(self) -> int:
         return self.DEFAULT_FREE_BYTES
+
+    def get_temp_dir(self) -> Path:
+        return Path(tempfile.gettempdir())
 
 
 @pytest.fixture

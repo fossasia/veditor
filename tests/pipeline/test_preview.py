@@ -1,6 +1,7 @@
 """Unit tests for the pure preview video generator (pipeline/preview.py)."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import av
 import pytest
@@ -147,3 +148,90 @@ def test_generate_preview_custom_preset(tmp_path: Path):
     assert_playable(output_clip)
     info = open_and_inspect(output_clip)
     assert info.resolution == (160, 120)
+
+
+def test_generate_preview_with_threads_and_preset_speed(tmp_path: Path):
+    """Verify preview generation with explicit thread count and speed preset."""
+    preset = PreviewPreset(
+        name="custom_speed",
+        resolution=(320, 180),
+        video_bitrate=150_000,
+        preset_speed="ultrafast",
+    )
+    input_clip = generate_clip(
+        1.0,
+        resolution=(640, 360),
+        pattern="gradient",
+        output_dir=tmp_path,
+    )
+    output_clip = tmp_path / "threads_preview.mp4"
+
+    real_open = av.open
+    captured_streams = []
+
+    class ContainerProxy:
+        def __init__(self, target):
+            self._target = target
+
+        def __enter__(self):
+            self._target.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._target.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self._target, name)
+
+        def add_stream(self, *args, **kwargs):
+            captured_streams.append((args, kwargs))
+            return self._target.add_stream(*args, **kwargs)
+
+    def fake_open(*args, **kwargs):
+        c = real_open(*args, **kwargs)
+        return ContainerProxy(c) if kwargs.get("mode") == "w" else c
+
+    with patch("app.pipeline.preview.av.open", side_effect=fake_open):
+        generate_preview(input_clip, output_clip, preset, threads=1)
+
+    libx264_calls = [
+        kwargs for args, kwargs in captured_streams if args and args[0] == "libx264"
+    ]
+    assert len(libx264_calls) == 1
+    encoder_options = libx264_calls[0].get("options", {})
+    assert encoder_options.get("preset") == "ultrafast"
+    assert encoder_options.get("threads") == "1"
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    info = open_and_inspect(output_clip)
+    assert info.resolution == (320, 180)
+
+
+def test_generate_preview_rejects_invalid_threads(tmp_path: Path):
+    """Verify that non-positive threads values raise ValueError."""
+    input_clip = generate_clip(1.0, output_dir=tmp_path)
+    output_clip = tmp_path / "invalid_threads_preview.mp4"
+    preset = PREVIEW_PRESETS["small_video"]
+
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        generate_preview(input_clip, output_clip, preset, threads=0)
+
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        generate_preview(input_clip, output_clip, preset, threads=-1)
+
+
+def test_generate_preview_high_framerate_decimation(tmp_path: Path):
+    """Verify that >30 fps videos are decimated to <=30 fps and duration matches."""
+    input_clip = generate_clip(2.0, fps=60, pattern="solid", output_dir=tmp_path)
+    output_clip = tmp_path / "decimated_preview.mp4"
+
+    generate_preview(input_clip, output_clip, PREVIEW_PRESETS["small_video"])
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    assert_duration_close(input_clip, output_clip, tolerance_seconds=0.25)
+    with av.open(str(output_clip)) as c:
+        v = c.streams.video[0]
+        avg_rate = float(v.average_rate or v.guessed_rate)
+        assert avg_rate <= 30.0
