@@ -240,11 +240,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const resp = await fetch(`/events/${eventId}/webhook`);
+      if (currentActiveEventId !== eventId) return;
       if (!resp.ok) {
         setWebhookBadge('Error', 'neutral');
         return;
       }
       const data = await resp.json();
+      if (currentActiveEventId !== eventId) return;
       if (data.url) {
         webhookUrlInput.value = data.url;
         if (data.has_secret) {
