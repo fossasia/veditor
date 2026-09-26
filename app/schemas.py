@@ -416,7 +416,7 @@ class ApiKeyRead(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: str | None = None
     webhook_url: str | None = None
-    webhook_secret: str | None = None
+    webhook_secret: str | None = Field(default=None, max_length=255)
 
 
 class ApiKeyCreatedResponse(BaseModel):

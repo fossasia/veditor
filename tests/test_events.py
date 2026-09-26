@@ -1075,3 +1075,59 @@ def test_test_event_webhook_missing_url_raises_400(mock_db):
     )
     assert res.status_code == 400
     assert "No webhook URL provided or configured" in res.json()["detail"]
+
+
+def test_test_event_webhook_sso_rejected(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="sso", is_sso=True
+    )
+
+    res = client.post(
+        "/events/1/webhook/test",
+        json={"url": "https://example.com/webhook", "secret": "sec"},
+    )
+    assert res.status_code == 403
+    assert "SSO sessions are not permitted" in res.json()["detail"]
+
+
+def test_test_event_webhook_different_url_does_not_reuse_stored_secret(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    existing_client = models.Client(
+        id=10,
+        is_platform=False,
+        hashed_key="hash",
+        event_ids=[1],
+        webhook_url="https://configured.example.com/webhook",
+        webhook_secret="super-secret-12345",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    mock_db.query.return_value.filter.return_value.all.return_value = [existing_client]
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    # Calling with a different URL without supplying secret must fail with 400
+    res = client.post(
+        "/events/1/webhook/test",
+        json={"url": "https://attacker.example.com/steal-secret"},
+    )
+    assert res.status_code == 400
+    assert "No webhook secret provided or configured" in res.json()["detail"]
+
+
+def test_api_key_create_webhook_secret_length_limit():
+    from pydantic import ValidationError
+
+    from app.schemas import ApiKeyCreate
+
+    valid = ApiKeyCreate(webhook_secret="a" * 255)
+    assert valid.webhook_secret == "a" * 255
+
+    import pytest
+
+    with pytest.raises(ValidationError):
+        ApiKeyCreate(webhook_secret="a" * 256)

@@ -237,19 +237,14 @@ def create_event_sso_token(
 
 def _get_event_client(event_id: int, db: Session) -> models.Client | None:
     """Retrieve the primary Client record associated with this event."""
-    try:
-        clients = (
-            db.query(models.Client)
-            .filter(
-                models.Client.is_platform.is_(False),
-                models.Client.event_ids.any(event_id),
-            )
-            .all()
+    clients = (
+        db.query(models.Client)
+        .filter(
+            models.Client.is_platform.is_(False),
+            models.Client.event_ids.any(event_id),
         )
-    except Exception:  # noqa: BLE001
-        clients = (
-            db.query(models.Client).filter(models.Client.is_platform.is_(False)).all()
-        )
+        .all()
+    )
     matching = [c for c in clients if event_id in (c.event_ids or [])]
     return matching[0] if matching else None
 
@@ -525,15 +520,31 @@ def test_event_webhook(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Send a signed test ping webhook to verify destination URL and HMAC secret."""
+    if user.is_sso:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO sessions are not permitted to manage webhook settings",
+        )
     check_event_access(event_id, user, db)
     client = _get_event_client(event_id, db)
 
     target_url = (
         payload.url.strip() if payload.url and payload.url.strip() else None
     ) or (client.webhook_url if client else None)
-    target_secret = (
+
+    provided_secret = (
         payload.secret.strip() if payload.secret and payload.secret.strip() else None
-    ) or (client.webhook_secret if client else None)
+    )
+    if provided_secret:
+        target_secret = provided_secret
+    elif (
+        client
+        and client.webhook_secret
+        and (not payload.url or payload.url.strip() == client.webhook_url)
+    ):
+        target_secret = client.webhook_secret
+    else:
+        target_secret = None
 
     if not target_url:
         raise HTTPException(

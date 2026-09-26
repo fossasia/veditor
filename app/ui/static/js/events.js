@@ -411,6 +411,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const orig = btnCopySecret.textContent;
         btnCopySecret.textContent = 'Copied!';
         setTimeout(() => { btnCopySecret.textContent = orig; }, 2000);
+      }).catch(() => {
+        showWebhookAlert('Failed to copy secret to clipboard. Please copy it manually.', 'danger');
       });
     });
   }
