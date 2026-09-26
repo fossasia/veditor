@@ -96,15 +96,18 @@ def test_review_handlers_forward_user_id(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     payload = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.approve, note="LGTM"
     )
 
     resp = handle_approve(talk, payload, mock_db, user_id=99)
-    assert resp.talk.status == "pending_intro_outro"
+    assert resp.talk.status == "assembling"
     assert mock_db.add.called
-    added_review = mock_db.add.call_args[0][0]
+    added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+    added_review = next(obj for obj in added_objs if isinstance(obj, models.Review))
     assert added_review.user_id == 99
     assert added_review.decision == "approve"
 
@@ -126,7 +129,7 @@ def test_review_handlers_forward_user_id(mock_db):
         decision=schemas.ReviewDecision.reject, note="Rejected"
     )
     resp_rej = handle_reject(talk, payload_rej, mock_db, user_id=77)
-    assert resp_rej.talk.status == "rejected"
+    assert resp_rej.talk.status == "pending_bounds"
     added_review_rej = mock_db.add.call_args[0][0]
     assert added_review_rej.user_id == 77
 
@@ -255,6 +258,8 @@ def test_review_records_human_user_id(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     event = models.Event(id=1, name="Keynote Event", created_by_user_id=42)
 
@@ -289,6 +294,8 @@ def test_review_records_none_for_machine_client(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 
@@ -312,6 +319,8 @@ def test_review_machine_client_forbidden_event(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 
@@ -342,6 +351,8 @@ def test_legacy_get_client_override_in_get_current_user(mock_db):
         start=datetime.now(UTC),
         end=datetime.now(UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = talk
 
@@ -569,3 +580,158 @@ def test_delete_event_success_for_admin(mock_db):
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "deleted_id": 1}
     mock_db.delete.assert_called_with(event)
+
+
+# ---------------------------------------------------------------------------
+# API Key Management & SSO Tests
+# ---------------------------------------------------------------------------
+
+
+def test_list_event_api_keys(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    c1 = models.Client(id=101, name="Web Sync Key", hashed_key="abc", event_ids=[1])
+    c2 = models.Client(id=102, name="Other Key", hashed_key="def", event_ids=[2])
+
+    def mock_query(model):
+        m = MagicMock()
+        if model == models.Event:
+            m.filter.return_value.first.return_value = event
+        elif model == models.Client:
+            m.filter.return_value.all.return_value = [c1, c2]
+        return m
+
+    mock_db.query.side_effect = mock_query
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.get("/events/1/api-keys")
+    assert res.status_code == 200
+    keys = res.json()
+    assert len(keys) == 1
+    assert keys[0]["id"] == 101
+    assert keys[0]["name"] == "Web Sync Key"
+    assert "created_at" in keys[0]
+    assert "last_used_at" in keys[0]
+
+
+def test_create_event_api_key(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.post("/events/1/api-keys", json={"name": "My New Key"})
+    assert res.status_code == 201
+    data = res.json()
+    assert data["name"] == "My New Key"
+    assert "api_key" in data
+    assert data["api_key"].startswith("")
+    assert mock_db.add.called
+    assert mock_db.commit.called
+
+
+def test_api_key_management_forbidden_for_sso(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        role="organizer", source="sso", event_ids=[1]
+    )
+
+    res_get = client.get("/events/1/api-keys")
+    assert res_get.status_code == 403
+    assert (
+        "SSO sessions are not permitted to manage API keys" in res_get.json()["detail"]
+    )
+
+    res_post = client.post("/events/1/api-keys", json={"name": "Blocked"})
+    assert res_post.status_code == 403
+    assert (
+        "SSO sessions are not permitted to manage API keys" in res_post.json()["detail"]
+    )
+
+
+def test_revoke_event_api_key(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    c1 = models.Client(id=101, name="Web Sync Key", hashed_key="abc", event_ids=[1])
+
+    def mock_query(model):
+        m = MagicMock()
+        if model == models.Event:
+            m.filter.return_value.first.return_value = event
+        elif model == models.Client:
+            m.filter.return_value.first.return_value = c1
+        return m
+
+    mock_db.query.side_effect = mock_query
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.delete("/events/1/api-keys/101")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "deleted_id": 101}
+    mock_db.delete.assert_called_with(c1)
+
+
+def test_create_event_api_key_revokes_existing_keys(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    existing_c = models.Client(
+        id=99, name="Old Key", hashed_key="old_hash", event_ids=[1]
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    mock_db.query.return_value.filter.return_value.all.return_value = [existing_c]
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.post("/events/1/api-keys", json={"name": "Rotated Key"})
+    assert res.status_code == 201
+    assert mock_db.delete.called
+    assert mock_db.delete.call_args[0][0] == existing_c
+
+
+def test_revoke_multi_event_api_key_retains_other_events(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    c1 = models.Client(
+        id=101,
+        name="Shared Key",
+        hashed_key="hash1",
+        is_platform=False,
+        event_ids=[1, 2],
+    )
+    mock_db.query.return_value.filter.return_value.first.side_effect = [event, c1]
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.delete("/events/1/api-keys/101")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "deleted_id": 101}
+    assert not mock_db.delete.called
+    assert c1.event_ids == [2]
+
+
+def test_create_event_api_key_multi_event_retains_other_events(mock_db):
+    event = models.Event(id=1, name="Test Event", created_by_user_id=5)
+    existing_c = models.Client(
+        id=99, name="Shared Key", hashed_key="old_hash", event_ids=[1, 2]
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = event
+    mock_db.query.return_value.filter.return_value.all.return_value = [existing_c]
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    res = client.post("/events/1/api-keys", json={"name": "Rotated Key"})
+    assert res.status_code == 201
+    assert not mock_db.delete.called
+    assert existing_c.event_ids == [2]

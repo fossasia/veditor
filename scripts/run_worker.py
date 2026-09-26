@@ -6,18 +6,31 @@ Redis configuration from app.config.settings and eagerly importing task modules.
 
 import argparse
 import multiprocessing
+import os
 import sys
 
 import redis
 import redis.exceptions
-from rq import Worker
+from rq import Queue, Worker
 
 from app.config import settings
+from app.retention import register_periodic_retention_sweep
 
 
 def _run_single_worker(
-    queues: list[str], redis_url: str, name: str | None, burst: bool
+    queues: list[str],
+    redis_url: str,
+    name: str | None,
+    burst: bool,
+    with_scheduler: bool = False,
+    nice_level: int | None = None,
 ) -> None:
+    if nice_level is not None and hasattr(os, "nice"):
+        try:
+            os.nice(nice_level)
+        except OSError as exc:
+            print(f"Warning: Failed to set process niceness: {exc}", file=sys.stderr)
+
     # Eagerly import task modules in the worker process so job code is loaded
     # once at worker boot rather than re-imported per job fork.
     import app.tasks  # noqa: F401
@@ -26,7 +39,23 @@ def _run_single_worker(
     engine.dispose(close=False)
     redis_conn = redis.from_url(redis_url)
     worker = Worker(queues, connection=redis_conn, name=name)
-    worker.work(burst=burst)
+    if with_scheduler:
+        scheduler_queue = next(
+            (q for q in worker.queues if q.name == "light"),
+            worker.queues[0]
+            if worker.queues
+            else Queue("light", connection=redis_conn),
+        )
+        try:
+            register_periodic_retention_sweep(queue=scheduler_queue)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"Warning: Failed to register periodic retention sweep on worker startup: {exc}",
+                file=sys.stderr,
+            )
+        worker.work(burst=burst, with_scheduler=True)
+    else:
+        worker.work(burst=burst)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -56,6 +85,17 @@ def main(argv: list[str] | None = None) -> None:
         default=1,
         help="Number of worker processes to spawn (default: 1)",
     )
+    parser.add_argument(
+        "--with-scheduler",
+        action="store_true",
+        help="Run worker with scheduler enabled for periodic jobs",
+    )
+    parser.add_argument(
+        "--nice",
+        type=int,
+        default=None,
+        help="Process niceness level (default: None, e.g. 10 to yield CPU priority)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -81,16 +121,31 @@ def main(argv: list[str] | None = None) -> None:
         processes = []
         for i in range(args.concurrency):
             worker_name = f"{args.name}-{i + 1}" if args.name else None
+            is_sched = args.with_scheduler and (i == 0)
             p = ctx.Process(
                 target=_run_single_worker,
-                args=(queues, settings.redis_url, worker_name, args.burst),
+                args=(
+                    queues,
+                    settings.redis_url,
+                    worker_name,
+                    args.burst,
+                    is_sched,
+                    args.nice,
+                ),
             )
             p.start()
             processes.append(p)
         for p in processes:
             p.join()
     else:
-        _run_single_worker(queues, settings.redis_url, args.name, args.burst)
+        _run_single_worker(
+            queues,
+            settings.redis_url,
+            args.name,
+            args.burst,
+            args.with_scheduler,
+            args.nice,
+        )
 
 
 if __name__ == "__main__":

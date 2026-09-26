@@ -378,3 +378,182 @@ def test_normal_user_accessing_studio_events_redirects_to_studio_with_error(
     assert "You do not have the permission to access that page" in followed.text
     assert "alert alert-danger" in followed.text
     client.cookies.clear()
+
+
+def test_admin_viewing_other_organizer_talk_renders_view_only_mode(
+    client: TestClient, db_session
+):
+    """When an admin views a talk from another organizer's event, it renders in View-Only Mode."""
+    organizer = models.User(
+        email=f"org_{uuid.uuid4().hex[:6]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+        is_active=True,
+    )
+    admin = models.User(
+        email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
+        hashed_password="hash",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add_all([organizer, admin])
+    db_session.commit()
+
+    event = models.Event(
+        name="Other Organizer Event",
+        created_by_user_id=organizer.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Other Organizer Talk",
+        room="Room A",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert 'data-is-other-organizer="true"' in html
+    assert "studio-shell is-view-only" in html
+    assert "admin-view-only-banner" in html
+    assert 'id="banner-mode-text"' in html
+    assert (
+        f"Viewing another organizer's talk ({event.name}). Editing and pipeline actions are locked."
+        in html
+    )
+    assert "Enable Edit Mode" in html
+    assert "admin-confirm-edit-modal" in html
+    assert "btn-modal-confirm" in html
+    # Navigation back to admin's talk page
+    assert f'href="/admin/events/{event.id}"' in html
+    assert '<a href="/admin">Admin Console</a>' in html
+    assert '<a href="/admin/events">Events</a>' in html
+    assert (
+        f'<a href="/admin/events/{event.id}" class="breadcrumb-event">{event.name}</a>'
+        in html
+    )
+    assert (
+        f'<a href="/admin/events/{event.id}" class="btn btn-ghost btn-sm" id="btn-banner-back">'
+        in html
+    )
+    client.cookies.clear()
+
+
+def test_admin_viewing_own_talk_renders_editable_mode(client: TestClient, db_session):
+    """When an admin views a talk from their own event, it does not enable View-Only Mode."""
+    admin = models.User(
+        email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
+        hashed_password="hash",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    event = models.Event(
+        name="Admin's Own Event",
+        created_by_user_id=admin.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Admin's Own Talk",
+        room="Room B",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # When accessed directly from studio, back link points to /studio
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert 'data-is-other-organizer="false"' in html
+    assert "is-view-only" not in html
+    assert "admin-view-only-banner" not in html
+    assert "admin-confirm-edit-modal" not in html
+    assert '<a href="/studio" class="breadcrumb-back">&larr; Talks</a>' in html
+
+    # When accessed with an /admin referer header, back link still points to /studio without ?from=admin
+    res_referer = client.get(
+        f"/studio/talks/{talk.id}", headers={"referer": f"/admin/events/{event.id}"}
+    )
+    assert res_referer.status_code == 200
+    assert (
+        '<a href="/studio" class="breadcrumb-back">&larr; Talks</a>' in res_referer.text
+    )
+
+    # When accessed from admin area (?from=admin), back link points to admin talk page
+    res_admin = client.get(f"/studio/talks/{talk.id}?from=admin")
+    assert res_admin.status_code == 200
+    html_admin = res_admin.text
+    assert '<a href="/admin">Admin Console</a>' in html_admin
+    assert '<a href="/admin/events">Events</a>' in html_admin
+    assert f'<a href="/admin/events/{event.id}" class="breadcrumb-event">' in html_admin
+
+    client.cookies.clear()
+
+
+def test_organizer_viewing_own_talk_renders_editable_mode(
+    client: TestClient, db_session
+):
+    """When an organizer views their own talk, it does not enable View-Only Mode."""
+    organizer = models.User(
+        email=f"org_{uuid.uuid4().hex[:6]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+        is_active=True,
+    )
+    db_session.add(organizer)
+    db_session.commit()
+
+    event = models.Event(
+        name="Organizer Event",
+        created_by_user_id=organizer.id,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Organizer Talk",
+        room="Room C",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(organizer.id, organizer.role)
+    client.cookies.set("veditor_session", token)
+
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert 'data-is-other-organizer="false"' in html
+    assert "is-view-only" not in html
+    assert "admin-view-only-banner" not in html
+    assert "admin-confirm-edit-modal" not in html
+    assert '<a href="/studio" class="breadcrumb-back">&larr; Talks</a>' in html
+    client.cookies.clear()

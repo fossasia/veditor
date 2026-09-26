@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import models, schemas
@@ -176,12 +177,12 @@ def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status
 @pytest.mark.parametrize(
     ("decision", "note", "expected_status"),
     [
-        ("approve", None, "pending_intro_outro"),
-        ("approve", "Looks great!", "pending_intro_outro"),
+        ("approve", None, "assembling"),
+        ("approve", "Looks great!", "assembling"),
         ("needs_work", None, "pending_bounds"),
         ("needs_work", "Audio is cut off at the start", "pending_bounds"),
-        ("reject", None, "rejected"),
-        ("reject", "Not suitable for publication", "rejected"),
+        ("reject", None, "pending_bounds"),
+        ("reject", "Not suitable for publication", "pending_bounds"),
     ],
 )
 def test_review_valid_decisions_success(
@@ -220,7 +221,22 @@ def test_review_valid_decisions_success(
     assert data["review"]["note"] == note
     assert "created_at" in data["review"]
     assert data["review"]["created_at"] is not None
-    mock_db.add.assert_called_once()
+    if decision == "approve":
+        assert mock_db.add.call_count == 2
+
+        # Verify the second added object is ApprovedCut
+        added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+        review_obj = added_objs[0]
+        approved_cut_obj = added_objs[1]
+
+        assert isinstance(approved_cut_obj, models.ApprovedCut)
+        assert approved_cut_obj.talk_id == preview_talk.id
+        assert approved_cut_obj.cut_start == 10.0
+        assert approved_cut_obj.cut_end == 60.0
+        assert approved_cut_obj.review == review_obj
+    else:
+        mock_db.add.assert_called_once()
+
     mock_db.flush.assert_called_once()
     mock_db.commit.assert_called_once()
 
@@ -274,16 +290,18 @@ def test_review_dispatch_invokes_correct_handler(
 
 def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
     """Directly test handle_approve, handle_needs_work, handle_reject with DB transaction."""
-    # Test handle_approve -> pending_intro_outro
+    # Test handle_approve -> assembling
     req_approve = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.approve, note="Approve note"
     )
-    resp_approve = handle_approve(preview_talk, req_approve, mock_db)
-    assert resp_approve.talk.id == preview_talk.id
-    assert resp_approve.talk.status == "pending_intro_outro"
-    assert resp_approve.review is not None
-    assert resp_approve.review.decision == "approve"
-    assert resp_approve.review.note == "Approve note"
+    with patch("app.tasks.dispatch_assembly") as mock_dispatch:
+        resp_approve = handle_approve(preview_talk, req_approve, mock_db)
+        assert resp_approve.talk.id == preview_talk.id
+        assert resp_approve.talk.status == "assembling"
+        assert resp_approve.review is not None
+        assert resp_approve.review.decision == "approve"
+        assert resp_approve.review.note == "Approve note"
+        mock_dispatch.assert_called_once()
 
     # Reset talk status for needs_work test
     preview_talk.status = "preview"
@@ -297,26 +315,26 @@ def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
     assert resp_work.review.decision == "needs_work"
     assert resp_work.review.note == "Fix cut"
 
-    # Reset talk status for reject test -> rejected
+    # Reset talk status for reject test -> pending_bounds
     preview_talk.status = "preview"
     req_reject = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.reject, note="Reset bounds"
     )
     resp_reject = handle_reject(preview_talk, req_reject, mock_db)
     assert resp_reject.talk.id == preview_talk.id
-    assert resp_reject.talk.status == "rejected"
+    assert resp_reject.talk.status == "pending_bounds"
     assert resp_reject.talk.cut_start is None
     assert resp_reject.talk.cut_end is None
     assert preview_talk.cut_start is None
     assert preview_talk.cut_end is None
-    assert preview_talk.status == "rejected"
+    assert preview_talk.status == "pending_bounds"
     assert resp_reject.review is not None
     assert resp_reject.review.decision == "reject"
     assert resp_reject.review.note == "Reset bounds"
 
 
 def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
-    """Rejecting a talk in preview clears cut bounds, transitions to rejected, purges cut/preview files, and enqueues no jobs."""
+    """Rejecting a talk in preview clears cut bounds, transitions to pending_bounds, purges cut/preview files, and enqueues no jobs."""
     talk = models.Talk(
         id=42,
         event_id=1,
@@ -350,7 +368,7 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["talk"]["status"] == "rejected"
+        assert data["talk"]["status"] == "pending_bounds"
         assert data["talk"]["cut_start"] is None
         assert data["talk"]["cut_end"] is None
         assert data["talk"]["raw_duration_seconds"] == 120.0
@@ -358,7 +376,7 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
         assert data["review"]["note"] == "Bounds inaccurate, reset to raw"
         assert talk.cut_start is None
         assert talk.cut_end is None
-        assert talk.status == "rejected"
+        assert talk.status == "pending_bounds"
 
         assert not fake_storage.exists("42/cut/cut.mp4")
         assert not fake_storage.exists("42/preview/preview.mp4")
@@ -404,11 +422,11 @@ def test_handle_reject_storage_delete_error_resilient(mock_db):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["talk"]["status"] == "rejected"
+    assert data["talk"]["status"] == "pending_bounds"
     assert data["talk"]["cut_start"] is None
     assert data["talk"]["cut_end"] is None
     assert data["review"]["decision"] == "reject"
-    assert talk.status == "rejected"
+    assert talk.status == "pending_bounds"
     assert talk.cut_start is None
     assert talk.cut_end is None
 
@@ -579,6 +597,8 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
         status="preview",
+        cut_start=10.0,
+        cut_end=60.0,
     )
     db.add(talk)
     db.commit()
@@ -609,7 +629,7 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         assert len(reviews) == 1
 
         final_talk = db.query(models.Talk).filter(models.Talk.id == talk_id).one()
-        assert final_talk.status in ("pending_intro_outro", "pending_bounds")
+        assert final_talk.status in ("assembling", "pending_bounds")
         assert final_talk.status != "preview"
         assert reviews[0].decision in ("approve", "needs_work")
         db.close()
@@ -623,15 +643,12 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         clean_db.close()
 
 
-def test_approve_blocks_at_pending_intro_outro_without_enqueuing_jobs(
-    mock_db, preview_talk
-):
+def test_approve_advances_to_assembling_and_dispatches_assembly(mock_db, preview_talk):
     """
     Acceptance Criteria:
-    - POST /talks/{id}/review with approve transitions talk to 'pending_intro_outro'.
-    - No RQ job is enqueued as a direct result of this transition.
-    - No Job model record is created in the database.
-    - The talk remains parked in 'pending_intro_outro' without auto-advancing.
+    - POST /talks/{id}/review with approve transitions talk to 'assembling'.
+    - Calls dispatch_assembly to initiate final encoding pipeline.
+    - Review model record is created in the database.
     """
     mock_client = models.Client(id=1, event_ids=[1])
     mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
@@ -639,32 +656,28 @@ def test_approve_blocks_at_pending_intro_outro_without_enqueuing_jobs(
     app.dependency_overrides[get_client] = lambda: mock_client
     app.dependency_overrides[get_db] = lambda: mock_db
 
-    with (
-        patch("app.queue.light_queue.enqueue") as mock_light_enqueue,
-        patch("app.queue.heavy_queue.enqueue") as mock_heavy_enqueue,
-    ):
-        response = client.post(
-            f"/talks/{preview_talk.id}/review",
-            json={"decision": "approve", "note": "Approved by speaker"},
-            headers={"X-API-Key": "valid_key"},
-        )
+    try:
+        with patch("app.tasks.dispatch_assembly") as mock_dispatch:
+            response = client.post(
+                f"/talks/{preview_talk.id}/review",
+                json={"decision": "approve", "note": "Approved by speaker"},
+                headers={"X-API-Key": "valid_key"},
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["talk"]["status"] == "pending_intro_outro"
-        assert preview_talk.status == "pending_intro_outro"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["talk"]["status"] == "assembling"
+            assert preview_talk.status == "assembling"
 
-        # Explicit non-enqueue on this path
-        mock_light_enqueue.assert_not_called()
-        mock_heavy_enqueue.assert_not_called()
+            mock_dispatch.assert_called_once()
 
-        # Verify only Review was added to db, no Job model was created
-        added_types = [type(call[0][0]) for call in mock_db.add.call_args_list]
-        assert models.Review in added_types
-        assert models.Job not in added_types
+            # Verify Review was added to db
+            added_types = [type(call[0][0]) for call in mock_db.add.call_args_list]
+            assert models.Review in added_types
 
-        # Talk remains parked in pending_intro_outro without auto-progression
-        assert preview_talk.status == "pending_intro_outro"
+            assert preview_talk.status == "assembling"
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_review_needs_work_transitions_to_pending_bounds_retains_offsets_and_no_job_enqueued(
@@ -945,7 +958,7 @@ def test_review_human_organizer_owned_event_success(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["talk"]["status"] == "pending_intro_outro"
+    assert data["talk"]["status"] == "assembling"
     assert data["review"]["user_id"] == 10
 
 
@@ -980,5 +993,119 @@ def test_review_human_admin_success(mock_db, preview_talk, fake_storage):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["talk"]["status"] == "pending_intro_outro"
+    assert data["talk"]["status"] == "assembling"
     assert data["review"]["user_id"] == 1
+
+
+def test_review_multiple_approvals_create_multiple_rows(mock_db, preview_talk):
+    """A talk that goes needs_work and is approved on a later pass has one ApprovedCut row per approval, not one overwritten row."""
+    # First approve
+    req_approve1 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+    handle_approve(preview_talk, req_approve1, mock_db)
+
+    # Then needs work
+    preview_talk.status = "preview"
+    req_needs_work = schemas.ReviewRequest(decision=schemas.ReviewDecision.needs_work)
+    handle_needs_work(preview_talk, req_needs_work, mock_db)
+
+    # Second approve with different bounds
+    preview_talk.status = "preview"
+    preview_talk.cut_start = 12.0
+    preview_talk.cut_end = 55.0
+    req_approve2 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+    handle_approve(preview_talk, req_approve2, mock_db)
+
+    # Verify mock_db.add was called multiple times, creating multiple ApprovedCut rows
+    added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+
+    # We should have two ApprovedCuts (one for each approve)
+    approved_cuts = [obj for obj in added_objs if isinstance(obj, models.ApprovedCut)]
+    assert len(approved_cuts) == 2
+
+    assert approved_cuts[0].cut_start == 10.0
+    assert approved_cuts[0].cut_end == 60.0
+
+    assert approved_cuts[1].cut_start == 12.0
+    assert approved_cuts[1].cut_end == 55.0
+
+
+@pytest.mark.parametrize(
+    ("cut_start", "cut_end"),
+    [
+        (None, 60.0),
+        (10.0, None),
+        (None, None),
+    ],
+)
+def test_review_approve_missing_bounds_returns_400(
+    mock_db, preview_talk, cut_start, cut_end
+):
+    """POST /talks/{id}/review returns 400 when approving a talk without cut bounds."""
+    preview_talk.cut_start = cut_start
+    preview_talk.cut_end = cut_end
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        "/talks/1/review",
+        json={"decision": "approve"},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cannot approve a talk without cut bounds."
+    mock_db.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("cut_start", "cut_end"),
+    [
+        (None, 60.0),
+        (10.0, None),
+        (None, None),
+    ],
+)
+def test_handle_approve_missing_bounds_raises_http_exception(
+    mock_db, preview_talk, cut_start, cut_end
+):
+    """handle_approve raises HTTPException(400) when talk lacks cut bounds."""
+    preview_talk.cut_start = cut_start
+    preview_talk.cut_end = cut_end
+    payload = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+
+    with pytest.raises(HTTPException) as exc_info:
+        handle_approve(preview_talk, payload, mock_db)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot approve a talk without cut bounds."
+
+
+def test_handle_approve_dispatch_failure_advances_to_broken(
+    mock_db, preview_talk, fake_storage
+):
+    """When dispatch_assembly fails during approve, talk advances to broken, logs error, and raises."""
+    payload = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
+
+    with (
+        patch(
+            "app.tasks.dispatch_assembly",
+            side_effect=RuntimeError("RQ queue failure"),
+        ),
+        pytest.raises(RuntimeError, match="RQ queue failure"),
+    ):
+        handle_approve(preview_talk, payload, mock_db, storage=fake_storage)
+
+    assert preview_talk.status == "broken"
+    assert any(
+        isinstance(call.args[0], models.Job)
+        and call.args[0].kind == "assembly"
+        and call.args[0].status == "failed"
+        and call.args[0].log_path == f"{preview_talk.id}/logs/assembly.log"
+        for call in mock_db.add.call_args_list
+    )
+    assert fake_storage.exists(f"{preview_talk.id}/logs/assembly.log")
+    assert (
+        b"RQ queue failure"
+        in fake_storage.get(f"{preview_talk.id}/logs/assembly.log").read_bytes()
+    )

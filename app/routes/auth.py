@@ -64,6 +64,15 @@ def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> s
     return cleaned
 
 
+def _sync_speaker_role(user: models.User, db: Session, email: str) -> None:
+    if (
+        user.role == "user"
+        and db.query(models.Talk).filter(models.Talk.speaker_email == email).first()
+    ):
+        user.role = "speaker"
+        db.commit()
+
+
 def _get_authenticated_user_from_cookie(
     request: Request, db: Session
 ) -> models.User | None:
@@ -134,6 +143,8 @@ def login_submit(
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
+
+    _sync_speaker_role(user, db, clean_email)
 
     token = create_session_token(user.id, user.role)
     redirect_target = _get_safe_redirect_target(next, default="/studio")
@@ -230,10 +241,15 @@ def signup_submit(
 
     hashed = hash_password(password)
 
+    has_talk = (
+        db.query(models.Talk).filter(models.Talk.speaker_email == clean_email).first()
+    )
+    user_role = "speaker" if has_talk else "user"
+
     user = models.User(
         email=clean_email,
         hashed_password=hashed,
-        role="user",
+        role=user_role,
         is_active=True,
     )
     db.add(user)
@@ -342,6 +358,8 @@ async def api_auth_token(
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    _sync_speaker_role(user, db, clean_email)
 
     token = create_access_token(
         user_id=user.id,

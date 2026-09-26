@@ -88,3 +88,9 @@ def test_generate_outro_clip_invalid_arguments(tmp_path: Path):
             output_path=output_clip,
             resolution=(8, 8),
         )
+
+    with pytest.raises(ValueError, match="threads must be positive"):
+        generate_outro_clip(
+            output_path=output_clip,
+            threads=-1,
+        )

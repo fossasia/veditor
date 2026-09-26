@@ -102,14 +102,6 @@ window.VEditorConfig = window.VEditorConfig || {
     return path === '/studio' || path.startsWith('/studio/');
   }
 
-  function checkSpeakerStudioMode() {
-    if (document.body && document.body.classList.contains('is-speaker')) {
-      document.documentElement.setAttribute('data-sidebar', 'hidden');
-      return true;
-    }
-    return false;
-  }
-
   function getInitialSidebarCollapsed() {
     const saved = localStorage.getItem('veditor_sidebar_state');
     if (saved === 'collapsed') return true;
@@ -119,9 +111,6 @@ window.VEditorConfig = window.VEditorConfig || {
   }
 
   function setSidebarCollapsed(collapsed, persist = true) {
-    if (document.documentElement.getAttribute('data-sidebar') === 'hidden') {
-      return;
-    }
     const state = collapsed ? 'collapsed' : 'expanded';
     document.documentElement.setAttribute('data-sidebar', state);
     if (persist) {
@@ -150,25 +139,21 @@ window.VEditorConfig = window.VEditorConfig || {
   window.setSidebarCollapsed = setSidebarCollapsed;
 
   // Immediate init before DOM paints to prevent flash
-  if (!checkSpeakerStudioMode()) {
-    const initialCollapse = getInitialSidebarCollapsed();
-    document.documentElement.setAttribute('data-sidebar', initialCollapse ? 'collapsed' : 'expanded');
-  }
+  const initialCollapse = getInitialSidebarCollapsed();
+  document.documentElement.setAttribute('data-sidebar', initialCollapse ? 'collapsed' : 'expanded');
 
   document.addEventListener('DOMContentLoaded', () => {
-    if (!checkSpeakerStudioMode()) {
-      const shouldCollapse = getInitialSidebarCollapsed();
-      setSidebarCollapsed(shouldCollapse, false);
+    const shouldCollapse = getInitialSidebarCollapsed();
+    setSidebarCollapsed(shouldCollapse, false);
 
-      const toggleBtn = document.getElementById('sidebar-toggle-btn');
-      if (toggleBtn) {
-        toggleBtn.addEventListener('click', window.toggleSidebar);
-      }
+    const toggleBtn = document.getElementById('sidebar-toggle-btn');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', window.toggleSidebar);
+    }
 
-      const collapseBtn = document.getElementById('sidebar-collapse-btn');
-      if (collapseBtn) {
-        collapseBtn.addEventListener('click', () => setSidebarCollapsed(true));
-      }
+    const collapseBtn = document.getElementById('sidebar-collapse-btn');
+    if (collapseBtn) {
+      collapseBtn.addEventListener('click', () => setSidebarCollapsed(true));
     }
   });
 })();
@@ -180,8 +165,6 @@ window.getApiKey = function () {
 
 window.setApiKey = function (key) {
   localStorage.setItem('veditor_api_key', key);
-  const secure = location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = "veditor_api_key=" + encodeURIComponent(key) + "; path=/; max-age=31536000; SameSite=Lax" + secure;
 };
 
 window.getUserRole = function () {
@@ -197,15 +180,14 @@ window.setUserRole = function (role) {
 window.authFetch = function (url, options = {}) {
   options.headers = options.headers || {};
   const isSessionLoggedIn = Boolean(
-    document.querySelector('.user-email') ||
-    document.getElementById('logout-btn')
+    document.querySelector('.user-email')
   );
   if (!isSessionLoggedIn) {
     const key = window.getApiKey();
     if (key) {
       if (options.headers instanceof Headers) {
-        options.headers.set('X-API-Key', key);
-      } else {
+        if (!options.headers.has('X-API-Key')) options.headers.set('X-API-Key', key);
+      } else if (!options.headers['X-API-Key']) {
         options.headers['X-API-Key'] = key;
       }
     }

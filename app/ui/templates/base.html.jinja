@@ -56,10 +56,14 @@
             <div class="user-dropdown" id="user-dropdown-menu">
               <div class="user-dropdown-header">
                 <span class="user-dropdown-label">Signed in as</span>
-                {% if user.is_sso %}
-                  <span class="user-email">SSO ({{ user.role | capitalize }})</span>
-                {% elif user.email %}
+                {% if user.email %}
                   <span class="user-email" title="{{ user.email }}">{{ user.email }}</span>
+                {% elif user.display_name %}
+                  <span class="user-email" title="{{ user.display_name }}">{{ user.display_name }}</span>
+                {% elif user.is_sso %}
+                  <span class="user-email">SSO ({{ user.role | capitalize }})</span>
+                {% else %}
+                  <span class="user-email">{{ user.role | capitalize }}</span>
                 {% endif %}
               </div>
               <div class="user-dropdown-divider"></div>

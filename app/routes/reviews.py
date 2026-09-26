@@ -44,7 +44,7 @@ def review_talk(
             detail="Talk not found",
         )
 
-    if user.source == "sso":
+    if user.source == "sso" or user.role == "speaker":
         check_talk_access(talk, user, db)
     else:
         if user.role not in ("organizer", "admin") and not user.is_machine:

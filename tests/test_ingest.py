@@ -11,6 +11,9 @@ from app.config import settings
 from app.ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
+    get_bumper_staging_dir,
+    get_upload_staging_dir,
+    stage_custom_clip,
     stage_recording,
 )
 from app.schemas import RecordingIngestRequest
@@ -424,3 +427,38 @@ def test_stage_recording_extreme_multiplier_no_overflow(ingest_root, mock_backen
         assert exc_info.value.required_bytes > 1024 * 1024 * 1024
     finally:
         settings.disk_guard_multiplier = original_multiplier
+
+
+def test_stage_custom_clip_rejects_unscoped_shared_staging_path(
+    ingest_root, mock_backend, tmp_path, monkeypatch
+):
+    shared_staging = tmp_path / "veditor_staging"
+    shared_staging.mkdir()
+    unauthorized = shared_staging / "unscoped.mp4"
+    create_test_video(unauthorized)
+    monkeypatch.setattr("app.ingest.tempfile.gettempdir", lambda: str(tmp_path))
+
+    with pytest.raises(IngestPathRejectedError):
+        stage_custom_clip(1, str(unauthorized), "intro", mock_backend)
+
+    mock_backend.put.assert_not_called()
+
+
+def test_get_upload_staging_dir_with_ingest_roots(ingest_root):
+    staging_dir = get_upload_staging_dir()
+    assert staging_dir == ingest_root.resolve()
+    assert staging_dir.is_dir()
+
+
+def test_get_upload_staging_dir_without_ingest_roots(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "ingest_roots", [])
+    monkeypatch.setattr("app.ingest.tempfile.gettempdir", lambda: str(tmp_path))
+    staging_dir = get_upload_staging_dir()
+    assert staging_dir == (tmp_path / "veditor_staging").resolve()
+    assert staging_dir.is_dir()
+
+
+def test_get_bumper_staging_dir_nests_under_upload_staging_dir(ingest_root):
+    bumper_dir = get_bumper_staging_dir()
+    assert bumper_dir == ingest_root.resolve() / "bumpers"
+    assert bumper_dir.is_dir()

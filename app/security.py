@@ -217,6 +217,8 @@ def create_sso_token(
     scope_id: int,
     role: str,
     expires_in_seconds: int | None = None,
+    email: str | None = None,
+    display_name: str | None = None,
 ) -> str:
     """
     Generates a short-lived signed SSO token scoped to an event or talk,
@@ -228,6 +230,12 @@ def create_sso_token(
         raise ValueError("scope_id must be a positive integer")
     if role not in ("organizer", "speaker"):
         raise ValueError("role must be 'organizer' or 'speaker'")
+    if (
+        scope_type == "event"
+        and role == "speaker"
+        and (not isinstance(email, str) or not email.strip())
+    ):
+        raise ValueError("email is required for event-scoped speaker tokens")
     if expires_in_seconds is not None and (
         not isinstance(expires_in_seconds, int)
         or isinstance(expires_in_seconds, bool)
@@ -249,6 +257,10 @@ def create_sso_token(
         "iat": now,
         "exp": now + timedelta(seconds=expiry),
     }
+    if email and isinstance(email, str) and email.strip():
+        payload["email"] = email.strip()
+    if display_name and isinstance(display_name, str) and display_name.strip():
+        payload["display_name"] = display_name.strip()
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
@@ -269,7 +281,7 @@ def decode_sso_token(token: str) -> dict | None:
         )
         if payload.get("type") != "sso":
             return None
-        if "user_id" in payload or "sub" in payload or "email" in payload:
+        if "user_id" in payload or "sub" in payload:
             return None
         if payload.get("scope_type") not in ("event", "talk"):
             return None
@@ -277,6 +289,15 @@ def decode_sso_token(token: str) -> dict | None:
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
         if payload.get("role") not in ("organizer", "speaker"):
+            return None
+        if (
+            payload.get("scope_type") == "event"
+            and payload.get("role") == "speaker"
+            and (
+                not isinstance(payload.get("email"), str)
+                or not payload["email"].strip()
+            )
+        ):
             return None
         return payload
     except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:

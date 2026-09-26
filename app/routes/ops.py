@@ -21,9 +21,14 @@ def list_talks(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Lists talks with current state, across events an operator's key can see."""
-    talks = (
-        db.query(models.Talk).filter(models.Talk.event_id.in_(client.event_ids)).all()
-    )
+    if getattr(client, "is_platform", False):
+        talks = db.query(models.Talk).all()
+    else:
+        talks = (
+            db.query(models.Talk)
+            .filter(models.Talk.event_id.in_(client.event_ids))
+            .all()
+        )
     return talks
 
 

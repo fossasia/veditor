@@ -63,6 +63,7 @@ def cut(
     end_seconds: float,
     *,
     force_reencode: bool = False,
+    threads: int | None = None,
 ) -> CutStrategy:
     """Trim an input recording to the [start_seconds, end_seconds] window.
 
@@ -72,6 +73,7 @@ def cut(
         start_seconds: Start timestamp in seconds (non-negative).
         end_seconds: End timestamp in seconds (greater than start_seconds).
         force_reencode: If True, bypass stream-copy and perform full re-encode.
+        threads: Optional thread limit for video re-encoding fallback.
 
     Returns:
         CutStrategy: Either CutStrategy.STREAM_COPY or CutStrategy.RE_ENCODE.
@@ -99,6 +101,9 @@ def cut(
             f"end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})"
         )
 
+    if threads is not None and threads <= 0:
+        raise ValueError(f"threads must be greater than zero: {threads}")
+
     # storage-boundary-exempt: creating parent directory for pipeline output
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -113,7 +118,9 @@ def cut(
                 exc,
             )
 
-    return _cut_reencode(str(in_path), str(out_path), start_seconds, end_seconds)
+    return _cut_reencode(
+        str(in_path), str(out_path), start_seconds, end_seconds, threads=threads
+    )
 
 
 def _cut_stream_copy(
@@ -207,17 +214,20 @@ def _add_video_stream(
     container: av.container.OutputContainer,
     preferred_encoder: str,
     rate: Any,
+    options: dict[str, str] | None = None,
 ) -> av.stream.Stream:
     """Add a video stream with preferred encoder, falling back to libx264 if incompatible."""
     try:
-        return container.add_stream(preferred_encoder, rate=rate)
+        return container.add_stream(preferred_encoder, rate=rate, options=options)
     except (ValueError, av.FFmpegError) as exc:
         logger.warning(
             "Video encoder '%s' not supported by container (%s); falling back to 'libx264'.",
             preferred_encoder,
             exc,
         )
-        return container.add_stream("libx264", rate=rate)
+        fallback_options = dict(options) if options else {}
+        fallback_options.setdefault("preset", "veryfast")
+        return container.add_stream("libx264", rate=rate, options=fallback_options)
 
 
 def _add_audio_stream(
@@ -242,6 +252,7 @@ def _cut_reencode(
     output_path: str,
     start_seconds: float,
     end_seconds: float,
+    threads: int | None = None,
 ) -> CutStrategy:
     """Full frame decode and re-encode fallback."""
     with av.open(input_path) as in_container:
@@ -265,7 +276,17 @@ def _cut_reencode(
                 in_v = video_streams[0]
                 encoder_name = _resolve_video_encoder(in_v.codec_context.name)
                 fps = in_v.average_rate or in_v.guessed_rate or 24
-                out_video = _add_video_stream(out_container, encoder_name, rate=fps)
+                video_options: dict[str, str] = {}
+                if encoder_name == "libx264":
+                    video_options["preset"] = "veryfast"
+                if threads is not None:
+                    video_options["threads"] = str(threads)
+                out_video = _add_video_stream(
+                    out_container,
+                    encoder_name,
+                    rate=fps,
+                    options=video_options or None,
+                )
                 out_video.width = in_v.codec_context.width
                 out_video.height = in_v.codec_context.height
                 out_video.pix_fmt = in_v.codec_context.pix_fmt or "yuv420p"

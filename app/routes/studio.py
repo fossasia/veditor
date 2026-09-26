@@ -13,10 +13,11 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
-from app.auth import hash_api_key
+from app.auth import CurrentUser, hash_api_key
 from app.config import settings
 from app.db import get_db
 from app.queue import light_queue
@@ -30,6 +31,21 @@ from app.ui.templating import templates
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/studio", tags=["studio"])
+
+# Characters that would end a URL path early. The ASGI path is decoded, so a
+# room named "Q&A?" must have these re-escaped before the path is reused.
+_PATH_DELIMITERS = str.maketrans({"%": "%25", "?": "%3F", "#": "%23"})
+
+
+def _request_path_and_query(request: Request) -> tuple[str, str]:
+    """Return the decoded path and raw query string from the ASGI scope.
+
+    request.url re-parses the decoded path, so a "?" or "#" in a room name
+    would cut the path short there; the scope keeps them intact.
+    """
+    path = request.scope.get("root_path", "") + request.scope["path"]
+    query = request.scope.get("query_string", b"").decode("latin-1")
+    return path, query
 
 
 def get_ui_client(
@@ -97,20 +113,38 @@ def _authorize_studio_talk(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=not_found_detail,
                 )
-            if (
+            authorized = (
                 sso_payload.get("scope_type") == "talk"
                 and sso_payload.get("scope_id") == talk.id
-            ):
-                return talk
-            if (
+            ) or (
                 sso_payload.get("scope_type") == "event"
                 and sso_payload.get("scope_id") == talk.event_id
-            ):
-                return talk
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=not_found_detail,
+                and (
+                    sso_payload.get("role") != "speaker"
+                    or (
+                        talk.speaker_email
+                        and talk.speaker_email.lower() == sso_payload["email"].lower()
+                    )
+                )
             )
+            if not authorized:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=not_found_detail,
+                )
+            if hasattr(request, "state"):
+                request.state.user = CurrentUser(
+                    email=sso_payload.get("email"),
+                    display_name=sso_payload.get("display_name"),
+                    role=sso_payload["role"],
+                    source="sso",
+                    event_ids=[sso_payload["scope_id"]]
+                    if sso_payload.get("scope_type") == "event"
+                    else [],
+                    scope_type=sso_payload.get("scope_type"),
+                    scope_id=sso_payload.get("scope_id"),
+                )
+            return talk
 
     user = _get_authenticated_user_from_cookie(request, db)
     if user:
@@ -125,26 +159,37 @@ def _authorize_studio_talk(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=not_found_detail,
             )
-        if user.role == "admin":
-            return talk
-        if talk.event and talk.event.created_by_user_id == user.id:
-            return talk
-        api_key = request.headers.get("X-API-Key") or request.cookies.get(
-            "veditor_api_key"
-        )
-        if api_key:
-            hashed_key = hash_api_key(api_key)
-            client = (
-                db.query(models.Client)
-                .filter(models.Client.hashed_key == hashed_key)
-                .first()
+        authorized = (
+            user.role == "admin"
+            or (
+                user.role == "speaker"
+                and talk.speaker_email
+                and user.email
+                and talk.speaker_email.lower() == user.email.lower()
             )
-            if client and talk.event_id in client.event_ids:
-                return talk
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=not_found_detail,
+            or bool(talk.event and talk.event.created_by_user_id == user.id)
         )
+        if not authorized:
+            api_key = request.headers.get("X-API-Key") or request.cookies.get(
+                "veditor_api_key"
+            )
+            if api_key:
+                hashed_key = hash_api_key(api_key)
+                client = (
+                    db.query(models.Client)
+                    .filter(models.Client.hashed_key == hashed_key)
+                    .first()
+                )
+                if client and talk.event_id in client.event_ids:
+                    authorized = True
+        if not authorized:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
+            )
+        if hasattr(request, "state"):
+            request.state.user = user
+        return talk
 
     api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
     if not api_key:
@@ -219,14 +264,14 @@ MILESTONES_DEF = [
 STAGE_MILESTONE_MAP = {
     "waiting_for_files": 0,
     "detecting": 0,
-    "pending_approval": 1,
+    "pending_approval": 0,
+    "pending_intro_outro": 0,
+    "rejected": 0,
     "pending_bounds": 1,
-    "rejected": 1,
+    "needs_work": 1,
     "cutting": 2,
     "generating_previews": 2,
     "preview": 2,
-    "needs_work": 2,
-    "pending_intro_outro": 3,
     "assembling": 3,
     "transcoding": 3,
     "uploading": 3,
@@ -258,7 +303,7 @@ def dashboard(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
-    event_id: int | None = None,
+    event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
     sso_token: str | None = None,
@@ -300,7 +345,68 @@ def dashboard(
         )
         return resp
 
-    # 2. Check for authenticated user or active SSO session in cookie
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=event_id,
+        status_filter=status_filter,
+        q=q,
+    )
+
+
+@router.get("/rooms/{room_name:path}", response_class=HTMLResponse)
+def room_talks(
+    request: Request,
+    room_name: str,
+    db: Annotated[Session, Depends(get_db)],
+    client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
+    event_id: str | None = None,
+    status_filter: str | None = None,
+    q: str | None = None,
+):
+    return _render_talks_page(
+        request,
+        db,
+        client,
+        event_id=event_id,
+        status_filter=status_filter,
+        q=q,
+        room=room_name,
+    )
+
+
+def _resolve_event_id(
+    event_id: str | int | None,
+    scoped_events: list[models.Event],
+) -> int | None:
+    """Resolve an event_id given as a numeric id or as an external_id/slug.
+
+    external_id is only unique per source, so a slug is resolved against the
+    caller's own events. Anything else resolves to -1, which matches no talk.
+    """
+    if event_id is None:
+        return None
+    if isinstance(event_id, int):
+        return event_id
+    slug = str(event_id)
+    if slug.isdigit():
+        return int(slug)
+    return next((e.id for e in scoped_events if e.external_id == slug), -1)
+
+
+def _render_talks_page(
+    request: Request,
+    db: Session,
+    client: models.Client | None,
+    *,
+    event_id: str | int | None,
+    status_filter: str | None,
+    q: str | None,
+    room: str | None = None,
+):
+    """Render the talks list, scoped to the caller and optionally to an event/room."""
+    # Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
     cookie_token = request.cookies.get("veditor_session")
     sso_user = decode_sso_token(cookie_token) if (not user and cookie_token) else None
@@ -312,8 +418,15 @@ def dashboard(
         )
 
     if not user and not sso_user and client is None:
+        # Send the user back to this exact page (path + filters) after login.
+        # Only path delimiters are re-escaped so the whole target is encoded
+        # once as the `next` value (spaces become %20, not %2520).
+        path, query = _request_path_and_query(request)
+        login_next = path.translate(_PATH_DELIMITERS)
+        if query:
+            login_next += f"?{query}"
         resp = RedirectResponse(
-            url="/login?next=/studio",
+            url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
             status_code=status.HTTP_302_FOUND,
         )
         if request.cookies.get("veditor_api_key"):
@@ -326,60 +439,51 @@ def dashboard(
                 url=f"/studio/talks/{sso_user['scope_id']}",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
-        scoped_event_id = sso_user["scope_id"]
-        event_id = scoped_event_id
-        user_events = (
-            db.query(models.Event).filter(models.Event.id == scoped_event_id).all()
-        )
-        query = (
-            db.query(models.Talk)
-            .options(selectinload(models.Talk.jobs))
-            .filter(models.Talk.event_id == scoped_event_id)
-        )
-    else:
-        if user:
-            if user.role in ("organizer", "admin"):
-                user_events = (
-                    db.query(models.Event)
-                    .filter(models.Event.created_by_user_id == user.id)
-                    .order_by(models.Event.name.asc())
-                    .all()
-                )
-            else:
-                user_events = []
-        elif client is not None:
+        event_id = sso_user["scope_id"]
+        user_events = db.query(models.Event).filter(models.Event.id == event_id).all()
+    elif user:
+        if user.role in ("organizer", "admin"):
             user_events = (
                 db.query(models.Event)
-                .filter(models.Event.id.in_(client.event_ids))
+                .filter(models.Event.created_by_user_id == user.id)
                 .order_by(models.Event.name.asc())
                 .all()
             )
         else:
             user_events = []
+    else:
+        user_events = (
+            db.query(models.Event)
+            .filter(models.Event.id.in_(client.event_ids or []))
+            .order_by(models.Event.name.asc())
+            .all()
+        )
+    if not sso_user:
+        event_id = _resolve_event_id(event_id, user_events)
 
-        query = db.query(models.Talk).options(selectinload(models.Talk.jobs))
-        if user:
-            if user.role in ("organizer", "admin"):
-                org_event_ids = [e.id for e in user_events]
-                query = query.filter(models.Talk.event_id.in_(org_event_ids))
-                if event_id is not None:
-                    if event_id not in org_event_ids:
-                        query = query.filter(models.Talk.id == -1)
-                    else:
-                        query = query.filter(models.Talk.event_id == event_id)
-            else:
-                query = query.filter(models.Talk.id == -1)
-        elif client is not None:
-            client_event_ids = client.event_ids or []
-            query = query.filter(models.Talk.event_id.in_(client_event_ids))
-            if event_id is not None:
-                if event_id not in client_event_ids:
-                    query = query.filter(models.Talk.id == -1)
-                else:
-                    query = query.filter(models.Talk.event_id == event_id)
-        else:
-            query = query.filter(models.Talk.id == -1)
+    # One scope drives the talk list, the room list and the stats: the talks the
+    # caller may see, narrowed to the selected event. Speakers see their own
+    # talks; everyone else sees the events they have access to (none for plain
+    # users).
+    if user and user.role == "speaker" and user.email:
+        scope = func.lower(models.Talk.speaker_email) == user.email.lower()
+    else:
+        scope = models.Talk.event_id.in_([e.id for e in user_events])
+        if sso_user and sso_user.get("role") == "speaker":
+            scope = and_(
+                scope,
+                func.lower(models.Talk.speaker_email) == sso_user["email"].lower(),
+            )
+    if event_id is not None:
+        scope = and_(scope, models.Talk.event_id == event_id)
 
+    query = (
+        db.query(models.Talk)
+        .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
+        .filter(scope)
+    )
+    if room is not None:
+        query = query.filter(models.Talk.room == room)
     if status_filter:
         query = query.filter(models.Talk.status == status_filter)
 
@@ -388,39 +492,25 @@ def dashboard(
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
 
-    if sso_user:
-        all_talks = (
-            db.query(models.Talk)
-            .filter(models.Talk.event_id == sso_user["scope_id"])
-            .all()
-        )
-    elif user:
-        if user.role in ("organizer", "admin"):
-            org_event_ids = [e.id for e in user_events]
-            all_talks = (
-                db.query(models.Talk)
-                .filter(models.Talk.event_id.in_(org_event_ids))
-                .all()
-            )
-        else:
-            all_talks = []
-    elif client is not None:
-        client_event_ids = client.event_ids or []
-        all_talks = (
-            db.query(models.Talk)
-            .filter(models.Talk.event_id.in_(client_event_ids))
-            .all()
-        )
-    else:
-        all_talks = []
+    all_rooms = [
+        r
+        for (r,) in db.query(models.Talk.room)
+        .filter(scope, models.Talk.room.isnot(None), models.Talk.room != "")
+        .distinct()
+        .order_by(models.Talk.room)
+    ]
 
-    all_rooms = sorted({t.room for t in all_talks if t.room})
-    status_counts: dict[str, int] = {}
-    for t in all_talks:
-        status_counts[t.status] = status_counts.get(t.status, 0) + 1
+    stats_scope = scope if room is None else and_(scope, models.Talk.room == room)
+    status_counts: dict[str, int] = dict(
+        db.query(models.Talk.status, func.count(models.Talk.id))
+        .filter(stats_scope)
+        .group_by(models.Talk.status)
+        .all()
+    )
+    current_event = next((e for e in user_events if e.id == event_id), None)
 
     stats = {
-        "total": len(all_talks),
+        "total": sum(status_counts.values()),
         "pending": status_counts.get("pending_approval", 0),
         "processing": sum(
             status_counts.get(s, 0)
@@ -446,6 +536,11 @@ def dashboard(
             "event_id": event_id,
             "user_events": user_events,
             "error": flash_error,
+            "current_event": current_event,
+            "room": room,
+            "filter_action": urllib.parse.quote(
+                _request_path_and_query(request)[0], safe="/"
+            ),
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -459,6 +554,14 @@ ALLOWED_MEDIA_CATEGORIES = frozenset(
 )
 
 
+def _download_filename(talk: models.Talk, filename: str) -> str:
+    safe_title = "".join(
+        c if c.isalnum() or c in ("-", "_") else "_"
+        for c in (getattr(talk, "title", "") or "")
+    ).strip("_")
+    return f"{safe_title}_{filename}" if safe_title else f"talk_{talk.id}_{filename}"
+
+
 @router.get("/media/{talk_id}/{filename}")
 def get_talk_media_default(
     request: Request,
@@ -467,7 +570,9 @@ def get_talk_media_default(
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ):
-    _authorize_studio_talk(talk_id, request, db, not_found_detail="Media not found")
+    talk = _authorize_studio_talk(
+        talk_id, request, db, not_found_detail="Media not found"
+    )
 
     safe_filename = Path(filename).name
     candidate_keys = [
@@ -478,13 +583,20 @@ def get_talk_media_default(
         f"{talk_id}/cut/{safe_filename}",
         f"{talk_id}/final/{safe_filename}",
     ]
+    download_filename = (
+        _download_filename(talk, safe_filename)
+        if request.query_params.get("download") in ("1", "true", "yes")
+        else None
+    )
+
     for key in candidate_keys:
         if storage.exists(key):
             path = storage.get(key)
             return FileResponse(
                 path,
                 media_type="video/mp4",
-                headers={"Cache-Control": "no-store"},
+                filename=download_filename,
+                headers={"Cache-Control": "no-cache"},
             )
     raise HTTPException(status_code=404, detail="Media not found")
 
@@ -502,17 +614,27 @@ def get_talk_media_categorized(
     if safe_category not in ALLOWED_MEDIA_CATEGORIES:
         raise HTTPException(status_code=404, detail="Media not found")
 
-    _authorize_studio_talk(talk_id, request, db, not_found_detail="Media not found")
+    talk = _authorize_studio_talk(
+        talk_id, request, db, not_found_detail="Media not found"
+    )
 
     safe_filename = Path(filename).name
     key = f"{talk_id}/{safe_category}/{safe_filename}"
     if not storage.exists(key):
         raise HTTPException(status_code=404, detail=f"Media {key} not found")
     path = storage.get(key)
+
+    download_filename = (
+        _download_filename(talk, safe_filename)
+        if request.query_params.get("download") in ("1", "true", "yes")
+        else None
+    )
+
     return FileResponse(
         path,
         media_type="video/mp4",
-        headers={"Cache-Control": "no-store"},
+        filename=download_filename,
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -552,7 +674,7 @@ def get_talk_waveform(
                 return Response(
                     content=raw_bytes,
                     media_type="application/json",
-                    headers={"Cache-Control": "public, max-age=3600"},
+                    headers={"Cache-Control": "private, max-age=3600"},
                 )
             except OSError:
                 logger.warning("Failed reading cached waveform for %s", waveform_key)
@@ -610,6 +732,14 @@ def studio(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="SSO token is not authorized for this event",
                 )
+            if sso_payload.get("role") == "speaker" and not (
+                talk_obj.speaker_email
+                and talk_obj.speaker_email.lower() == sso_payload["email"].lower()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="SSO token is not authorized for this talk",
+                )
 
         is_secure = (request.url.scheme == "https") or (
             settings.environment.lower() in ("production", "prod")
@@ -657,14 +787,6 @@ def studio(
         talk_id, request, db, not_found_detail="Talk not found"
     )
 
-    jobs = (
-        db.query(models.Job)
-        .filter(models.Job.talk_id == talk_id)
-        .order_by(models.Job.id.desc())
-        .limit(10)
-        .all()
-    )
-
     duration_seconds = None
     if talk.start and talk.end:
         duration_seconds = int((talk.end - talk.start).total_seconds())
@@ -692,7 +814,8 @@ def studio(
                     }
                 )
 
-    for rk in storage.list_keys(f"{talk.id}/raw"):
+    raw_keys = storage.list_keys(f"{talk.id}/raw")
+    for rk in sorted(raw_keys)[:1]:
         fname = Path(rk).name
         url = f"/studio/media/{talk.id}/raw/{urllib.parse.quote(fname)}"
         if url not in seen_urls:
@@ -705,19 +828,54 @@ def studio(
                 }
             )
 
+    final_asset = next((a for a in media_assets if a["category"] == "final"), None)
+    if not final_asset and (final_keys := storage.list_keys(f"{talk.id}/final")):
+        url = f"/studio/media/{talk.id}/final/{urllib.parse.quote(Path(final_keys[0]).name)}"
+        final_asset = {
+            "label": "Master Video (Final)",
+            "category": "final",
+            "url": url,
+        }
+        media_assets.append(final_asset)
+
     preview_urls = [a["url"] for a in media_assets]
+
+    is_other_organizer_talk = bool(
+        user
+        and user.role == "admin"
+        and (not talk.event or talk.event.created_by_user_id != user.id)
+    )
+
+    is_from_admin = bool(
+        user
+        and user.role == "admin"
+        and (request.query_params.get("from") == "admin" or is_other_organizer_talk)
+    )
+
+    back_url = (
+        (f"/admin/events/{talk.event_id}" if talk.event_id else "/admin/events")
+        if is_from_admin
+        else "/studio"
+    )
 
     return templates.TemplateResponse(
         request,
         "studio.html.jinja",
         {
             "talk": talk,
-            "jobs": jobs,
             "milestones": get_evaluated_milestones(talk.status),
             "duration_seconds": duration_seconds,
             "media_assets": media_assets,
+            "final_asset": final_asset,
             "preview_urls": preview_urls,
             "all_statuses": ALL_STATUSES,
+            "is_speaker": (
+                sso_user.get("role") if sso_user else getattr(user, "role", None)
+            )
+            == "speaker",
+            "is_other_organizer_talk": is_other_organizer_talk,
+            "is_from_admin": is_from_admin,
+            "back_url": back_url,
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -832,7 +990,7 @@ def create_studio_event(
     db.refresh(event)
 
     return RedirectResponse(
-        url=f"/studio?event_id={event.id}",
+        url="/studio/events",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

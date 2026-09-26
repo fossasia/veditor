@@ -19,6 +19,8 @@ from app.retention import validate_retention_overrides
 
 class EventBase(BaseModel):
     name: str
+    source: str | None = None
+    external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
 
     @field_validator("retention_overrides")
@@ -35,6 +37,8 @@ class EventCreate(EventBase):
 
 class EventUpdate(BaseModel):
     name: str | None = None
+    source: str | None = None
+    external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
 
     @field_validator("retention_overrides")
@@ -52,6 +56,8 @@ class EventRead(EventBase):
 
 
 class ClientBase(BaseModel):
+    name: str | None = None
+    is_platform: bool = False
     event_ids: list[int] = []
 
 
@@ -99,6 +105,8 @@ class TalkBase(BaseModel):
     start: datetime
     end: datetime
     status: str = "waiting_for_files"
+    speaker_email: str | None = None
+    external_id: str | None = None
 
 
 class TalkCreate(TalkBase):
@@ -118,6 +126,8 @@ class TalkRead(TalkBase):
     outro_source: str | None = None
     custom_intro_path: str | None = None
     custom_outro_path: str | None = None
+    updated_at: datetime | None = None
+    final_cleaned_at: datetime | None = None
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("include_intro", "include_outro", mode="before")
@@ -285,6 +295,7 @@ def _parse_hhmmss(value: str) -> Decimal:
 class CutBoundsRequest(BaseModel):
     cut_start: str  # "HH:MM:SS"
     cut_end: str  # "HH:MM:SS"
+    note: str | None = None
 
     @model_validator(mode="after")
     def parse_and_validate(self):
@@ -310,6 +321,7 @@ class IntroOutroRequest(BaseModel):
     outro_source: Literal["generated", "custom"] = "generated"
     custom_intro_path: str | None = None
     custom_outro_path: str | None = None
+    speaker_email: str | None = None
 
     @model_validator(mode="after")
     def validate_custom_paths(self):
@@ -348,7 +360,44 @@ class UserRead(BaseModel):
 
 
 class UserPromoteRequest(BaseModel):
-    role: Literal["user", "organizer", "admin"]
+    role: Literal["user", "organizer", "speaker", "admin"]
+
+
+class EventSSOTokenRequest(BaseModel):
+    role: Literal["organizer"] = "organizer"
+    email: str | None = None
+    display_name: str | None = None
+
+
+class TalkSSOTokenRequest(BaseModel):
+    role: Literal["speaker"] = "speaker"
+    email: str | None = None
+    display_name: str | None = None
+    event_id: int | str | None = None
+
+
+class ApiKeyRead(BaseModel):
+    id: int
+    name: str | None = None
+    masked_key: str
+    event_ids: list[int] = []
+    webhook_url: str | None = None
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ApiKeyCreate(BaseModel):
+    name: str | None = None
+    webhook_url: str | None = None
+
+
+class ApiKeyCreatedResponse(BaseModel):
+    id: int
+    name: str | None = None
+    api_key: str
+    event_id: int
+    created_at: datetime | None = None
 
 
 class SSOTokenResponse(BaseModel):
@@ -366,6 +415,7 @@ class TalkUpdate(BaseModel):
     room: str | None = None
     start: datetime | None = None
     end: datetime | None = None
+    speaker_email: str | None = None
 
 
 class BulkDeleteRequest(BaseModel):
@@ -382,6 +432,8 @@ class ScheduleImportResponse(BaseModel):
     event_id: int
     event_name: str
     imported_count: int
+    source: str | None = None
+    external_id: str | None = None
 
 
 class SystemSettingOption(BaseModel):

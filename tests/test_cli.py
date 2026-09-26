@@ -331,3 +331,35 @@ def test_cli_main_list_users(mock_session_local, mock_list_users):
     mock_session_local.assert_called_once()
     mock_list_users.assert_called_once_with(mock_session_local.return_value)
     mock_session_local.return_value.close.assert_called_once()
+
+
+@patch("app.retention.run_retention_sweep")
+@patch("app.cli.SessionLocal")
+def test_cli_main_run_retention_sweep_sync(mock_session_local, mock_sweep, capsys):
+    mock_sweep.return_value = [1, 2]
+    test_args = ["veditor", "admin", "run-retention-sweep"]
+    with patch.object(sys, "argv", test_args):
+        main()
+
+    mock_session_local.assert_called_once()
+    mock_sweep.assert_called_once_with(db=mock_session_local.return_value)
+    mock_session_local.return_value.close.assert_called_once()
+    captured = capsys.readouterr()
+    assert "Cleaned 2 talks: [1, 2]" in captured.out
+
+
+@patch("app.retention.enqueue_retention_sweep")
+@patch("app.cli.SessionLocal")
+def test_cli_main_run_retention_sweep_enqueue(mock_session_local, mock_enqueue, capsys):
+    mock_job = MagicMock()
+    mock_job.id = "job-sweep-123"
+    mock_enqueue.return_value = mock_job
+
+    test_args = ["veditor", "admin", "run-retention-sweep", "--enqueue"]
+    with patch.object(sys, "argv", test_args):
+        main()
+
+    mock_enqueue.assert_called_once()
+    mock_session_local.return_value.close.assert_called_once()
+    captured = capsys.readouterr()
+    assert "Enqueued retention sweep job with ID job-sweep-123" in captured.out

@@ -73,10 +73,22 @@ class StorageBackend(Protocol):
         """
         ...
 
+    def get_temp_dir(self) -> Path:
+        """
+        Return a directory path suitable for temporary scratch files.
+        """
+        ...
+
 
 class LocalDiskBackend(StorageBackend):
     def __init__(self, data_dir: Path | str):
         self.data_dir = Path(data_dir).resolve()
+
+    def get_temp_dir(self) -> Path:
+        """Return a directory path suitable for temporary scratch files within data_dir."""
+        tmp_dir = self.data_dir / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        return tmp_dir
 
     def _get_path(self, key: str) -> Path:
         """Resolve a key to its absolute path within the data directory."""
@@ -94,6 +106,17 @@ class LocalDiskBackend(StorageBackend):
         """
         target_path = self._get_path(key)
         target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if (
+            isinstance(source, Path)
+            and source.is_file()
+            and (
+                source.is_relative_to(self.get_temp_dir())
+                or source.resolve().is_relative_to(self.get_temp_dir())
+            )
+        ):
+            shutil.move(str(source), str(target_path))
+            return
 
         # Write to a temporary file in the same directory, then rename atomically
         with tempfile.NamedTemporaryFile(delete=False, dir=target_path.parent) as tmp:
@@ -211,3 +234,37 @@ def cleanup_intermediates(storage: StorageBackend, talk_id: int) -> None:
                 talk_id,
                 exc,
             )
+
+
+def cleanup_bumpers(
+    storage: StorageBackend,
+    talk_id: int,
+    custom_paths: tuple[str | None, ...] = (),
+) -> None:
+    """Delete bumper intermediate artifacts (intro, outro) for a talk once final video is generated."""
+    for stage in ("intro", "outro"):
+        try:
+            storage.delete(f"{talk_id}/{stage}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to delete %s storage for talk %s: %s",
+                stage,
+                talk_id,
+                exc,
+            )
+    from app.ingest import get_bumper_staging_dir
+
+    staging_dir = get_bumper_staging_dir().resolve()
+    for path_str in custom_paths:
+        if path_str:
+            try:
+                path = Path(path_str)
+                p = (
+                    staging_dir.parent / path if not path.is_absolute() else path
+                ).resolve()
+                if p.is_file() and p.is_relative_to(staging_dir):
+                    p.unlink(missing_ok=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to delete staged bumper file %s: %s", path_str, exc
+                )

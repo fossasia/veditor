@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+
+
 class InvalidTransitionError(Exception):
     def __init__(self, current_state: str, new_state: str):
         self.current_state = current_state
@@ -8,18 +11,19 @@ class InvalidTransitionError(Exception):
 TRANSITIONS = {
     "waiting_for_files": ["detecting", "broken"],
     "detecting": ["pending_approval", "broken"],
-    "pending_approval": ["pending_bounds", "rejected", "broken"],
+    "pending_approval": ["pending_intro_outro", "pending_bounds", "rejected", "broken"],
+    "pending_intro_outro": ["pending_bounds", "assembling", "broken"],
     "pending_bounds": ["cutting", "broken"],
     "cutting": ["generating_previews", "broken"],
     "generating_previews": ["preview", "broken"],
     "preview": [
+        "assembling",
         "pending_intro_outro",
         "needs_work",
         "pending_bounds",
         "rejected",
         "broken",
     ],
-    "pending_intro_outro": ["assembling", "broken"],
     "assembling": ["transcoding", "broken"],
     "transcoding": ["uploading", "broken"],
     "uploading": ["done", "broken"],
@@ -40,4 +44,5 @@ def advance(talk, new_state: str):
         raise InvalidTransitionError(current_state, new_state)
 
     talk.status = new_state
+    talk.updated_at = datetime.now(UTC)
     return talk

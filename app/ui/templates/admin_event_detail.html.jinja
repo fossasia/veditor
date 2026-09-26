@@ -1,0 +1,158 @@
+{% extends "admin_base.html.jinja" %}
+
+{% macro status_badge(status) %}
+  {% if status == 'waiting_for_files' %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>
+  {% elif status == 'detecting' %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>
+  {% elif status in ['pending_approval', 'pending_bounds'] %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>
+  {% elif status in ['cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
+    <span class="badge badge-processing"><span class="spinner spinner-sm"></span>{{ status | replace('_', ' ') | title }}</span>
+  {% elif status == 'preview' %}
+    <span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>
+  {% elif status == 'needs_work' %}
+    <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
+  {% elif status == 'done' %}
+    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+  {% elif status in ['rejected', 'broken'] %}
+    <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
+  {% else %}
+    <span class="badge badge-waiting"><span class="badge-dot"></span>{{ status }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% block title %}{{ event.name }} — Talks Detail — Admin Console{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin">Admin Console</a>
+  <span class="sep">/</span>
+  <a href="/admin/events">Events</a>
+  <span class="sep">/</span>
+  <span class="current">{{ event.name }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+
+  <!-- Event Header Card -->
+  <div class="event-detail-header">
+    <div class="event-detail-info">
+      <h1>{{ event.name }}</h1>
+      <div class="event-detail-meta">
+        <span>Event ID: <strong>#{{ event.id }}</strong></span>
+        <span>&bull;</span>
+        <span>
+          Organizer: 
+          {% if event.created_by_user %}
+            <strong>{{ event.created_by_user.email }}</strong>
+          {% elif event.created_by_user_id %}
+            <strong>User #{{ event.created_by_user_id }}</strong>
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </span>
+      </div>
+    </div>
+    <div class="event-progress-wrap">
+      <progress class="event-progress-bar" value="{{ progress_pct }}" max="100"></progress>
+      <span class="event-progress-pct">{{ progress_pct }}% Done</span>
+    </div>
+  </div>
+
+  <!-- Event Summary Stats Row -->
+  <div class="stats-grid stats-grid-6">
+    <div class="stat-card">
+      <span class="stat-label">Total Talks</span>
+      <span class="stat-value">{{ event_stats.total }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Done</span>
+      <span class="stat-value green">{{ event_stats.done }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Processing</span>
+      <span class="stat-value blue">{{ event_stats.processing }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Pending</span>
+      <span class="stat-value">{{ event_stats.pending }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Preview Ready</span>
+      <span class="stat-value blue">{{ event_stats.preview }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Issues</span>
+      <span class="stat-value {% if event_stats.broken > 0 %}red{% else %}green{% endif %}">{{ event_stats.broken }}</span>
+    </div>
+  </div>
+
+  <!-- Talks Table -->
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span class="table-title">Talks in {{ event.name }}</span>
+        <span class="table-count table-count-spaced">{{ talks | length }} talk{% if talks | length != 1 %}s{% endif %}</span>
+      </div>
+      <div class="table-header-actions">
+        <a href="/admin/events" class="btn btn-ghost btn-sm">
+          &larr; Back to Events
+        </a>
+      </div>
+    </div>
+
+    {% if talks %}
+    <table>
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Talk Title</th>
+          <th>Room</th>
+          <th>Scheduled Start</th>
+          <th>Duration</th>
+          <th>Status</th>
+          <th class="col-actions-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for talk in talks %}
+        <tr>
+          <td class="td-mono col-id">#{{ talk.id }}</td>
+          <td class="td-title">
+            <a href="/studio/talks/{{ talk.id }}?from=admin">
+              <strong>{{ talk.title }}</strong>
+            </a>
+          </td>
+          <td>{{ talk.room or '—' }}</td>
+          <td class="td-mono">{{ talk.start.strftime('%b %d, %H:%M') if talk.start else '—' }}</td>
+          <td class="td-mono">
+            {% if talk.start and talk.end %}
+              {% set dur = (talk.end - talk.start).total_seconds() | int %}
+              {% set m = dur // 60 %}
+              {% set s = dur % 60 %}
+              {{ '%d:%02d' | format(m, s) }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {{ status_badge(talk.status) }}
+          </td>
+          <td class="col-actions-right">
+            <a href="/studio/talks/{{ talk.id }}?from=admin" class="btn btn-ghost btn-sm" title="Open Studio Editor">
+              Open in Studio
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="events-empty-state">
+      <p class="events-empty-title">No talks found</p>
+      <p class="events-empty-desc">This event does not have any talks scheduled or imported yet.</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

@@ -430,8 +430,8 @@ def test_approve_talk_does_not_trigger_webhook():
                 headers={"X-API-Key": "valid_key"},
             )
             assert resp.status_code == 200
-            assert resp.json()["status"] == "pending_bounds"
-            assert mock_talk.status == "pending_bounds"
+            assert resp.json()["status"] == "pending_intro_outro"
+            assert mock_talk.status == "pending_intro_outro"
             mock_enqueue.assert_not_called()
     finally:
         app.dependency_overrides.clear()

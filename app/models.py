@@ -51,7 +51,7 @@ class User(Base):
     __table_args__ = (
         Index("idx_users_email", "email", unique=True),
         CheckConstraint(
-            "role IN ('user', 'organizer', 'admin')",
+            "role IN ('user', 'organizer', 'admin', 'speaker')",
             name="ck_users_role",
         ),
     )
@@ -91,9 +91,14 @@ class User(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_events_source_external_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     retention_overrides: Mapped[dict[str, Any] | None] = mapped_column(
         RetentionOverrides.as_mutable(JSONB), nullable=True, default=None
     )
@@ -120,11 +125,26 @@ class Client(Base):
     __tablename__ = "clients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_platform: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     hashed_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     event_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     webhook_secret: Mapped[str | None] = mapped_column(
         String(255), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
     )
 
 
@@ -134,10 +154,14 @@ class Talk(Base):
         UniqueConstraint(
             "event_id", "title", "start", name="uq_talks_event_id_title_start"
         ),
+        UniqueConstraint(
+            "event_id", "external_id", name="uq_talks_event_id_external_id"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[str | None] = mapped_column(String(255))
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -145,6 +169,7 @@ class Talk(Base):
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="waiting_for_files"
     )
+    speaker_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_end: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -154,6 +179,16 @@ class Talk(Base):
     outro_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     custom_intro_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_outro_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    final_cleaned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     event: Mapped[Event] = relationship(back_populates="talks")
     jobs: Mapped[list[Job]] = relationship(
@@ -162,6 +197,13 @@ class Talk(Base):
     reviews: Mapped[list[Review]] = relationship(
         back_populates="talk", cascade="all, delete-orphan"
     )
+    approved_cuts: Mapped[list[ApprovedCut]] = relationship(
+        back_populates="talk", cascade="all, delete-orphan"
+    )
+
+    @validates("speaker_email")
+    def _validate_speaker_email(self, key: str, value: str | None) -> str | None:
+        return value.strip().lower() or None if value else None
 
 
 class Job(Base):
@@ -276,3 +318,26 @@ class SystemSetting(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+class ApprovedCut(Base):
+    __tablename__ = "approved_cuts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    talk_id: Mapped[int] = mapped_column(
+        ForeignKey("talks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    cut_start: Mapped[float] = mapped_column(Float, nullable=False)
+    cut_end: Mapped[float] = mapped_column(Float, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    review_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+    )
+
+    talk: Mapped[Talk] = relationship(back_populates="approved_cuts")
+    review: Mapped[Review | None] = relationship()

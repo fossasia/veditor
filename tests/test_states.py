@@ -17,6 +17,22 @@ def test_advance_legal_transitions():
             assert talk.status == next_state
 
 
+def test_advance_updates_talk_updated_at():
+    talk = DummyTalk("waiting_for_files")
+    assert not hasattr(talk, "updated_at")
+    advance(talk, "detecting")
+    assert hasattr(talk, "updated_at")
+    assert talk.updated_at is not None
+    assert talk.updated_at.tzinfo is not None
+
+    # Also test transition to terminal 'done' from valid predecessor 'uploading'
+    talk.status = "uploading"
+    prev_time = talk.updated_at
+    advance(talk, "done")
+    assert talk.status == "done"
+    assert talk.updated_at >= prev_time
+
+
 def test_advance_illegal_transitions():
     # Test at least one illegal transition per state
     illegal_moves = {

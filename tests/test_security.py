@@ -381,6 +381,11 @@ def test_create_sso_token_invalid_inputs():
             scope_type="event", scope_id=1, role="organizer", expires_in_seconds=0
         )
 
+    with pytest.raises(
+        ValueError, match="email is required for event-scoped speaker tokens"
+    ):
+        create_sso_token(scope_type="event", scope_id=1, role="speaker")
+
 
 def test_decode_sso_token_expired():
     from datetime import UTC, datetime, timedelta
@@ -546,6 +551,37 @@ def test_decode_sso_token_malformed_claims():
         algorithm="HS256",
     )
     assert decode_sso_token(bad_tok3) is None
+
+    # Event-scoped speaker token without email must be rejected
+    bad_tok_no_email = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": 1,
+            "role": "speaker",
+            "exp": 9999999999,
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    assert decode_sso_token(bad_tok_no_email) is None
+
+    # Event-scoped speaker token with email succeeds
+    good_tok = jwt.encode(
+        {
+            "type": "sso",
+            "scope_type": "event",
+            "scope_id": 1,
+            "role": "speaker",
+            "email": "speaker@example.com",
+            "exp": 9999999999,
+        },
+        key=secret,
+        algorithm="HS256",
+    )
+    payload = decode_sso_token(good_tok)
+    assert payload is not None
+    assert payload["email"] == "speaker@example.com"
 
 
 def test_settings_sso_token_expire_seconds_validation():

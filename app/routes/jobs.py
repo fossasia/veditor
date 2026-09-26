@@ -31,7 +31,14 @@ def get_job(
     under caller's event_ids.
     """
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
-    if not job or not job.talk or job.talk.event_id not in (client.event_ids or []):
+    if (
+        not job
+        or not job.talk
+        or (
+            not getattr(client, "is_platform", False)
+            and job.talk.event_id not in (client.event_ids or [])
+        )
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
         )

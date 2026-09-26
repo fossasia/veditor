@@ -480,3 +480,26 @@ def test_templating_unauthenticated_navbar(client: TestClient):
     assert "api-key-btn" not in res.text
     assert "api-key-indicator" not in res.text
     assert "modal-api-key" not in res.text
+
+
+def test_post_signup_always_defaults_to_user_role(client: TestClient, db_session):
+    res = client.post(
+        "/signup",
+        data={
+            "email": "organizer_signup@test.com",
+            "password": "orgpassword123",
+            "password_confirm": "orgpassword123",
+            "role": "organizer",
+        },
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/studio"
+
+    user = (
+        db_session.query(models.User)
+        .filter(models.User.email == "organizer_signup@test.com")
+        .first()
+    )
+    assert user is not None
+    assert user.role == "user"

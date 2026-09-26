@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import field_validator
+from pydantic import PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,7 @@ class PreviewPreset:
     video_bitrate: int
     audio_bitrate: int = 64_000
     crf: int | None = None
+    preset_speed: str = "veryfast"
 
 
 PREVIEW_PRESETS: dict[str, PreviewPreset] = {
@@ -23,12 +24,14 @@ PREVIEW_PRESETS: dict[str, PreviewPreset] = {
         resolution=(320, 180),
         video_bitrate=150_000,
         audio_bitrate=32_000,
+        preset_speed="veryfast",
     ),
     "big_video": PreviewPreset(
         name="big_video",
         resolution=(640, 360),
         video_bitrate=500_000,
         audio_bitrate=64_000,
+        preset_speed="veryfast",
     ),
 }
 
@@ -50,6 +53,9 @@ class Settings(BaseSettings):
     ingest_roots: list[Path] = []
     preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
     disk_guard_multiplier: float = 3.0
+    retention_sweep_interval_seconds: int = 3600
+    max_bumper_upload_size_bytes: PositiveInt = 100 * 1024 * 1024
+    encoder_threads: PositiveInt | None = None
 
     environment: str = "development"
     session_secret: str | None = None
@@ -84,6 +90,13 @@ class Settings(BaseSettings):
     def validate_token_expirations(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("token expiration values must be positive")
+        return value
+
+    @field_validator("retention_sweep_interval_seconds", mode="after")
+    @classmethod
+    def validate_retention_sweep_interval_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("retention_sweep_interval_seconds must be positive")
         return value
 
     @field_validator("disk_guard_multiplier", mode="after")
@@ -229,30 +242,30 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
     """Resolve a configuration setting, checking DB overrides before falling back to defaults."""
     normalized_key = key.strip().lower()
     if normalized_key in EXCLUDED_SETTING_KEYS:
-        return getattr(settings, key, default)
+        return getattr(settings, normalized_key, default)
 
     try:
         from app.models import SystemSetting
 
         if db is not None:
-            row = db.get(SystemSetting, key)
+            row = db.get(SystemSetting, normalized_key)
             if row is not None:
-                return _cast_setting_value(key, row.value, default)
+                return _cast_setting_value(normalized_key, row.value, default)
         else:
             from app.db import SessionLocal
 
             with SessionLocal() as session:
-                row = session.get(SystemSetting, key)
+                row = session.get(SystemSetting, normalized_key)
                 if row is not None:
-                    return _cast_setting_value(key, row.value, default)
+                    return _cast_setting_value(normalized_key, row.value, default)
     except Exception:  # noqa: BLE001, S110
         pass
 
     if default is not None:
         return default
-    if hasattr(settings, key):
-        return getattr(settings, key)
-    defn = SYSTEM_SETTING_DEFINITIONS.get(key)
+    if hasattr(settings, normalized_key):
+        return getattr(settings, normalized_key)
+    defn = SYSTEM_SETTING_DEFINITIONS.get(normalized_key)
     return defn.default_value if defn else None
 
 

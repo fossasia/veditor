@@ -154,6 +154,19 @@ def list_users(session: Session):
         print(f"{u.id:<6} {u.email:<32} {u.role:<12} {u.is_active!s:<8} {created_str}")
 
 
+def run_retention_sweep_cmd(session: Session, enqueue: bool = False):
+    if enqueue:
+        from app.retention import enqueue_retention_sweep
+
+        job = enqueue_retention_sweep()
+        print(f"Enqueued retention sweep job with ID {job.id}")
+    else:
+        from app.retention import run_retention_sweep
+
+        swept_ids = run_retention_sweep(db=session)
+        print(f"Retention sweep completed. Cleaned {len(swept_ids)} talks: {swept_ids}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="VEditor CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -213,6 +226,17 @@ def main():
     # `admin list-users` command
     admin_subparsers.add_parser("list-users", help="List all registered users")
 
+    # `admin run-retention-sweep` command
+    sweep_parser = admin_subparsers.add_parser(
+        "run-retention-sweep",
+        help="Run or enqueue retention sweep for final/ artifacts",
+    )
+    sweep_parser.add_argument(
+        "--enqueue",
+        action="store_true",
+        help="Enqueue the retention sweep as an RQ job instead of running synchronously",
+    )
+
     args = parser.parse_args()
 
     if args.command == "admin":
@@ -239,6 +263,8 @@ def main():
                 promote_user(db, args.email, args.role)
             elif args.subcommand == "list-users":
                 list_users(db)
+            elif args.subcommand == "run-retention-sweep":
+                run_retention_sweep_cmd(db, enqueue=args.enqueue)
         finally:
             db.close()
 

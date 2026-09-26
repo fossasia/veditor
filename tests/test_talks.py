@@ -218,6 +218,7 @@ def test_post_talks_concurrent_race_handled():
                 "room": "Updated Concurrent Room",
                 "start": start_time.isoformat(),
                 "end": updated_end.isoformat(),
+                "speaker_email": "updated@speaker.com",
             },
             headers={"X-API-Key": "valid_key"},
         )
@@ -228,6 +229,7 @@ def test_post_talks_concurrent_race_handled():
         assert data["room"] == "Updated Concurrent Room"
         assert existing_talk.room == "Updated Concurrent Room"
         assert existing_talk.end == updated_end
+        assert existing_talk.speaker_email == "updated@speaker.com"
         assert mock_db.rollback.called
     finally:
         app.dependency_overrides.clear()
@@ -696,15 +698,15 @@ def test_post_approve_no_raw_recording_fails():
         "/talks/1/approve",
         headers={"X-API-Key": "valid_key"},
     )
-    # Approve no longer requires a raw file — just transitions to pending_bounds
+    # Approve no longer requires a raw file — just transitions to pending_intro_outro
     assert response.status_code == 200
-    assert response.json()["status"] == "pending_bounds"
+    assert response.json()["status"] == "pending_intro_outro"
 
     app.dependency_overrides.clear()
 
 
 def test_post_approve_success_enqueues_cut():
-    """Approve now transitions to pending_bounds; job_cut is enqueued later from /cut."""
+    """Approve now transitions to pending_intro_outro; handoff transitions to pending_bounds; job_cut is enqueued later from /cut."""
     mock_db = MagicMock()
     mock_client = models.Client(id=1, event_ids=[1])
 
@@ -733,8 +735,8 @@ def test_post_approve_success_enqueues_cut():
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == 1
-        assert data["status"] == "pending_bounds"
-        assert mock_talk.status == "pending_bounds"
+        assert data["status"] == "pending_intro_outro"
+        assert mock_talk.status == "pending_intro_outro"
         assert mock_db.commit.called
         # Approve no longer enqueues job_cut immediately
         mock_enqueue.assert_not_called()
@@ -772,7 +774,7 @@ def test_post_approve_with_custom_raw_key():
         headers={"X-API-Key": "valid_key"},
     )
     assert response.status_code == 200
-    assert response.json()["status"] == "pending_bounds"
+    assert response.json()["status"] == "pending_intro_outro"
 
     app.dependency_overrides.clear()
 
@@ -904,7 +906,278 @@ def test_submit_cut_bounds_out_of_range_returns_422(cut_start: str, cut_end: str
         app.dependency_overrides.clear()
 
 
+def test_submit_cut_bounds_needs_work_accepted():
+    """POST /talks/{id}/cut succeeds when talk is in needs_work status."""
+    mock_db, mock_talk = _make_pending_bounds_talk_db()
+    mock_talk.status = "needs_work"
+    mock_client = models.Client(id=1, event_ids=[1])
+    fake_storage = FakeStorageBackend()
+    fake_storage.put("1/raw/video.mp4", b"raw video")
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        try:
+            resp = client.post(
+                "/talks/1/cut",
+                json={"cut_start": "00:00:10", "cut_end": "00:01:10"},
+                headers={"X-API-Key": "valid_key"},
+            )
+            assert resp.status_code == 202
+            assert mock_talk.status == "cutting"
+            mock_enqueue.assert_called_once()
+        finally:
+            app.dependency_overrides.clear()
+
+
 # --- Full Path Test: recordings -> detect -> pending_approval -> approve -> cut -> preview -> preview halt ---
+
+
+def test_patch_talk_unauthorized():
+    resp = client.patch("/talks/1", json={"title": "New Title"})
+    assert resp.status_code == 401
+
+
+def test_patch_talk_not_found():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    mock_db.query.return_value.filter.return_value.first.return_value = None
+
+    resp = client.patch(
+        "/talks/9999",
+        json={"title": "New Title"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_updates_fields():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        room="Old Room",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"title": "New Title", "room": "New Room"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 200
+    assert existing_talk.title == "New Title"
+    assert existing_talk.room == "New Room"
+    assert mock_db.commit.called
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_empty_title_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"title": "   "},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "cannot be empty" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_end_before_start_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)  # 9:00 is before 10:00 start
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"end": end_time.isoformat()},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "after start time" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_null_start_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"start": None},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "start time cannot be empty" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_null_end_rejected():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"end": None},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "end time cannot be empty" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_room_normalized_to_none():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    end_time = datetime(2026, 9, 1, 11, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        room="Old Room",
+        start=start_time,
+        end=end_time,
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"room": "   "},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 200
+    assert existing_talk.room is None
+    assert mock_db.commit.called
+
+    app.dependency_overrides.clear()
+
+
+def test_patch_talk_naive_datetime_comparison_normalized():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    start_time = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    existing_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Old Title",
+        start=start_time,
+        end=datetime(2026, 9, 1, 11, 0, tzinfo=UTC),
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = existing_talk
+
+    resp = client.patch(
+        "/talks/1",
+        json={"end": "2026-09-01T09:00:00"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp.status_code == 400
+    assert "after start time" in resp.json()["detail"]
+
+    resp_valid = client.patch(
+        "/talks/1",
+        json={"end": "2026-09-01T12:00:00"},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp_valid.status_code == 200
+    assert existing_talk.end == datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+
+    app.dependency_overrides.clear()
 
 
 def test_full_pipeline_flow_recordings_to_preview_halt():
@@ -1025,15 +1298,24 @@ def test_full_pipeline_flow_recordings_to_preview_halt():
         assert talk.raw_duration_seconds == 1800.0
         mock_enqueue_after_detect.assert_not_called()  # Halts at pending_approval gate
 
-    # 4. POST /talks/1/approve -> pending_bounds (no job enqueue)
+    # 4. POST /talks/1/approve -> pending_intro_outro (no job enqueue)
     with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue_approve:
         resp = client.post(
             "/talks/1/approve",
             headers={"X-API-Key": "key"},
         )
         assert resp.status_code == 200
-        assert talk.status == "pending_bounds"
+        assert talk.status == "pending_intro_outro"
         mock_enqueue_approve.assert_not_called()
+
+    # 4b. POST /talks/1/handoff -> pending_bounds
+    resp_handoff = client.post(
+        "/talks/1/handoff",
+        json={"include_intro": False, "include_outro": False},
+        headers={"X-API-Key": "key"},
+    )
+    assert resp_handoff.status_code == 200
+    assert talk.status == "pending_bounds"
 
     # 5. POST /talks/1/cut -> cutting, enqueues job_cut
     with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue_cut:

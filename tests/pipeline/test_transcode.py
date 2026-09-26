@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -264,3 +265,35 @@ def test_transcode_graceful_fallback_when_duration_unavailable(
     assert_playable(output_clip)
     # When duration is None, intermediate progress is skipped but final 1.0 is called
     assert progress_events == [1.0]
+
+
+def test_transcode_with_threads(tmp_path: Path):
+    """Verify transcoding succeeds with explicit thread limits."""
+    source_clip = generate_clip(
+        1.0, has_video=True, has_audio=True, output_dir=tmp_path
+    )
+    output_clip = tmp_path / "transcoded_threads.mp4"
+    transcode(source_clip, output_clip, threads=1)
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+
+
+def test_transcode_rejects_invalid_threads(tmp_path: Path):
+    """Verify that zero or negative threads raise ValueError."""
+    source_clip = generate_clip(1.0, output_dir=tmp_path)
+    output_clip = tmp_path / "out.mp4"
+
+    # Explicit threads <= 0
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        transcode(source_clip, output_clip, threads=0)
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        transcode(source_clip, output_clip, threads=-1)
+
+    # Preset threads <= 0
+    invalid_preset_zero = replace(PRESET_1080P_DEFAULT, threads=0)
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        transcode(source_clip, output_clip, preset=invalid_preset_zero)
+
+    invalid_preset_neg = replace(PRESET_1080P_DEFAULT, threads=-2)
+    with pytest.raises(ValueError, match="threads must be greater than zero"):
+        transcode(source_clip, output_clip, preset=invalid_preset_neg)

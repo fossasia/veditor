@@ -124,6 +124,8 @@ def generate_outro_clip(
     duration_seconds: float = 3.5,
     resolution: tuple[int, int] = (1920, 1080),
     fps: int = 24,
+    threads: int | None = None,
+    audio_sample_rate: int = 44100,
 ) -> None:
     """Generates a closing outro video clip with event branding and links.
 
@@ -197,6 +199,8 @@ def generate_outro_clip(
         raise ValueError(f"duration_seconds must be positive, got {duration_seconds}")
     if fps <= 0:
         raise ValueError(f"fps must be positive, got {fps}")
+    if threads is not None and threads <= 0:
+        raise ValueError(f"threads must be positive, got {threads}")
     if resolution[0] < 16 or resolution[1] < 16:
         raise ValueError(f"resolution must be at least 16x16, got {resolution}")
 
@@ -216,6 +220,7 @@ def generate_outro_clip(
     audio_samples = _get_audio_samples(
         jingle_path=audio_jingle_path,
         duration_s=duration_seconds,
+        sample_rate=audio_sample_rate,
     )
 
     _render_video_and_audio(
@@ -225,4 +230,6 @@ def generate_outro_clip(
         duration_seconds=duration_seconds,
         resolution=resolution,
         fps=fps,
+        threads=threads,
+        sample_rate=audio_sample_rate,
     )

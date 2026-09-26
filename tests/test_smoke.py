@@ -19,6 +19,8 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 def clean_db():
     """Starts from a clean DB by deleting existing records."""
     db_name = os.getenv("POSTGRES_DB", "")
+    if not db_name:
+        pytest.skip("Smoke test requires POSTGRES_DB to identify a test database.")
     if not (db_name.endswith("_test") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
         pytest.fail(
             f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a *_test database."

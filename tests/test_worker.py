@@ -103,6 +103,23 @@ def test_worker_burst_and_name_flags(mock_worker_cls, mock_redis_from_url):
     mock_worker.work.assert_called_once_with(burst=True)
 
 
+@patch("scripts.run_worker.register_periodic_retention_sweep")
+@patch("scripts.run_worker.redis.from_url")
+@patch("scripts.run_worker.Worker")
+def test_worker_with_scheduler_flag(
+    mock_worker_cls, mock_redis_from_url, mock_register_sweep
+):
+    mock_redis = MagicMock()
+    mock_redis_from_url.return_value = mock_redis
+    mock_worker = MagicMock()
+    mock_worker_cls.return_value = mock_worker
+
+    main(["light", "--with-scheduler"])
+    mock_worker_cls.assert_called_once_with(["light"], connection=mock_redis, name=None)
+    mock_register_sweep.assert_called_once()
+    mock_worker.work.assert_called_once_with(burst=False, with_scheduler=True)
+
+
 @patch("scripts.run_worker.redis.from_url")
 def test_worker_redis_connection_error_fast_fail(mock_redis_from_url, capsys):
     mock_redis = MagicMock()
@@ -182,4 +199,17 @@ def test_run_single_worker(mock_dispose, mock_worker_cls, mock_redis_from_url):
     mock_worker_cls.assert_called_once_with(
         ["light"], connection=mock_redis, name="test-w"
     )
+    mock_worker.work.assert_called_once_with(burst=True)
+
+
+@patch("os.nice")
+@patch("scripts.run_worker.redis.from_url")
+@patch("scripts.run_worker.Worker")
+@patch("app.db.engine.dispose")
+def test_worker_nice_flag(
+    mock_dispose, mock_worker_cls, mock_redis_from_url, mock_os_nice
+):
+    main(["light", "--nice", "10", "--burst"])
+    mock_os_nice.assert_called_once_with(10)
+    mock_worker = mock_worker_cls.return_value
     mock_worker.work.assert_called_once_with(burst=True)

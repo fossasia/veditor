@@ -1,23 +1,27 @@
 import hashlib
+import logging
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import Cookie, Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import models
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.security import decode_access_token, decode_session_token, decode_sso_token
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 bearer_security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 ROLE_HIERARCHY: dict[str, int] = {
-    "speaker": 0,
     "user": 0,
-    "organizer": 1,
-    "admin": 2,
+    "speaker": 1,
+    "organizer": 2,
+    "admin": 3,
 }
 
 
@@ -25,11 +29,13 @@ class CurrentUser(BaseModel):
     user_id: int | None = None
     client_id: int | None = None
     email: str | None = None
+    display_name: str | None = None
     role: Literal["user", "organizer", "speaker", "admin"] = "user"
     source: Literal["api_key", "cookie", "jwt", "sso"]
     event_ids: list[int] = Field(default_factory=list)
     scope_type: Literal["event", "talk"] | None = None
     scope_id: int | None = None
+    is_platform: bool = False
 
     @property
     def is_machine(self) -> bool:
@@ -51,10 +57,23 @@ class CurrentUser(BaseModel):
     def is_human_admin(self) -> bool:
         return self.role == "admin" and not self.is_machine and not self.is_sso
 
+    def has_event_access(self, event_id: int) -> bool:
+        if self.is_platform or self.is_human_admin:
+            return True
+        return event_id in self.event_ids
+
 
 def hash_api_key(api_key: str) -> str:
     """Returns a SHA-256 hash of the API key."""
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _normalize_auth_value(value: str | None) -> str | None:
+    """Normalizes user-controlled auth values without treating empty cookies as credentials."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def lock_active_admins(session: Session) -> list[int]:
@@ -91,6 +110,32 @@ def get_client(
             detail="Invalid API Key",
         )
 
+    now = datetime.now(UTC)
+    should_update = False
+    if client.last_used_at is None:
+        should_update = True
+    else:
+        last_used = (
+            client.last_used_at
+            if client.last_used_at.tzinfo is not None
+            else client.last_used_at.replace(tzinfo=UTC)
+        )
+        if (now - last_used).total_seconds() > 300:
+            should_update = True
+
+    if should_update:
+        client.last_used_at = now
+        # Update last_used_at out-of-band using an isolated session so we never
+        # prematurely commit the request session or risk detaching models on rollback.
+        try:
+            with SessionLocal() as separate_db:
+                separate_db.query(models.Client).filter(
+                    models.Client.id == client.id
+                ).update({"last_used_at": now}, synchronize_session=False)
+                separate_db.commit()
+        except SQLAlchemyError as exc:
+            logger.debug("Failed to update client last_used_at: %s", exc)
+
     return client
 
 
@@ -99,6 +144,8 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
     Validates that the provided client has access to the specified event_id.
     Raises a 403 Forbidden exception if the client does not have access.
     """
+    if getattr(client, "is_platform", False):
+        return
     if event_id not in client.event_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -106,11 +153,40 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
         )
 
 
+def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
+    if not isinstance(raw_key, str) or not raw_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    hashed_key = hash_api_key(raw_key)
+    client = (
+        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    )
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return CurrentUser(
+        user_id=None,
+        client_id=client.id,
+        email=None,
+        role="admin",
+        source="api_key",
+        event_ids=list(client.event_ids or []),
+        is_platform=bool(getattr(client, "is_platform", False)),
+    )
+
+
 def get_current_user(
     request: Request = None,
     db: Annotated[Session, Depends(get_db)] = None,
     api_key: Annotated[str | None, Security(api_key_header)] = None,
     cookie_token: Annotated[str | None, Cookie(alias="veditor_session")] = None,
+    cookie_api_key: Annotated[str | None, Cookie(alias="veditor_api_key")] = None,
     bearer_creds: Annotated[
         HTTPAuthorizationCredentials | None, Security(bearer_security)
     ] = None,
@@ -120,7 +196,8 @@ def get_current_user(
     Checks credentials in strict order:
     1. Machine client header (X-API-Key)
     2. Session cookie (veditor_session)
-    3. Authorization header (Authorization: Bearer <token>)
+    3. Machine client cookie fallback (veditor_api_key)
+    4. Authorization header (Authorization: Bearer <token>)
 
     Raises HTTP 401 Unauthorized if no credentials are present, or if
     provided credentials are invalid, expired, or deactivated.
@@ -141,62 +218,20 @@ def get_current_user(
                 role="admin",
                 source="api_key",
                 event_ids=list(client.event_ids or []),
+                is_platform=bool(getattr(client, "is_platform", False)),
             )
 
-    req_headers = (
-        request.headers if request is not None and hasattr(request, "headers") else {}
-    )
-    req_cookies = (
-        request.cookies if request is not None and hasattr(request, "cookies") else {}
-    )
+    req_headers = getattr(request, "headers", {}) or {}
+    req_cookies = getattr(request, "cookies", {}) or {}
 
-    # 1. Machine client header (X-API-Key)
-    has_api_key = (
-        api_key is not None
-        or (
-            isinstance(req_headers, dict)
-            and ("X-API-Key" in req_headers or "x-api-key" in req_headers)
-        )
-        or (
-            hasattr(req_headers, "get")
-            and (
-                req_headers.get("X-API-Key") is not None
-                or req_headers.get("x-api-key") is not None
-            )
-        )
+    # 1. Explicit machine client header (X-API-Key)
+    header_key = _normalize_auth_value(
+        req_headers.get("X-API-Key") or req_headers.get("x-api-key")
     )
-    if has_api_key:
-        raw_key = (
-            api_key
-            if api_key is not None
-            else (req_headers.get("X-API-Key") or req_headers.get("x-api-key"))
-        )
-        if not isinstance(raw_key, str) or not raw_key:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        hashed_key = hash_api_key(raw_key)
-        client = (
-            db.query(models.Client)
-            .filter(models.Client.hashed_key == hashed_key)
-            .first()
-        )
-        if not client:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return CurrentUser(
-            user_id=None,
-            client_id=client.id,
-            email=None,
-            role="admin",
-            source="api_key",
-            event_ids=list(client.event_ids or []),
-        )
+    provided_api_key = _normalize_auth_value(api_key)
+    has_header_api_key = header_key is not None or provided_api_key is not None
+    if has_header_api_key:
+        return _authenticate_api_key(provided_api_key or header_key, db)
 
     # 2. SSO header (X-SSO-Token)
     raw_sso = None
@@ -204,16 +239,9 @@ def get_current_user(
         candidate_header = req_headers.get("X-SSO-Token") or req_headers.get(
             "x-sso-token"
         )
-        if isinstance(candidate_header, str):
-            raw_sso = candidate_header
+        raw_sso = _normalize_auth_value(candidate_header)
 
     if raw_sso is not None:
-        if not raw_sso:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
@@ -224,7 +252,8 @@ def get_current_user(
         return CurrentUser(
             user_id=None,
             client_id=None,
-            email=None,
+            email=sso_payload.get("email"),
+            display_name=sso_payload.get("display_name"),
             role=sso_payload["role"],
             source="sso",
             event_ids=[sso_payload["scope_id"]]
@@ -237,74 +266,96 @@ def get_current_user(
     # 3. Session cookie (veditor_session)
     has_cookie = cookie_token is not None or "veditor_session" in req_cookies
     if has_cookie:
-        raw_cookie = (
+        raw_cookie = _normalize_auth_value(
             cookie_token
             if cookie_token is not None
             else req_cookies.get("veditor_session")
         )
-        if not raw_cookie:
+        if raw_cookie:
+            # First attempt decoding as an SSO session token
+            sso_payload = decode_sso_token(raw_cookie)
+            if sso_payload:
+                return CurrentUser(
+                    user_id=None,
+                    client_id=None,
+                    email=sso_payload.get("email"),
+                    display_name=sso_payload.get("display_name"),
+                    role=sso_payload["role"],
+                    source="sso",
+                    event_ids=[sso_payload["scope_id"]]
+                    if sso_payload.get("scope_type") == "event"
+                    else [],
+                    scope_type=sso_payload.get("scope_type"),
+                    scope_id=sso_payload.get("scope_id"),
+                )
+
+            payload = decode_session_token(raw_cookie)
+            if payload:
+                user = (
+                    db.query(models.User)
+                    .filter(models.User.id == payload["user_id"])
+                    .first()
+                )
+                if not user or not user.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User account not found or inactive",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                return CurrentUser(
+                    user_id=user.id,
+                    email=user.email,
+                    role=user.role,
+                    source="cookie",
+                    event_ids=[],
+                )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired session token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        # First attempt decoding as an SSO session token
-        sso_payload = decode_sso_token(raw_cookie)
-        if sso_payload:
+
+    # 4. Machine client cookie fallback (veditor_api_key)
+    cookie_api = _normalize_auth_value(cookie_api_key)
+    if cookie_api is None:
+        cookie_api = _normalize_auth_value(req_cookies.get("veditor_api_key"))
+    if cookie_api:
+        client = (
+            db.query(models.Client)
+            .filter(models.Client.hashed_key == hash_api_key(cookie_api))
+            .first()
+        )
+        if client:
             return CurrentUser(
                 user_id=None,
-                client_id=None,
+                client_id=client.id,
                 email=None,
-                role=sso_payload["role"],
-                source="sso",
-                event_ids=[sso_payload["scope_id"]]
-                if sso_payload.get("scope_type") == "event"
-                else [],
-                scope_type=sso_payload.get("scope_type"),
-                scope_id=sso_payload.get("scope_id"),
+                role="admin",
+                source="api_key",
+                event_ids=list(client.event_ids or []),
+                is_platform=bool(getattr(client, "is_platform", False)),
             )
+        # Ignore stale machine cookies so a later bearer credential can be used.
 
-        payload = decode_session_token(raw_cookie)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired session token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        user = (
-            db.query(models.User).filter(models.User.id == payload["user_id"]).first()
-        )
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User account not found or inactive",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return CurrentUser(
-            user_id=user.id,
-            email=user.email,
-            role=user.role,
-            source="cookie",
-            event_ids=[],
-        )
-
-    # 4. Authorization header (Authorization: Bearer <token>)
+    # 5. Authorization header (Authorization: Bearer <token>)
     auth_header = req_headers.get("Authorization") or req_headers.get("authorization")
     has_auth_header = auth_header is not None or bearer_creds is not None
     if has_auth_header:
         token: str | None = None
         if bearer_creds is not None:
-            token = bearer_creds.credentials
+            token = _normalize_auth_value(bearer_creds.credentials)
         elif auth_header:
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == "bearer":
-                token = parts[1]
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authorization header format",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
+            token = _normalize_auth_value(auth_header)
+            if token:
+                parts = token.split()
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    token = parts[1]
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid authorization header format",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
         if not token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -337,7 +388,8 @@ def get_current_user(
             return CurrentUser(
                 user_id=None,
                 client_id=None,
-                email=None,
+                email=sso_payload.get("email"),
+                display_name=sso_payload.get("display_name"),
                 role=sso_payload["role"],
                 source="sso",
                 event_ids=[sso_payload["scope_id"]]
@@ -417,7 +469,7 @@ def check_event_access(
     Raises HTTP 404 Not Found if the event does not exist.
     """
     if user.source == "api_key":
-        if event_id not in user.event_ids:
+        if not user.has_event_access(event_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Client is not authorized to access this event",
@@ -501,6 +553,15 @@ def check_talk_access(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="SSO session is not authorized for this event",
                 )
+            if user.role == "speaker" and not (
+                user.email
+                and target_talk.speaker_email
+                and target_talk.speaker_email.lower() == user.email.lower()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="SSO speaker session is not authorized for this talk",
+                )
             return target_talk
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -508,7 +569,7 @@ def check_talk_access(
         )
 
     if user.source == "api_key":
-        if target_talk.event_id not in user.event_ids:
+        if not user.has_event_access(target_talk.event_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Client is not authorized to access this talk",
@@ -516,6 +577,14 @@ def check_talk_access(
         return target_talk
 
     if user.role == "admin":
+        return target_talk
+
+    if (
+        user.role == "speaker"
+        and target_talk.speaker_email
+        and user.email
+        and target_talk.speaker_email.lower() == user.email.lower()
+    ):
         return target_talk
 
     event = (

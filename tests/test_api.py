@@ -3,26 +3,35 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.auth import get_client
-from app.db import SessionLocal, get_db
+from app.db import engine, get_db
 from app.main import app
 from app.storage import get_storage_backend
 
 client = TestClient(app)
 
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
+
 
 @pytest.fixture
 def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = TestingSessionLocal(
+        bind=connection, join_transaction_mode="create_savepoint"
+    )
+    app.dependency_overrides[get_db] = lambda: session
+
     try:
-        yield db
+        yield session
     finally:
         app.dependency_overrides.pop(get_db, None)
-        db.rollback()
-        db.close()
+        session.close()
+        transaction.rollback()
+        connection.close()
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +167,7 @@ def test_raw_preview_no_file():
 # ---------------------------------------------------------------------------
 
 
-def test_approve_transitions_to_pending_bounds():
+def test_approve_transitions_to_pending_intro_outro():
     mock_db = MagicMock()
     talk = _mock_talk(status="pending_approval")
     mock_db.query.return_value.filter.return_value.first.return_value = talk
@@ -166,7 +175,7 @@ def test_approve_transitions_to_pending_bounds():
     try:
         resp = client.post("/talks/1/approve", headers={"X-API-Key": "valid"})
         assert resp.status_code == 200
-        assert talk.status == "pending_bounds"
+        assert talk.status == "pending_intro_outro"
     finally:
         _clear_deps()
 
@@ -246,6 +255,40 @@ def test_cut_bounds_happy_path():
             # Verify talk_id and raw_key are passed, not scheduled times
             assert call_args[0][1] == 1  # talk_id
             assert call_args[0][2] == "1/raw/recording.mp4"  # raw_key
+        finally:
+            _clear_deps()
+
+
+def test_cut_bounds_with_note():
+    mock_db = MagicMock()
+    mock_storage = MagicMock()
+    talk = _mock_talk(status="pending_bounds", raw_duration_seconds=3600.0)
+    mock_db.query.return_value.filter.return_value.first.return_value = talk
+    mock_storage.list_keys.return_value = ["1/raw/recording.mp4"]
+    _setup_deps(mock_db, mock_storage)
+
+    with patch("app.routes.talks.light_queue"):
+        try:
+            resp = client.post(
+                "/talks/1/cut",
+                json={
+                    "cut_start": "00:00:10",
+                    "cut_end": "00:45:00",
+                    "note": "Trimmed initial silent intro",
+                },
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp.status_code == 202
+            assert talk.status == "cutting"
+            # Verify Review model was added with the note
+            review_calls = [
+                call[0][0]
+                for call in mock_db.add.call_args_list
+                if isinstance(call[0][0], models.Review)
+            ]
+            assert len(review_calls) == 1
+            assert review_calls[0].note == "Trimmed initial silent intro"
+            assert review_calls[0].decision == "cut"
         finally:
             _clear_deps()
 
@@ -406,8 +449,17 @@ def test_full_phase4_happy_path():
     _setup_deps(mock_db, mock_storage)
 
     try:
-        # 1. Approve → pending_bounds
+        # 1. Approve → pending_intro_outro
         resp = client.post("/talks/1/approve", headers={"X-API-Key": "valid"})
+        assert resp.status_code == 200
+        assert talk.status == "pending_intro_outro"
+
+        # 1b. Handoff → pending_bounds
+        resp = client.post(
+            "/talks/1/handoff",
+            json={"include_intro": False, "include_outro": False},
+            headers={"X-API-Key": "valid"},
+        )
         assert resp.status_code == 200
         assert talk.status == "pending_bounds"
 
@@ -731,13 +783,26 @@ def test_lifecycle_full_ingest_to_done():
                 j.kind == "detect" and j.status == "done" for j in jobs_dict.values()
             )
 
-            # 3. Approve talk -> transitions talk to 'pending_bounds'
+            # 3. Approve talk -> transitions talk to 'pending_intro_outro'
             resp2 = client.post(
                 "/talks/1/approve",
                 json={"decision": "approve"},
                 headers={"X-API-Key": "valid"},
             )
             assert resp2.status_code == 200
+            assert talk.status == "pending_intro_outro"
+
+            # 3b. Handoff to speaker -> transitions talk to 'pending_bounds'
+            resp_handoff = client.post(
+                "/talks/1/handoff",
+                json={
+                    "include_intro": True,
+                    "intro_source": "generated",
+                    "include_outro": False,
+                },
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp_handoff.status_code == 200
             assert talk.status == "pending_bounds"
 
             # 4. Submit cut bounds -> transitions talk to 'cutting' and enqueues job_cut
@@ -773,33 +838,20 @@ def test_lifecycle_full_ingest_to_done():
                 j.kind == "preview" and j.status == "done" for j in jobs_dict.values()
             )
 
-            # 7. Review talk -> transitions talk to 'pending_intro_outro'
+            # 7. Review talk -> transitions talk to 'assembling' and enqueues job_intro
+            mock_light_queue.reset_mock()
             resp4 = client.post(
                 "/talks/1/review",
                 json={"decision": "approve", "note": "Looks great!"},
                 headers={"X-API-Key": "valid"},
             )
             assert resp4.status_code == 200
-            assert talk.status == "pending_intro_outro"
-
-            # 8. Submit assembly request -> transitions talk to 'assembling' and enqueues job_intro
-            mock_light_queue.reset_mock()
-            resp5 = client.post(
-                "/talks/1/assemble",
-                json={
-                    "include_intro": True,
-                    "intro_source": "generated",
-                    "include_outro": False,
-                },
-                headers={"X-API-Key": "valid"},
-            )
-            assert resp5.status_code == 202
             assert talk.status == "assembling"
             mock_light_queue.enqueue.assert_called_once()
             queued_intro_task, *_ = mock_light_queue.enqueue.call_args[0]
             assert queued_intro_task == job_intro
 
-            # 9. Execute job_intro -> dispatches assembly to enqueue job_concat
+            # 8. Execute job_intro -> dispatches assembly to enqueue job_concat
             mock_light_queue.reset_mock()
             job_intro(1, "1/cut/cut.mp4", "1/intro/intro.mp4")
             assert any(
@@ -1245,13 +1297,22 @@ def test_e2e_rq_driven_lifecycle_ingest_to_preview():
                 j.kind == "detect" and j.status == "done" for j in jobs_dict.values()
             )
 
-            # 3. Approve talk -> transitions to 'pending_bounds'
+            # 3. Approve talk -> transitions to 'pending_intro_outro'
             resp2 = client.post(
                 "/talks/1/approve",
                 json={"decision": "approve"},
                 headers={"X-API-Key": "valid"},
             )
             assert resp2.status_code == 200
+            assert talk.status == "pending_intro_outro"
+
+            # 3b. Handoff to speaker -> transitions to 'pending_bounds'
+            resp_handoff = client.post(
+                "/talks/1/handoff",
+                json={"include_intro": False, "include_outro": False},
+                headers={"X-API-Key": "valid"},
+            )
+            assert resp_handoff.status_code == 200
             assert talk.status == "pending_bounds"
 
             # 4. Submit cut bounds -> transitions to 'cutting', job_cut enqueued to test_light_q
@@ -1436,26 +1497,17 @@ def test_lifecycle_full_approve_review_flow_to_done():
         )
 
         try:
-            # 1. Speaker approves preview -> transitions to 'pending_intro_outro'
+            # 1. Speaker approves preview -> transitions to 'assembling' and enqueues job_concat
             review_resp = client.post(
                 "/talks/1/review",
                 json={"decision": "approve", "note": "Approved by speaker"},
                 headers={"X-API-Key": "valid"},
             )
             assert review_resp.status_code == 200
-            assert talk.status == "pending_intro_outro"
+            assert talk.status == "assembling"
             assert len(reviews_list) == 1
             assert reviews_list[0].decision == "approve"
             assert reviews_list[0].note == "Approved by speaker"
-
-            # 2. Configure assembly (no intro/outro) -> transitions to 'assembling', enqueues job_concat
-            assemble_resp = client.post(
-                "/talks/1/assemble",
-                json={"include_intro": False, "include_outro": False},
-                headers={"X-API-Key": "valid"},
-            )
-            assert assemble_resp.status_code == 202
-            assert talk.status == "assembling"
             mock_lq.enqueue.assert_called_once()
             queued_concat_task, *_ = mock_lq.enqueue.call_args[0]
             assert queued_concat_task == job_concat
@@ -1708,7 +1760,7 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup():
             headers={"X-API-Key": "valid"},
         )
         assert r.status_code == 200
-        assert talk.status == "rejected"
+        assert talk.status == "pending_bounds"
         assert talk.cut_start is None
         assert talk.cut_end is None
         assert len(reviews) == 1
