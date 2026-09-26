@@ -1,10 +1,10 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import PositiveInt, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 @dataclass(frozen=True)
@@ -117,8 +117,146 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         return f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
+@dataclass(frozen=True)
+class SettingDefinition:
+    key: str
+    title: str
+    description: str
+    default_value: Any
+    value_type: type
+    options: tuple[tuple[str, str], ...] = ()
+    input_type: str = "select"
+    min_value: float | None = None
+    max_value: float | None = None
+    step: float | None = None
+
+
+SYSTEM_SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
+    "detect_duration_tolerance_seconds": SettingDefinition(
+        key="detect_duration_tolerance_seconds",
+        title="Schedule Time Margin",
+        description="Allowed difference between the scheduled talk time and the video recording length.",
+        default_value=300.0,
+        value_type=float,
+        input_type="range",
+        min_value=60.0,
+        max_value=1800.0,
+        step=30.0,
+        options=(
+            ("60.0", "Strict (1 minute)"),
+            ("180.0", "Moderate (3 minutes)"),
+            ("300.0", "Standard (5 minutes) - Default"),
+            ("600.0", "Relaxed (10 minutes)"),
+            ("900.0", "Wide (15 minutes)"),
+            ("1800.0", "Maximum (30 minutes)"),
+        ),
+    ),
+    "loudness_target_lufs": SettingDefinition(
+        key="loudness_target_lufs",
+        title="Speech Volume Level",
+        description="Standardized loudness level for speech so all recorded talks have even, balanced audio.",
+        default_value=-16.0,
+        value_type=float,
+        options=(
+            ("-14.0", "Loud (-14 LUFS - for noisy venues or mobile)"),
+            ("-16.0", "Standard Web (-16 LUFS - Recommended / Default)"),
+            ("-18.0", "Cinematic (-18 LUFS)"),
+            ("-23.0", "European Broadcast (-23 LUFS - EBU R128)"),
+            ("-24.0", "US Broadcast (-24 LUFS - ATSC A/85)"),
+        ),
+    ),
+    "default_preview_preset": SettingDefinition(
+        key="default_preview_preset",
+        title="Draft Video Preview Quality",
+        description="Quality and resolution profile used for generating quick draft previews in the editor.",
+        default_value="small_video",
+        value_type=str,
+        options=(
+            ("small_video", "Standard Draft (320x180, Fastest) - Default"),
+            ("big_video", "High Detail Draft (640x360, Sharper)"),
+        ),
+    ),
+    "default_transcode_preset": SettingDefinition(
+        key="default_transcode_preset",
+        title="Final Video Export Quality",
+        description="Resolution and quality profile used when rendering the finished published video.",
+        default_value="1080p_default",
+        value_type=str,
+        options=(
+            ("1080p_default", "Full HD (1080p, High Quality) - Default"),
+            ("720p", "HD (720p, Standard)"),
+            ("4k_master", "Ultra HD (4K Master)"),
+        ),
+    ),
+}
+
+EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "postgres_user",
+        "postgres_password",
+        "postgres_host",
+        "postgres_port",
+        "postgres_db",
+        "database_url",
+        "redis_url",
+        "session_secret",
+        "jwt_algorithm",
+        "data_dir",
+        "ingest_roots",
+        "storage_backend",
+    }
+)
+
+
+def _cast_setting_value(key: str, raw_val: str, default: Any = None) -> Any:
+    defn = SYSTEM_SETTING_DEFINITIONS.get(key)
+    fallback = (
+        default if default is not None else (defn.default_value if defn else raw_val)
+    )
+    v_type = (
+        defn.value_type if defn else (type(default) if default is not None else str)
+    )
+    try:
+        if v_type is float:
+            val = float(raw_val)
+            if not math.isfinite(val):
+                raise ValueError
+            return val
+        return v_type(raw_val)
+    except ValueError, TypeError:
+        return fallback
+
+
+def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
+    """Resolve a configuration setting, checking DB overrides before falling back to defaults."""
+    normalized_key = key.strip().lower()
+    if normalized_key in EXCLUDED_SETTING_KEYS:
+        return getattr(settings, normalized_key, default)
+
+    try:
+        from app.models import SystemSetting
+
+        if db is not None:
+            row = db.get(SystemSetting, normalized_key)
+        else:
+            from app.db import SessionLocal
+
+            with SessionLocal() as session:
+                row = session.get(SystemSetting, normalized_key)
+        if row is not None:
+            return _cast_setting_value(normalized_key, row.value, default)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    if default is not None:
+        return default
+    if hasattr(settings, normalized_key):
+        return getattr(settings, normalized_key)
+    defn = SYSTEM_SETTING_DEFINITIONS.get(normalized_key)
+    return defn.default_value if defn else None
 
 
 settings = Settings()

@@ -305,6 +305,21 @@ class Review(Base):
     user: Mapped[User | None] = relationship(back_populates="reviews")
 
 
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class ApprovedCut(Base):
     __tablename__ = "approved_cuts"
 

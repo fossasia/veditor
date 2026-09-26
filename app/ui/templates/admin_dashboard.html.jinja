@@ -1,6 +1,10 @@
 {% extends "admin_base.html.jinja" %}
 {% block title %}Admin Dashboard{% endblock %}
 
+{% block extra_head %}
+  <link rel="stylesheet" href="/static/css/admin.css">
+{% endblock %}
+
 {% block breadcrumb %}
   <span class="current">Overview</span>
 {% endblock %}
@@ -43,6 +47,76 @@
         {{ used_gb }} / {{ total_gb }} GB
       </span>
       {% endif %}
+    </div>
+  </div>
+
+  <!-- Configuration Summary Panel -->
+  <div class="admin-summary-panel">
+    <div class="summary-panel-header">
+      <div class="summary-panel-title-group">
+        <div class="summary-panel-icon-box">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="21" x2="4" y2="14"></line>
+            <line x1="4" y1="10" x2="4" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12" y2="3"></line>
+            <line x1="20" y1="21" x2="20" y2="16"></line>
+            <line x1="20" y1="12" x2="20" y2="3"></line>
+            <line x1="1" y1="14" x2="7" y2="14"></line>
+            <line x1="9" y1="8" x2="15" y2="8"></line>
+            <line x1="17" y1="16" x2="23" y2="16"></line>
+          </svg>
+        </div>
+        <h2 class="summary-panel-title">Configuration Summary</h2>
+      </div>
+      <a href="/admin/settings" class="btn-summary-edit" id="btn-edit-settings">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        Edit Settings
+      </a>
+    </div>
+
+    <div class="summary-grid">
+      {% for s in settings %}
+      <div class="summary-item-card">
+        <div class="summary-item-top">
+          <div class="summary-item-icon-box">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              {% if s.key == 'detect_duration_tolerance_seconds' %}
+              <circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>
+              {% elif s.key == 'loudness_target_lufs' %}
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              {% elif s.key == 'default_preview_preset' %}
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line>
+              {% else %}
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              {% endif %}
+            </svg>
+          </div>
+          <span class="setting-badge {% if s.is_overridden %}badge-custom{% else %}badge-default{% endif %}">
+            {% if s.is_overridden %}Custom Override{% else %}System Default{% endif %}
+          </span>
+        </div>
+        <div class="summary-item-body">
+          <span class="summary-item-label">
+            {% if s.key == 'detect_duration_tolerance_seconds' %}Schedule Margin
+            {% elif s.key == 'loudness_target_lufs' %}Speech Volume
+            {% elif s.key == 'default_preview_preset' %}Draft Preview
+            {% elif s.key == 'default_transcode_preset' %}Final Transcode
+            {% else %}{{ s.title or s.key }}{% endif %}
+          </span>
+          <span class="summary-item-val">
+            {% if s.key == 'detect_duration_tolerance_seconds' %}±{{ (s.value|float / 60)|int }} mins
+            {% elif s.key == 'loudness_target_lufs' %}{{ s.value|float|round(1) }} LUFS
+            {% elif s.key == 'default_preview_preset' %}{{ 'High Detail (640x360)' if s.value == 'big_video' else 'Standard (320x180)' }}
+            {% elif s.key == 'default_transcode_preset' %}{{ 'HD (720p)' if s.value == '720p' else ('Ultra HD (4K)' if s.value == '4k_master' else 'Full HD (1080p)') }}
+            {% else %}{{ s.value }}{% endif %}
+          </span>
+        </div>
+      </div>
+      {% endfor %}
     </div>
   </div>
 </div>

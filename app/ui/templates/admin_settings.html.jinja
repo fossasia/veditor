@@ -1,0 +1,231 @@
+{% extends "admin_base.html.jinja" %}
+{% block title %}Platform Settings{% endblock %}
+
+{% block extra_head %}
+  <link rel="stylesheet" href="/static/css/admin.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin">Admin Console</a>
+  <span class="sep">/</span>
+  <span class="current">Settings</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body settings-page">
+  <div class="admin-header-row">
+    <div class="admin-header-title-group">
+      <div class="admin-header-icon-box">
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="21" x2="4" y2="14"></line>
+          <line x1="4" y1="10" x2="4" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12" y2="3"></line>
+          <line x1="20" y1="21" x2="20" y2="16"></line>
+          <line x1="20" y1="12" x2="20" y2="3"></line>
+          <line x1="1" y1="14" x2="7" y2="14"></line>
+          <line x1="9" y1="8" x2="15" y2="8"></line>
+          <line x1="17" y1="16" x2="23" y2="16"></line>
+        </svg>
+      </div>
+      <div>
+        <h1 class="admin-title">Platform Settings</h1>
+        <p class="admin-subtitle">Fine-tune automated talk boundary matching, audio loudness, and encoding profiles.</p>
+      </div>
+    </div>
+    <div class="header-status-badge">
+      <span class="status-pulse-dot"></span>
+      <span>Runtime Overrides Active</span>
+    </div>
+  </div>
+
+  {% if status_msg == 'saved' %}
+  <div class="admin-alert alert-success" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+    </svg>
+    <span>Settings saved successfully. Changes take effect on subsequent video jobs.</span>
+  </div>
+  {% elif status_msg == 'reset' %}
+  <div class="admin-alert alert-success" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+      <polyline points="21 3 21 8 16 8"></polyline>
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+      <polyline points="3 21 3 16 8 16"></polyline>
+    </svg>
+    <span>Platform settings have been reset to system defaults.</span>
+  </div>
+  {% endif %}
+
+  {% if error_msg %}
+  <div class="admin-alert alert-danger" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="12" y1="8" x2="12" y2="12"></line>
+      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+    </svg>
+    <span>{{ error_msg }}</span>
+  </div>
+  {% endif %}
+
+  <form action="/admin/settings" method="POST" class="settings-form" id="settings-form">
+    <div class="settings-container">
+      {% for s in settings %}
+      <div class="setting-card" id="card-{{ s.key }}">
+        <div class="setting-card-header">
+          <div class="setting-title-group">
+            <div class="card-icon-box">
+              {% if s.key == 'detect_duration_tolerance_seconds' %}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              {% elif s.key == 'loudness_target_lufs' %}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              </svg>
+              {% elif s.key == 'default_preview_preset' %}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                <line x1="7" y1="2" x2="7" y2="22"></line>
+                <line x1="17" y1="2" x2="17" y2="22"></line>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <line x1="2" y1="7" x2="7" y2="7"></line>
+                <line x1="2" y1="17" x2="7" y2="17"></line>
+                <line x1="17" y1="17" x2="22" y2="17"></line>
+                <line x1="17" y1="7" x2="22" y2="7"></line>
+              </svg>
+              {% else %}
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path>
+              </svg>
+              {% endif %}
+            </div>
+            <div>
+              <h2 class="setting-title">{{ s.title or s.key }}</h2>
+            </div>
+          </div>
+          <div class="card-status-group">
+            <span id="badge-{{ s.key }}" class="setting-badge {% if s.is_overridden %}badge-custom{% else %}badge-default{% endif %}">
+              {% if s.is_overridden %}Custom Override{% else %}System Default{% endif %}
+            </span>
+            {% if s.input_type == 'range' %}
+            <span id="readout-{{ s.key }}" class="tolerance-readout-pill"></span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if s.description %}
+        <p class="setting-desc">{{ s.description }}</p>
+        {% endif %}
+
+        <div class="setting-control-area">
+          {% if s.input_type == 'range' %}
+            <div class="setting-slider-wrap">
+              <label for="slider-{{ s.key }}" class="setting-label">{{ s.title or s.key }}</label>
+              <div class="slider-track-container">
+                <input
+                  type="range"
+                  id="slider-{{ s.key }}"
+                  class="setting-range"
+                  min="0"
+                  max="5"
+                  step="1"
+                  value="2"
+                  aria-label="{{ s.title or s.key }}"
+                >
+                <input
+                  type="hidden"
+                  id="input-{{ s.key }}"
+                  name="{{ s.key }}"
+                  value="{{ s.value }}"
+                >
+              </div>
+              <div class="quick-preset-bar">
+                <span class="quick-preset-label">Quick select:</span>
+                {% for lbl in ['1m (Strict)', '3m', '5m (Default)', '10m', '15m', '30m (Max)'] %}
+                <button type="button" class="preset-pill" data-index="{{ loop.index0 }}">{{ lbl }}</button>
+                {% endfor %}
+              </div>
+            </div>
+          {% else %}
+            <label for="select-{{ s.key }}" class="setting-label">{{ s.title or s.key }}</label>
+            <div class="select-wrapper">
+              <select id="select-{{ s.key }}" name="{{ s.key }}" class="setting-select">
+                {% for opt in s.options %}
+                <option value="{{ opt.value }}" {% if s.value == opt.value %}selected{% endif %}>
+                  {{ opt.label }}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Floating Bottom Navigation Dock -->
+    <div class="settings-bottom-dock">
+      <div class="bottom-dock-inner">
+        <div class="bottom-dock-note">
+          <span class="dock-note-dot"></span>
+          <span>Settings apply to new jobs</span>
+        </div>
+        <div class="dock-divider" aria-hidden="true"></div>
+        <div class="bottom-dock-actions">
+          <button type="button" class="btn btn-dock-reset" id="btn-open-reset-modal">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+              <polyline points="21 3 21 8 16 8"></polyline>
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+              <polyline points="3 21 3 16 8 16"></polyline>
+            </svg>
+            Reset All to Defaults
+          </button>
+          <button type="submit" class="btn btn-dock-save">
+            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <!-- Native Website Reset Confirmation Modal -->
+  <dialog id="reset-modal" class="admin-modal">
+    <div class="modal-card">
+      <div class="modal-icon-box danger">
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+      <div class="modal-content-area">
+        <h3 class="modal-title">Reset to System Defaults?</h3>
+        <p class="modal-desc">
+          All runtime overrides will be cleared. Talk margin, audio loudness, and export presets will immediately revert to their system defaults.
+        </p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-modal-cancel" id="btn-cancel-modal">Cancel</button>
+        <button type="submit" form="settings-form" name="action" value="reset_all" class="btn btn-modal-danger" id="btn-confirm-reset">
+          Reset to Defaults
+        </button>
+      </div>
+    </div>
+  </dialog>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+  <script src="/static/js/admin_settings.js"></script>
+{% endblock %}

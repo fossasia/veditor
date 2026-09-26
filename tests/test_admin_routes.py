@@ -884,3 +884,325 @@ def test_admin_events_pagination(client: TestClient, db_session):
 
     res_bad_limit_zero = client.get("/admin/events?limit=0")
     assert res_bad_limit_zero.status_code == 422
+
+
+def test_admin_settings_unauthenticated(client: TestClient):
+    res = client.get("/admin/settings")
+    assert res.status_code == 401
+
+    res = client.post(
+        "/admin/settings",
+        data={"key": "detect_duration_tolerance_seconds", "value": "100.0"},
+    )
+    assert res.status_code == 401
+
+
+def test_admin_settings_forbidden_for_non_admin(client: TestClient, db_session):
+    user = _create_test_user(db_session, "user_settings@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin/settings")
+    assert res.status_code == 403
+
+    res = client.post(
+        "/admin/settings",
+        data={"key": "detect_duration_tolerance_seconds", "value": "100.0"},
+    )
+    assert res.status_code == 403
+
+
+def test_admin_settings_rejects_api_key(client: TestClient, db_session):
+    client_rec = models.Client(hashed_key=hash_api_key("test_api_key"), event_ids=[1])
+    db_session.add(client_rec)
+    db_session.commit()
+
+    res = client.get("/admin/settings", headers={"X-API-Key": "test_api_key"})
+    assert res.status_code == 403
+
+
+def test_admin_settings_get_html(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_get_settings@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin/settings")
+    assert res.status_code == 200
+    assert "Platform Settings" in res.text
+    assert "Schedule Time Margin" in res.text
+    assert 'type="range"' in res.text
+    assert "Speech Volume Level" in res.text
+    assert "Draft Video Preview Quality" in res.text
+    assert "Final Video Export Quality" in res.text
+    assert "Save Changes" in res.text
+
+
+def test_admin_settings_post_form_bulk(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_post_bulk@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # Submit common form with customized choices
+    res = client.post(
+        "/admin/settings",
+        data={
+            "detect_duration_tolerance_seconds": "600.0",
+            "loudness_target_lufs": "-14.0",
+            "default_preview_preset": "big_video",
+            "default_transcode_preset": "720p",
+        },
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "/admin/settings?status=saved" in res.headers.get("location", "")
+
+    # Check all are stored
+    row_tol = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="detect_duration_tolerance_seconds")
+        .first()
+    )
+    assert row_tol.value == "600.0"
+
+    row_lufs = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="loudness_target_lufs")
+        .first()
+    )
+    assert row_lufs.value == "-14.0"
+
+    row_prev = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="default_preview_preset")
+        .first()
+    )
+    assert row_prev.value == "big_video"
+
+    row_trans = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="default_transcode_preset")
+        .first()
+    )
+    assert row_trans.value == "720p"
+
+    # Now submit action="reset_all"
+    res = client.post(
+        "/admin/settings",
+        data={"action": "reset_all"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "/admin/settings?status=reset" in res.headers.get("location", "")
+
+    db_session.expire_all()
+    count = db_session.query(models.SystemSetting).count()
+    assert count == 0
+
+
+def test_admin_settings_api_get(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_api_settings@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin/api/settings")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    keys = [item["key"] for item in data]
+    assert "detect_duration_tolerance_seconds" in keys
+    assert "loudness_target_lufs" in keys
+    assert len(data[0]["options"]) > 0
+
+
+def test_admin_settings_post_form_and_reset(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_post_settings@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # Post update via form
+    res = client.post(
+        "/admin/settings",
+        data={"key": "detect_duration_tolerance_seconds", "value": "240.0"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "/admin/settings?status=saved" in res.headers.get("location", "")
+
+    # Check DB was updated
+    row = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="detect_duration_tolerance_seconds")
+        .first()
+    )
+    assert row is not None
+    assert row.value == "240.0"
+
+    # Reset setting
+    res = client.post(
+        "/admin/settings/detect_duration_tolerance_seconds/reset",
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "/admin/settings?status=reset" in res.headers.get("location", "")
+
+    db_session.expire_all()
+    row = (
+        db_session.query(models.SystemSetting)
+        .filter_by(key="detect_duration_tolerance_seconds")
+        .first()
+    )
+    assert row is None
+
+
+def test_admin_settings_post_json(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_post_json@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(
+        "/admin/settings",
+        json={"key": "loudness_target_lufs", "value": "-20.0"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["key"] == "loudness_target_lufs"
+    assert data["value"] == "-20.0"
+    assert data["is_overridden"] is True
+
+    # Reset via JSON
+    res = client.post(
+        "/admin/settings/loudness_target_lufs/reset",
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "ok"
+
+
+def test_admin_settings_post_invalid_validation(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_invalid_val@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # Negative tolerance
+    res = client.post(
+        "/admin/settings",
+        json={"key": "detect_duration_tolerance_seconds", "value": "-5.0"},
+    )
+    assert res.status_code == 400
+
+    # Invalid LUFS
+    res = client.post(
+        "/admin/settings",
+        json={"key": "loudness_target_lufs", "value": "10.0"},
+    )
+    assert res.status_code == 400
+
+
+def test_admin_settings_post_forbidden_secret(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_secret_mod@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(
+        "/admin/settings",
+        json={"key": "session_secret", "value": "new_secret_attempt"},
+    )
+    assert res.status_code == 400
+    assert "protected credential" in res.json()["detail"]
+
+    # Uppercase secret
+    res = client.post(
+        "/admin/settings",
+        json={"key": "SESSION_SECRET", "value": "new_secret_attempt"},
+    )
+    assert res.status_code == 400
+
+    # Infrastructure setting
+    res = client.post(
+        "/admin/settings",
+        json={"key": "storage_backend", "value": "s3"},
+    )
+    assert res.status_code == 400
+
+
+def test_admin_settings_post_malformed_payloads(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_malformed@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # Null key
+    res = client.post("/admin/settings", json={"key": None, "value": "123"})
+    assert res.status_code == 400
+
+    # Non-dict JSON
+    res = client.post(
+        "/admin/settings",
+        content="['not', 'a', 'dict']",
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 400
+
+    # Key > 255 characters
+    long_key = "k" * 256
+    res = client.post("/admin/settings", json={"key": long_key, "value": "123"})
+    assert res.status_code == 400
+    assert "cannot exceed 255 characters" in res.json()["detail"]
+
+
+def test_admin_settings_excluded_keys_hidden_from_listing(
+    client: TestClient, db_session
+):
+    admin = _create_test_user(
+        db_session, "admin_hidden_keys@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # Insert a secret into DB directly
+    db_session.add(
+        models.SystemSetting(
+            key="session_secret",
+            value="leaked_secret_val",
+            updated_at=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+
+    res = client.get("/admin/api/settings")
+    assert res.status_code == 200
+    data = res.json()
+    keys = [item["key"] for item in data]
+    assert "session_secret" not in keys
+
+
+def test_admin_dashboard_overview_configuration_summary(client: TestClient, db_session):
+    admin = _create_test_user(
+        db_session, "admin_overview_summary@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin")
+    assert res.status_code == 200
+    assert "Configuration Summary" in res.text
+    assert 'href="/admin/settings"' in res.text
+    assert "Edit Settings" in res.text
+    assert "btn-summary-edit" in res.text
+    assert "System Default" in res.text
+    assert "admin-summary-panel" in res.text
