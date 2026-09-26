@@ -434,3 +434,12 @@ class ScheduleImportResponse(BaseModel):
     imported_count: int
     source: str | None = None
     external_id: str | None = None
+
+
+class RoomRecordingAttachResponse(BaseModel):
+    status: str = "ok"
+    attached_count: int
+    room: str
+    event_id: int
+    talk_ids: list[int]
+    recording_duration_seconds: float | None = None

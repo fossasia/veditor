@@ -89,7 +89,6 @@ async function pollTalk(talkId) {
     );
     const key = (window.getApiKey && window.getApiKey()) || '';
     if (!key && !isSessionLoggedIn) return;
-    const headers = key ? { 'X-API-Key': key } : {};
     const cell = document.querySelector(`.status-cell[data-talk-id="${talkId}"]`);
     const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
@@ -97,7 +96,7 @@ async function pollTalk(talkId) {
     let talkStatus = row ? row.dataset.status : '';
     let jobs = [];
 
-    const r = await (window.authFetch || fetch)(`/talks/${talkId}/jobs`, { headers, _isPolling: true });
+    const r = await (window.authFetch || fetch)(`/talks/${talkId}/jobs`, { _isPolling: true });
     if (!r.ok) return;
     const data = await r.json();
     talkStatus = data.status || talkStatus;
@@ -239,7 +238,7 @@ window.submitAttachRoomRecording = async function() {
       fd.append('event_id', eventIdParam);
     }
 
-    const res = await (window.authFetch || fetch)('/studio/room/attach-recording', {
+    const res = await (window.authFetch || fetch)('/talks/room/attach-recording', {
       method: 'POST',
       body: fd,
     });

@@ -1345,3 +1345,32 @@ def test_encoder_threads_forwarded_when_configured(
         job_transcode(1, "1/cut/cut_loud.mp4", "1/final/final.mp4")
 
     assert captured_transcode_kwargs.get("threads") == 2
+
+
+def test_job_detect_room_recording_tolerance_override(dummy_talk, mock_storage):
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.detect") as mock_detect,
+    ):
+        mock_detect.return_value = DetectResult(
+            passed=True,
+            actual_duration_seconds=12600.0,
+            has_video=True,
+            has_audio=True,
+            reason=None,
+        )
+        job_detect(1, "1/raw/raw.mp4", tolerance_seconds=float("inf"))
+
+        mock_detect.assert_called_once_with(
+            mock_storage.get("1/raw/raw.mp4"),
+            scheduled_start=dummy_talk.start,
+            scheduled_end=dummy_talk.end,
+            tolerance_seconds=float("inf"),
+        )
+        assert dummy_talk.status == "pending_approval"
+        assert dummy_talk.raw_duration_seconds == 12600.0

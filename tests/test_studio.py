@@ -2631,3 +2631,449 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
 
     res_api_other = client.get(f"/talks/{other_talk.id}")
     assert res_api_other.status_code == 403
+
+
+def test_attach_room_recording_multi_talk(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    user = models.User(
+        email="org@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    event = models.Event(name="Summit 2026", created_by_user=user)
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk1 = models.Talk(
+        event_id=event.id,
+        title="Opening Keynote",
+        room="Main Auditorium",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talk2 = models.Talk(
+        event_id=event.id,
+        title="Deep Dive AI",
+        room="Main Auditorium",
+        start=now + timedelta(minutes=30),
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+    talk3 = models.Talk(
+        event_id=event.id,
+        title="Panel Discussion",
+        room="Main Auditorium",
+        start=now + timedelta(minutes=60),
+        end=now + timedelta(minutes=90),
+        status="waiting_for_files",
+    )
+    talk_other = models.Talk(
+        event_id=event.id,
+        title="Workshop in Room B",
+        room="Room B",
+        start=now,
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+    for t in [talk1, talk2, talk3, talk_other]:
+        db_session.add(t)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    clip = generate_clip(1.0, output_dir=tmp_path)
+    try:
+        with (
+            patch("app.routes.talks.light_queue") as mq,
+            open(clip, "rb") as f_vid,
+        ):
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={
+                    "room": "Main Auditorium",
+                    "event_id": str(event.id),
+                },
+                files={"file": ("morning_session.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+            assert res.status_code == 200, res.text
+            data = res.json()
+            assert data["attached_count"] == 3
+            assert data["room"] == "Main Auditorium"
+            assert data["event_id"] == event.id
+            assert set(data["talk_ids"]) == {talk1.id, talk2.id, talk3.id}
+
+            db_session.refresh(talk1)
+            db_session.refresh(talk2)
+            db_session.refresh(talk3)
+            db_session.refresh(talk_other)
+
+            assert talk1.status == "detecting"
+            assert talk2.status == "detecting"
+            assert talk3.status == "detecting"
+            assert talk_other.status == "waiting_for_files"
+
+            # Check zero-copy hardlink: same inode on local disk backend
+            p1 = temp_storage.get(f"{talk1.id}/raw/raw.mp4")
+            p2 = temp_storage.get(f"{talk2.id}/raw/raw.mp4")
+            p3 = temp_storage.get(f"{talk3.id}/raw/raw.mp4")
+            assert p1.stat().st_ino == p2.stat().st_ino == p3.stat().st_ino
+
+            # Check queued jobs
+            assert mq.enqueue.call_count == 3
+            enqueued_tids = [call.args[1] for call in mq.enqueue.call_args_list]
+            assert set(enqueued_tids) == {talk1.id, talk2.id, talk3.id}
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_attach_room_recording_with_recording_start_filter(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    event = models.Event(name="Filter Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    day_start = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk_morning = models.Talk(
+        event_id=event.id,
+        title="Morning Session",
+        room="Track 1",
+        start=day_start,
+        end=day_start + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talk_afternoon = models.Talk(
+        event_id=event.id,
+        title="Afternoon Session",
+        room="Track 1",
+        start=day_start + timedelta(hours=5),
+        end=day_start + timedelta(hours=5, minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk_morning)
+    db_session.add(talk_afternoon)
+    db_session.commit()
+
+    clip = generate_clip(1.0, output_dir=tmp_path)
+    try:
+        with (
+            patch("app.routes.talks.light_queue"),
+            open(clip, "rb") as f_vid,
+        ):
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={
+                    "room": "Track 1",
+                    "event_id": str(event.id),
+                    "recording_start": day_start.isoformat(),
+                },
+                files={"file": ("morning.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+            assert res.status_code == 200, res.text
+            data = res.json()
+            assert data["attached_count"] == 1
+            assert data["talk_ids"] == [talk_morning.id]
+
+            db_session.refresh(talk_morning)
+            db_session.refresh(talk_afternoon)
+            assert talk_morning.status == "detecting"
+            assert talk_afternoon.status == "waiting_for_files"
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_attach_room_recording_no_waiting_talks_conflict(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    event = models.Event(name="Conflict Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Already Processed",
+        room="Track A",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="done",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        with open(clip, "rb") as f_vid:
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={
+                    "room": "Track A",
+                    "event_id": str(event.id),
+                },
+                files={"file": ("conflict.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+            assert res.status_code == 409
+            assert "waiting for files" in res.json()["detail"].lower()
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_attach_room_recording_from_ingest_roots(
+    client: TestClient, db_session, temp_storage, tmp_path, monkeypatch
+):
+    ingest_dir = tmp_path / "ingest_root"
+    ingest_dir.mkdir()
+    monkeypatch.setattr("app.config.settings.ingest_roots", [ingest_dir])
+
+    clip = generate_clip(0.5, output_dir=ingest_dir)
+
+    event = models.Event(name="Ingest Root Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Ingest Root Session",
+        room="Hall B",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    with patch("app.routes.talks.light_queue"):
+        res = client.post(
+            "/talks/room/attach-recording",
+            json={
+                "room": "Hall B",
+                "event_id": event.id,
+                "relative_key": clip.name,
+            },
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["attached_count"] == 1
+        # Ingest source file must still exist
+        assert clip.is_file()
+
+        db_session.refresh(talk)
+        assert talk.status == "detecting"
+
+
+def test_attach_room_recording_unauthorized(client: TestClient, db_session):
+    res = client.post(
+        "/talks/room/attach-recording",
+        data={"room": "Hall 1"},
+    )
+    assert res.status_code == 401
+
+
+def test_attach_room_recording_studio_alias(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    event = models.Event(name="Alias Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Alias Session",
+        room="Hall C",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+            res = client.post(
+                "/studio/room/attach-recording",
+                data={"room": "Hall C", "event_id": str(event.id)},
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+            assert res.status_code == 200
+            assert res.json()["attached_count"] == 1
+    finally:
+        clip.unlink(missing_ok=True)
+
+
+def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
+    from app.storage import LocalDiskBackend
+
+    storage = LocalDiskBackend(data_dir=tmp_path / "storage")
+    source_file = storage.get_temp_dir() / "shared_recording.mp4"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_bytes(b"video content bytes for multi talk attachment")
+
+    # Simulate cross-device or unsupported hardlinks by forcing os.link to raise OSError
+    with patch("os.link", side_effect=OSError("Cross-device link")):
+        storage.link_or_copy("talk_1/raw/raw.mp4", source_file)
+        # Verify source file still exists and was not moved or deleted!
+        assert source_file.exists(), (
+            "source file must not be deleted or moved during fallback copy"
+        )
+        assert (
+            storage.get("talk_1/raw/raw.mp4").read_bytes()
+            == b"video content bytes for multi talk attachment"
+        )
+
+        # Attach second talk with the same source file
+        storage.link_or_copy("talk_2/raw/raw.mp4", source_file)
+        assert (
+            storage.get("talk_2/raw/raw.mp4").read_bytes()
+            == b"video content bytes for multi talk attachment"
+        )
+        assert source_file.exists()
+
+
+def test_attach_room_recording_sso_discovery_without_event_id(
+    client: TestClient, db_session, tmp_path
+):
+    from app.auth import CurrentUser, get_current_user
+    from app.main import app
+
+    event = models.Event(
+        name="SSO Room Event",
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="SSO Talk",
+        room="Hall SSO",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=888,
+        role="organizer",
+        source="sso",
+        is_sso=True,
+        event_ids=[event.id],
+    )
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={"room": "Hall SSO"},  # Note: event_id is omitted!
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+            )
+            assert res.status_code == 200
+            assert res.json()["attached_count"] == 1
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        clip.unlink(missing_ok=True)
+
+
+def test_attach_room_recording_staging_failure_cleans_up(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    event = models.Event(name="Rollback Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    t1 = models.Talk(
+        event_id=event.id,
+        title="Talk 1",
+        room="Rollback Room",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    t2 = models.Talk(
+        event_id=event.id,
+        title="Talk 2",
+        room="Rollback Room",
+        start=now + timedelta(minutes=30),
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+    db_session.add(t1)
+    db_session.add(t2)
+    db_session.commit()
+
+    call_count = 0
+    real_link_or_copy = temp_storage.link_or_copy
+
+    def mock_link_or_copy(key, source):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("Disk write failed on talk 2")
+        return real_link_or_copy(key, source)
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        import pytest
+
+        with (
+            pytest.raises(RuntimeError),
+            patch.object(temp_storage, "link_or_copy", side_effect=mock_link_or_copy),
+            open(clip, "rb") as f_vid,
+        ):
+            client.post(
+                "/talks/room/attach-recording",
+                data={"room": "Rollback Room", "event_id": str(event.id)},
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+
+        # Assert talk 1 raw file was cleaned up on failure!
+        assert not temp_storage.exists(f"{t1.id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
+        # Assert talk status was not updated in DB
+        db_session.refresh(t1)
+        assert t1.status == "waiting_for_files"
+    finally:
+        clip.unlink(missing_ok=True)

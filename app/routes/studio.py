@@ -16,7 +16,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, selectinload
 
-from app import models
+from app import models, schemas
 from app.auth import CurrentUser, hash_api_key
 from app.config import settings
 from app.db import get_db
@@ -1096,3 +1096,15 @@ def delete_studio_event(
     db.delete(event)
     db.commit()
     return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+
+
+from app.routes.talks import attach_room_recording
+
+router.add_api_route(
+    "/room/attach-recording",
+    attach_room_recording,
+    methods=["POST"],
+    response_model=schemas.RoomRecordingAttachResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)

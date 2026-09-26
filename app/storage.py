@@ -29,6 +29,13 @@ class StorageBackend(Protocol):
         """
         ...
 
+    def link_or_copy(self, key: str, source: Path) -> None:
+        """
+        Store a file at the given key using a filesystem hardlink if possible,
+        falling back to atomic copy if cross-filesystem or unsupported.
+        """
+        ...
+
     def get(self, key: str) -> Path:
         """
         Retrieve a file by key, returning a local readable Path.
@@ -126,6 +133,40 @@ class LocalDiskBackend(StorageBackend):
                 else:
                     with open(source, "rb") as f_in:
                         shutil.copyfileobj(f_in, tmp)
+            except Exception:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
+
+        try:
+            os.replace(tmp.name, target_path)
+        except Exception:
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
+
+    def link_or_copy(self, key: str, source: Path) -> None:
+        """
+        Store a file at the given key using a filesystem hardlink if possible,
+        falling back to atomic copy if cross-filesystem or unsupported.
+        """
+        target_path = self._get_path(key)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(delete=False, dir=target_path.parent) as tmp:
+            tmp_path = Path(tmp.name)
+        tmp_path.unlink(missing_ok=True)
+
+        try:
+            os.link(source, tmp_path)
+            os.replace(tmp_path, target_path)
+            return
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+
+        # Fallback: atomic copy preserving source
+        with tempfile.NamedTemporaryFile(delete=False, dir=target_path.parent) as tmp:
+            try:
+                with open(source, "rb") as f_in:
+                    shutil.copyfileobj(f_in, tmp)
             except Exception:
                 tmp.close()
                 Path(tmp.name).unlink(missing_ok=True)

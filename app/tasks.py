@@ -205,7 +205,15 @@ def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> No
         staged.unlink(missing_ok=True)
 
 
-def job_detect(talk_id: int, raw_key: str) -> None:
+def job_detect(
+    talk_id: int,
+    raw_key: str,
+    *args,
+    tolerance_seconds: float | None = None,
+    **kwargs,
+) -> None:
+    if tolerance_seconds is None and "tolerance_seconds" in kwargs:
+        tolerance_seconds = kwargs["tolerance_seconds"]
     job_id = None
     storage = get_storage_backend()
     try:
@@ -232,10 +240,14 @@ def job_detect(talk_id: int, raw_key: str) -> None:
             scheduled_end = talk.end
 
         raw_path = storage.get(raw_key)
+        detect_kwargs = {}
+        if tolerance_seconds is not None:
+            detect_kwargs["tolerance_seconds"] = tolerance_seconds
         result = detect(
             raw_path,
             scheduled_start=scheduled_start,
             scheduled_end=scheduled_end,
+            **detect_kwargs,
         )
         if not result.passed:
             raise ValueError(f"Detection failed: {result.reason}")

@@ -78,6 +78,9 @@ class FakeStorageBackend(StorageBackend):
         else:
             self.storage[key] = Path(source).read_bytes()
 
+    def link_or_copy(self, key: str, source: Path) -> None:
+        self.put(key, source)
+
     def get(self, key: str) -> Path:
         if key not in self.storage:
             raise StorageKeyNotFoundError(key)
