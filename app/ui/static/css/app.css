@@ -226,6 +226,31 @@ html[data-sidebar="collapsed"] .main-content {
 .breadcrumb .current { color: var(--v-text-primary); font-weight: 600; }
 .breadcrumb .sep { color: var(--v-text-muted); }
 
+.breadcrumb-back,
+.breadcrumb .breadcrumb-link {
+  color: var(--v-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+/* Scoped under .breadcrumb so it outranks a.breadcrumb-event in studio.css. */
+.breadcrumb .breadcrumb-link {
+  text-decoration: underline dotted var(--v-border-strong);
+  text-underline-offset: 3px;
+}
+
+.breadcrumb-back:hover,
+.breadcrumb .breadcrumb-link:hover,
+.breadcrumb .breadcrumb-link:focus-visible {
+  color: var(--v-primary);
+}
+
+.breadcrumb .breadcrumb-link:hover,
+.breadcrumb .breadcrumb-link:focus-visible {
+  text-decoration: underline solid currentColor;
+}
+
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 /* ── Topbar Controls ─────────────────────────────────────────── */

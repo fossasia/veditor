@@ -503,7 +503,7 @@ if (btnPlayCut) {
     if (!video || !video.src) return;
     video.currentTime = inPointSec;
     isPlayingCut = true;
-    video.play();
+    video.play().catch(() => {});
   });
 }
 
@@ -523,7 +523,7 @@ if (jumpInput) {
 // ── Player Controls: Fine, Big & Mega Seeks ─────────────────────
 function togglePlay() {
   if (!video || !video.src) return;
-  if (video.paused) { video.play(); }
+  if (video.paused) { video.play().catch(() => {}); }
   else { video.pause(); }
 }
 
@@ -545,7 +545,6 @@ if (video) {
     isPlayingCut = false;
   });
   function initializeVideoMetadata() {
-    if (scrubber) scrubber.max = 1000;
     const duration = (video?.duration > 0) ? video.duration : 10;
     if (!boundsEdited) {
       const shell = getStudioShell() || shellInit;

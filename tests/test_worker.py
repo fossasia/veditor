@@ -200,3 +200,16 @@ def test_run_single_worker(mock_dispose, mock_worker_cls, mock_redis_from_url):
         ["light"], connection=mock_redis, name="test-w"
     )
     mock_worker.work.assert_called_once_with(burst=True)
+
+
+@patch("os.nice")
+@patch("scripts.run_worker.redis.from_url")
+@patch("scripts.run_worker.Worker")
+@patch("app.db.engine.dispose")
+def test_worker_nice_flag(
+    mock_dispose, mock_worker_cls, mock_redis_from_url, mock_os_nice
+):
+    main(["light", "--nice", "10", "--burst"])
+    mock_os_nice.assert_called_once_with(10)
+    mock_worker = mock_worker_cls.return_value
+    mock_worker.work.assert_called_once_with(burst=True)

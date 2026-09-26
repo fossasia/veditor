@@ -250,6 +250,8 @@ def _render_video_and_audio(
     duration_seconds: float,
     resolution: tuple[int, int],
     fps: int,
+    threads: int | None = None,
+    sample_rate: int = 44100,
 ) -> None:
     """Encodes slate frame and audio samples into an MP4 container."""
     out_path = Path(output_path)
@@ -257,7 +259,6 @@ def _render_video_and_audio(
     # storage-boundary-exempt: creating parent directory for pipeline output
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    sample_rate = 44100
     total_video_frames = round(duration_seconds * fps)
     total_audio_samples = audio_samples.shape[1]
 
@@ -265,10 +266,13 @@ def _render_video_and_audio(
         str(out_path), mode="w", format="mp4", options={"movflags": "faststart"}
     ) as out_container:
         # Configure video stream
+        video_options: dict[str, str] = {"crf": "20", "preset": "veryfast"}
+        if threads is not None:
+            video_options["threads"] = str(threads)
         out_v = out_container.add_stream(
             "libx264",
             rate=fps,
-            options={"crf": "20", "preset": "veryfast"},
+            options=video_options,
         )
         out_v.width = resolution[0]
         out_v.height = resolution[1]
@@ -323,6 +327,8 @@ def generate_intro_clip(
     duration_seconds: float = 4.0,
     resolution: tuple[int, int] = (1920, 1080),
     fps: int = 24,
+    threads: int | None = None,
+    audio_sample_rate: int = 44100,
 ) -> None:
     """Generates an opening title slate video clip with synchronized audio.
 
@@ -399,6 +405,8 @@ def generate_intro_clip(
         raise ValueError(f"duration_seconds must be positive, got {duration_seconds}")
     if fps <= 0:
         raise ValueError(f"fps must be positive, got {fps}")
+    if threads is not None and threads <= 0:
+        raise ValueError(f"threads must be positive, got {threads}")
     if resolution[0] < 16 or resolution[1] < 16:
         raise ValueError(f"resolution must be at least 16x16, got {resolution}")
 
@@ -419,6 +427,7 @@ def generate_intro_clip(
     audio_samples = _get_audio_samples(
         jingle_path=audio_jingle_path,
         duration_s=duration_seconds,
+        sample_rate=audio_sample_rate,
     )
 
     _render_video_and_audio(
@@ -428,4 +437,6 @@ def generate_intro_clip(
         duration_seconds=duration_seconds,
         resolution=resolution,
         fps=fps,
+        threads=threads,
+        sample_rate=audio_sample_rate,
     )

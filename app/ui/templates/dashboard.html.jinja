@@ -5,6 +5,26 @@
 <link rel="stylesheet" href="/static/css/dashboard.css">
 {% endblock %}
 
+{% block breadcrumb %}
+  {% if room is not none or current_event %}
+    <a href="/studio" class="breadcrumb-back">&larr; Talks</a>
+    {% if current_event %}
+      <span class="sep">/</span>
+      {% if room is not none %}
+        <a href="/studio?event_id={{ current_event.id }}" class="breadcrumb-link" id="breadcrumb-event-link">{{ current_event.name }}</a>
+      {% else %}
+        <span class="current">{{ current_event.name }}</span>
+      {% endif %}
+    {% endif %}
+    {% if room is not none %}
+      <span class="sep">/</span>
+      <span class="current">{{ room }}</span>
+    {% endif %}
+  {% else %}
+    <span class="current">Talks Dashboard</span>
+  {% endif %}
+{% endblock %}
+
 {% macro status_badge(status) %}
   {% if status == 'waiting_for_files' %}
     <span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>
@@ -65,7 +85,7 @@
 
   <!-- Filter Bar -->
   <div class="filter-bar">
-    <form method="get" action="/studio" class="filter-form">
+    <form method="get" action="{{ filter_action }}" class="filter-form">
       <div class="search-wrap">
         <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -102,7 +122,7 @@
       </button>
 
       {% if q or status_filter %}
-        <a href="/studio" class="btn btn-ghost" id="clear-btn">Clear</a>
+        <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost" id="clear-btn">Clear</a>
       {% endif %}
     </form>
   </div>
@@ -127,7 +147,15 @@
   <div class="table-wrap">
     <div class="table-header">
       <div>
+        {% if room is not none %}
+          <span class="table-kicker">Room</span>
+          <h1 class="table-title table-title-scoped" id="talks-scope-title">{{ room }}</h1>
+        {% elif current_event %}
+          <span class="table-kicker">Event</span>
+          <h1 class="table-title table-title-scoped" id="talks-scope-title">{{ current_event.name }}</h1>
+        {% else %}
         <span class="table-title">Conference Talks</span>
+        {% endif %}
         <span class="table-count table-count-spaced">{{ talks | length }} result{% if talks | length != 1 %}s{% endif %}</span>
       </div>
       <div class="table-header-actions">
@@ -181,9 +209,13 @@
           {% endif %}
           <td class="td-title">
             <strong>{{ talk.title }}</strong>
-            <small>ID #{{ talk.id }} &bull; Event #{{ talk.event_id }}</small>
+            <small>ID #{{ talk.id }}{% if talk.event_id is not none %} &bull; <a href="/studio?event_id={{ talk.event_id }}" class="talk-meta-link talk-event-link">{{ talk.event.name if talk.event else ('Event #' ~ talk.event_id) }}</a>{% endif %}</small>
           </td>
-          <td>{{ talk.room or '—' }}</td>
+          <td>
+            {% if talk.room and talk.event_id is not none %}
+              <a href="/studio/rooms/{{ talk.room | urlencode }}?event_id={{ talk.event_id }}" class="talk-meta-link talk-room-link">{{ talk.room }}</a>
+            {% else %}{{ talk.room or '—' }}{% endif %}
+          </td>
           <td class="td-mono">{{ talk.start.strftime('%b %d, %H:%M') if talk.start else '—' }}</td>
           <td class="td-mono">
             {% if talk.start and talk.end %}
@@ -244,7 +276,7 @@
       {% if q or status_filter %}
         <p class="empty-state-title">No matching talks</p>
         <p class="empty-state-desc">No talks match your current filter or search criteria.</p>
-        <a href="/studio" class="btn btn-ghost btn-sm empty-state-btn">Clear Filters</a>
+        <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost btn-sm empty-state-btn">Clear Filters</a>
       {% else %}
         <p class="empty-state-title">No talks in workspace</p>
         {% if can_manage %}

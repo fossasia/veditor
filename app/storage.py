@@ -73,10 +73,22 @@ class StorageBackend(Protocol):
         """
         ...
 
+    def get_temp_dir(self) -> Path:
+        """
+        Return a directory path suitable for temporary scratch files.
+        """
+        ...
+
 
 class LocalDiskBackend(StorageBackend):
     def __init__(self, data_dir: Path | str):
         self.data_dir = Path(data_dir).resolve()
+
+    def get_temp_dir(self) -> Path:
+        """Return a directory path suitable for temporary scratch files within data_dir."""
+        tmp_dir = self.data_dir / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        return tmp_dir
 
     def _get_path(self, key: str) -> Path:
         """Resolve a key to its absolute path within the data directory."""
@@ -94,6 +106,17 @@ class LocalDiskBackend(StorageBackend):
         """
         target_path = self._get_path(key)
         target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if (
+            isinstance(source, Path)
+            and source.is_file()
+            and (
+                source.is_relative_to(self.get_temp_dir())
+                or source.resolve().is_relative_to(self.get_temp_dir())
+            )
+        ):
+            shutil.move(str(source), str(target_path))
+            return
 
         # Write to a temporary file in the same directory, then rename atomically
         with tempfile.NamedTemporaryFile(delete=False, dir=target_path.parent) as tmp:

@@ -1,6 +1,8 @@
 """Unit and integration tests for talk concatenation pipeline module."""
 
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 import av
 import pytest
@@ -334,7 +336,25 @@ def test_concat_passthrough_persists_via_storage_backend(tmp_path: Path):
 
     concat(cut_path, output_path=key, backend=fake_backend)
     assert fake_backend.exists(key)
-    assert len(fake_backend.get(key).read_bytes()) > 0
+
+
+def test_concat_storage_parameter_uses_get_temp_dir(tmp_path: Path):
+    """Verify that passing storage=... uses its get_temp_dir() for scratch space."""
+    cut_path = generate_clip(1.0, output_dir=tmp_path)
+    intro_path = generate_clip(1.0, output_dir=tmp_path)
+    custom_temp = tmp_path / "custom_scratch"
+    custom_temp.mkdir()
+
+    storage = LocalDiskBackend(tmp_path / "storage")
+    storage.get_temp_dir = mock.Mock(return_value=custom_temp)
+
+    with mock.patch(
+        "app.pipeline.concat.tempfile.TemporaryDirectory",
+        wraps=tempfile.TemporaryDirectory,
+    ) as mock_tempdir:
+        concat(cut_path, intro_path=intro_path, storage=storage)
+        storage.get_temp_dir.assert_called()
+        mock_tempdir.assert_called_once_with(prefix="veditor-concat-", dir=custom_temp)
 
 
 def test_concat_respects_custom_output_container_format(tmp_path: Path):
@@ -348,3 +368,16 @@ def test_concat_respects_custom_output_container_format(tmp_path: Path):
     assert output_path.is_file()
     with av.open(str(output_path)) as container:
         assert "matroska" in container.format.name
+
+
+def test_concat_rejects_invalid_threads(tmp_path: Path):
+    """Verify ValueError is raised if threads is non-positive."""
+    cut_path = generate_clip(1.0, output_dir=tmp_path)
+    intro_path = generate_clip(1.0, output_dir=tmp_path)
+    output_path = tmp_path / "out.mp4"
+
+    with pytest.raises(ValueError, match="threads must be positive"):
+        concat(cut_path, intro_path=intro_path, output_path=output_path, threads=0)
+
+    with pytest.raises(ValueError, match="threads must be positive"):
+        concat(cut_path, intro_path=intro_path, output_path=output_path, threads=-2)

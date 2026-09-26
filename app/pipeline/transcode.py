@@ -33,6 +33,7 @@ class TranscodePreset:
     pix_fmt: str = "yuv420p"
     max_width: int | None = None
     max_height: int | None = None
+    threads: int | None = None
 
 
 PRESET_1080P_DEFAULT = TranscodePreset(
@@ -76,6 +77,7 @@ def transcode(
     output_path: Path | str,
     preset: TranscodePreset | None = None,
     on_progress: Callable[[float], None] | None = None,
+    threads: int | None = None,
 ) -> None:
     """Encode media to final publish quality using the given preset.
 
@@ -84,6 +86,7 @@ def transcode(
         output_path: Destination path for the final transcoded media.
         preset: Target transcode preset (defaults to PRESET_1080P_DEFAULT).
         on_progress: Optional callback invoked periodically with completion ratio (0.0 to 1.0).
+        threads: Optional thread count limit for the video encoder.
 
     Raises:
         FileNotFoundError: If input_path does not exist.
@@ -96,6 +99,11 @@ def transcode(
         raise FileNotFoundError(f"Input file not found: {in_path}")
 
     active_preset = preset or PRESET_1080P_DEFAULT
+
+    if threads is not None and threads <= 0:
+        raise ValueError(f"threads must be greater than zero: {threads}")
+    if active_preset.threads is not None and active_preset.threads <= 0:
+        raise ValueError(f"threads must be greater than zero: {active_preset.threads}")
 
     # storage-boundary-exempt: creating parent directory for pipeline output
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +146,11 @@ def transcode(
                     video_options["crf"] = str(active_preset.crf)
                 if active_preset.preset_speed:
                     video_options["preset"] = active_preset.preset_speed
+                active_threads = (
+                    threads if threads is not None else active_preset.threads
+                )
+                if active_threads is not None:
+                    video_options["threads"] = str(active_threads)
 
                 out_video = out_container.add_stream(
                     active_preset.video_codec,

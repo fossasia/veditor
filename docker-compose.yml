@@ -22,7 +22,7 @@ services:
 
   worker-light:
     build: .
-    command: uv run python scripts/run_worker.py light --concurrency 4 --with-scheduler
+    command: uv run python scripts/run_worker.py light --concurrency 2 --with-scheduler --nice 10
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
@@ -31,6 +31,7 @@ services:
       - POSTGRES_DB=veditor
       - REDIS_URL=redis://redis:6379/0
       - 'INGEST_ROOTS=["/app/ingest"]'
+      - ENCODER_THREADS=1
     volumes:
       - veditor_data:/app/data
       - veditor_ingest:/app/ingest
@@ -42,7 +43,7 @@ services:
 
   worker-heavy:
     build: .
-    command: uv run python scripts/run_worker.py heavy --concurrency 2
+    command: uv run python scripts/run_worker.py heavy --concurrency 1 --nice 10
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
@@ -51,6 +52,7 @@ services:
       - POSTGRES_DB=veditor
       - REDIS_URL=redis://redis:6379/0
       - 'INGEST_ROOTS=["/app/ingest"]'
+      - ENCODER_THREADS=1
     volumes:
       - veditor_data:/app/data
       - veditor_ingest:/app/ingest
