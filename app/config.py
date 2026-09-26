@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     encoder_threads: PositiveInt | None = None
 
     environment: str = "development"
+    base_url: str = ""
     session_secret: str | None = None
     jwt_algorithm: str = "HS256"
     session_token_expire_hours: int = 168
@@ -77,6 +78,14 @@ class Settings(BaseSettings):
     def validate_session_secret(cls, value: str | None) -> str | None:
         if value is not None and len(value.encode("utf-8")) < 32:
             raise ValueError("SESSION_SECRET must be at least 32 bytes long")
+        return value
+
+    @field_validator("base_url", mode="after")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if value and not value.startswith(("http://", "https://")):
+            raise ValueError("base_url must be an absolute HTTP or HTTPS URL")
         return value
 
     @field_validator(

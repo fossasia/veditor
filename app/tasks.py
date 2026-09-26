@@ -733,6 +733,11 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
+            db.refresh(talk)
+
+            from app.webhook import dispatch_talk_webhook
+
+            dispatch_talk_webhook("talk.preview_ready", talk, db)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -992,6 +997,19 @@ def job_publish(talk_id: int, final_key: str) -> None:
         final_path = storage.get(final_key)
         publish(final_path, talk_id=talk_id, backend=storage)
 
+        duration_seconds: float | None = None
+        try:
+            import av
+
+            from app.pipeline.detect import container_duration_seconds
+
+            with av.open(str(final_path)) as container:
+                duration_seconds = container_duration_seconds(container)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Could not probe container duration for %s: %s", final_path, exc
+            )
+
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
@@ -1010,6 +1028,38 @@ def job_publish(talk_id: int, final_key: str) -> None:
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
+            db.refresh(talk)
+
+            if duration_seconds is None or duration_seconds <= 0:
+                if talk.cut_start is not None and talk.cut_end is not None:
+                    duration_seconds = max(0.0, talk.cut_end - talk.cut_start)
+                elif talk.raw_duration_seconds is not None:
+                    duration_seconds = talk.raw_duration_seconds
+                else:
+                    duration_seconds = 0.0
+            else:
+                duration_seconds = round(float(duration_seconds), 2)
+
+            if not settings.base_url:
+                logger.warning(
+                    "settings.base_url is not configured; published video_url in webhook payload will be a relative path."
+                )
+
+            base = settings.base_url.rstrip("/") if settings.base_url else ""
+            filename = Path(final_key).name
+            video_url = f"{base}/studio/media/{talk.id}/final/{filename}"
+
+            from app.webhook import dispatch_talk_webhook
+
+            dispatch_talk_webhook(
+                "talk.published",
+                talk,
+                db,
+                extra_payload={
+                    "video_url": video_url,
+                    "duration_seconds": duration_seconds,
+                },
+            )
 
         cleanup_intermediates(storage, talk_id)
     except Exception as exc:

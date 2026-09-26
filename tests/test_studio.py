@@ -406,23 +406,28 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
     try:
         temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
 
-        # Unauthenticated returns 401
+        # Unauthenticated returns 401 for both existing and non-existent private talk
         assert client.get(f"/studio/media/{talk.id}/preview.mp4").status_code == 401
+        assert (
+            client.get(f"/studio/media/{talk.id}/preview/preview.mp4").status_code
+            == 401
+        )
+        assert client.get("/studio/media/999999/preview/preview.mp4").status_code == 401
 
         response = client.get(
             f"/studio/media/{talk.id}/preview.mp4", headers={"X-API-Key": api_key}
         )
         assert response.status_code == 200
-        assert response.headers.get("cache-control") == "no-cache"
+        assert response.headers.get("cache-control") == "no-store"
         assert "video/mp4" in response.headers.get("content-type", "")
 
-        # Categorized media route also includes no-cache
+        # Categorized media route for protected media uses no-store
         response_cat = client.get(
             f"/studio/media/{talk.id}/preview/preview.mp4",
             headers={"X-API-Key": api_key},
         )
         assert response_cat.status_code == 200
-        assert response_cat.headers.get("cache-control") == "no-cache"
+        assert response_cat.headers.get("cache-control") == "no-store"
 
         not_found = client.get(
             f"/studio/media/{talk.id}/missing.mp4", headers={"X-API-Key": api_key}
@@ -434,6 +439,18 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
             f"/studio/media/{talk.id}/logs/worker.log", headers={"X-API-Key": api_key}
         )
         assert disallowed.status_code == 404
+
+        # Unauthenticated request for final media returns 404 when talk is not done or does not exist
+        assert client.get(f"/studio/media/{talk.id}/final/final.mp4").status_code == 404
+        assert client.get("/studio/media/999999/final/final.mp4").status_code == 404
+
+        # Completed talk final media is publicly accessible without authentication
+        talk.status = "done"
+        db_session.commit()
+        temp_storage.put(f"{talk.id}/final/final.mp4", clip)
+        public_resp = client.get(f"/studio/media/{talk.id}/final/final.mp4")
+        assert public_resp.status_code == 200
+        assert public_resp.headers.get("cache-control") == "no-cache"
     finally:
         clip.unlink(missing_ok=True)
 

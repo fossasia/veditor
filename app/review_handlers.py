@@ -52,10 +52,23 @@ def _record_review_and_advance(
             review=schemas.ReviewRead.model_validate(review),
         )
         db.commit()
-        return response
     except Exception:
         db.rollback()
         raise
+
+    if target_state == "pending_bounds":
+        try:
+            from app.webhook import dispatch_talk_webhook
+
+            dispatch_talk_webhook("talk.bounds_pending", talk, db)
+        except Exception as webhook_err:  # noqa: BLE001
+            logger.warning(
+                "Failed to dispatch talk.bounds_pending webhook for talk %s: %s",
+                talk.id,
+                webhook_err,
+            )
+
+    return response
 
 
 def handle_approve(
