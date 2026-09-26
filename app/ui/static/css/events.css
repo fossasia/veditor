@@ -295,3 +295,122 @@
 .api-keys-modal-footer {
   margin-top: 20px;
 }
+
+/* ── Outbound Webhooks Section ─────────────────────────────────── */
+.webhook-section {
+  margin-top: 24px;
+  border-top: 1px solid var(--v-border-subtle, rgba(255, 255, 255, 0.08));
+  padding-top: 20px;
+}
+
+.webhook-section-desc {
+  font-size: 0.82rem;
+  color: var(--v-text-muted, #94a3b8);
+  margin-top: 4px;
+}
+
+.webhook-secret-group {
+  margin-top: 14px;
+}
+
+.webhook-form-card {
+  background: var(--v-bg-subtle, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--v-border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--v-radius-md, 8px);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.form-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.form-label-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.secret-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.secret-input-wrapper input {
+  padding-right: 38px;
+}
+
+.btn-toggle-secret {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--v-text-muted, #94a3b8);
+  transition: color 0.15s ease;
+}
+
+.btn-toggle-secret:hover {
+  color: var(--v-text-primary, #f8fafc);
+}
+
+.form-hint {
+  display: block;
+  font-size: 0.78rem;
+  margin-top: 4px;
+  color: var(--v-text-muted, #94a3b8);
+}
+
+.webhook-actions-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.webhook-actions-left {
+  display: flex;
+  gap: 8px;
+}
+
+.webhook-alert-hidden {
+  display: none !important;
+}
+
+#webhook-test-alert {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: var(--v-radius-md, 6px);
+  font-size: 0.85rem;
+}
+
+.alert-success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.alert-info {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--v-primary, #6366f1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.badge-neutral {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--v-text-muted, #94a3b8);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.badge-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}

@@ -1,5 +1,11 @@
+import hashlib
+import hmac
+import json
 import logging
 import secrets
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +24,7 @@ from app.db import get_db
 from app.routes.talks import _cancel_talk_jobs
 from app.security import create_sso_token
 from app.storage import StorageBackend, get_storage_backend
+from app.tasks import _webhook_opener
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +235,20 @@ def create_event_sso_token(
     )
 
 
+def _get_event_client(event_id: int, db: Session) -> models.Client | None:
+    """Retrieve the primary Client record associated with this event."""
+    clients = (
+        db.query(models.Client)
+        .filter(
+            models.Client.is_platform.is_(False),
+            models.Client.event_ids.any(event_id),
+        )
+        .all()
+    )
+    matching = [c for c in clients if event_id in (c.event_ids or [])]
+    return matching[0] if matching else None
+
+
 @router.get(
     "/{event_id}/api-keys",
     response_model=list[schemas.ApiKeyRead],
@@ -265,6 +286,7 @@ def list_event_api_keys(
                 masked_key=masked,
                 event_ids=list(c.event_ids or []),
                 webhook_url=c.webhook_url,
+                has_webhook_secret=bool(c.webhook_secret),
                 created_at=getattr(c, "created_at", None),
                 last_used_at=getattr(c, "last_used_at", None),
             )
@@ -299,6 +321,7 @@ def create_event_api_key(
         else f"Event #{event_id} API Key"
     )
     webhook_url = payload.webhook_url if payload else None
+    webhook_secret = payload.webhook_secret if payload else None
 
     # Enforce at most 1 active API key per event by revoking previous key(s)
     existing_clients = (
@@ -309,6 +332,13 @@ def create_event_api_key(
         )
         .all()
     )
+    # Preserve existing webhook config if not explicitly provided
+    if existing_clients:
+        if not webhook_url:
+            webhook_url = existing_clients[0].webhook_url
+        if not webhook_secret:
+            webhook_secret = existing_clients[0].webhook_secret
+
     for existing_c in existing_clients:
         remaining = [eid for eid in (existing_c.event_ids or []) if eid != event_id]
         if remaining:
@@ -322,6 +352,7 @@ def create_event_api_key(
         event_ids=[event_id],
         name=name,
         webhook_url=webhook_url,
+        webhook_secret=webhook_secret,
     )
     db.add(client)
     db.commit()
@@ -368,3 +399,212 @@ def revoke_event_api_key(
         db.delete(client)
     db.commit()
     return {"status": "ok", "deleted_id": client_id}
+
+
+@router.get(
+    "/{event_id}/webhook",
+    response_model=schemas.WebhookInfoResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_event_webhook(
+    event_id: int,
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Retrieve the event's configured outbound webhook settings."""
+    check_event_access(event_id, user, db)
+    client = _get_event_client(event_id, db)
+    if not client or not client.webhook_url:
+        return schemas.WebhookInfoResponse(
+            url=None,
+            has_secret=False,
+            masked_secret=None,
+        )
+
+    masked_secret = None
+    if client.webhook_secret:
+        if len(client.webhook_secret) > 8:
+            masked_secret = (
+                f"{client.webhook_secret[:4]}...{client.webhook_secret[-4:]}"
+            )
+        else:
+            masked_secret = "********"
+
+    return schemas.WebhookInfoResponse(
+        url=client.webhook_url,
+        has_secret=bool(client.webhook_secret),
+        masked_secret=masked_secret,
+    )
+
+
+@router.post(
+    "/{event_id}/webhook",
+    response_model=schemas.WebhookRegisterResponse,
+    status_code=status.HTTP_200_OK,
+)
+def update_event_webhook(
+    event_id: int,
+    payload: schemas.WebhookRegisterRequest,
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Configure or update the outbound webhook URL and secret for an event."""
+    if user.is_sso:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO sessions are not permitted to manage webhook settings",
+        )
+    check_event_access(event_id, user, db)
+
+    client = _get_event_client(event_id, db)
+    if not client:
+        # Create an event-scoped client to hold the webhook configuration
+        raw_key = secrets.token_urlsafe(32)
+        client = models.Client(
+            hashed_key=hash_api_key(raw_key),
+            event_ids=[event_id],
+            name=f"Event #{event_id} Integration",
+        )
+        db.add(client)
+
+    secret = (
+        payload.secret.strip()
+        if payload.secret and payload.secret.strip()
+        else (client.webhook_secret or secrets.token_urlsafe(32))
+    )
+
+    client.webhook_url = payload.url
+    client.webhook_secret = secret
+    db.commit()
+    db.refresh(client)
+
+    return schemas.WebhookRegisterResponse(
+        status="registered",
+        url=client.webhook_url,
+        secret=client.webhook_secret,
+    )
+
+
+@router.delete(
+    "/{event_id}/webhook",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_event_webhook(
+    event_id: int,
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Clear outbound webhook configuration for this event."""
+    if user.is_sso:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO sessions are not permitted to manage webhook settings",
+        )
+    check_event_access(event_id, user, db)
+    client = _get_event_client(event_id, db)
+    if client:
+        client.webhook_url = None
+        client.webhook_secret = None
+        db.commit()
+
+
+@router.post(
+    "/{event_id}/webhook/test",
+    response_model=schemas.WebhookTestResponse,
+    status_code=status.HTTP_200_OK,
+)
+def test_event_webhook(
+    event_id: int,
+    payload: schemas.WebhookTestRequest,
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Send a signed test ping webhook to verify destination URL and HMAC secret."""
+    if user.is_sso:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO sessions are not permitted to manage webhook settings",
+        )
+    check_event_access(event_id, user, db)
+    client = _get_event_client(event_id, db)
+
+    target_url = (
+        payload.url.strip() if payload.url and payload.url.strip() else None
+    ) or (client.webhook_url if client else None)
+
+    provided_secret = (
+        payload.secret.strip() if payload.secret and payload.secret.strip() else None
+    )
+    if provided_secret:
+        target_secret = provided_secret
+    elif (
+        client
+        and client.webhook_secret
+        and (not payload.url or payload.url.strip() == client.webhook_url)
+    ):
+        target_secret = client.webhook_secret
+    else:
+        target_secret = None
+
+    if not target_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No webhook URL provided or configured for testing.",
+        )
+    if not target_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No webhook secret provided or configured for testing.",
+        )
+
+    test_payload = {
+        "event": "ping",
+        "event_id": event_id,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "message": "VEditor webhook connectivity test",
+    }
+
+    try:
+        payload_bytes = json.dumps(
+            test_payload, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        signature = hmac.new(
+            target_secret.encode("utf-8"), payload_bytes, hashlib.sha256
+        ).hexdigest()
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-VEditor-Signature": f"sha256={signature}",
+            "User-Agent": "VEditor-Webhook/1.0",
+        }
+        req = urllib.request.Request(
+            target_url,
+            data=payload_bytes,
+            headers=headers,
+            method="POST",
+        )
+        with _webhook_opener.open(req, timeout=5) as resp:
+            status_code = getattr(resp, "status", getattr(resp, "code", 200))
+            return schemas.WebhookTestResponse(
+                success=True,
+                status_code=status_code,
+                message=f"Webhook ping delivered successfully (HTTP {status_code}).",
+            )
+    except urllib.error.HTTPError as exc:
+        return schemas.WebhookTestResponse(
+            success=False,
+            status_code=exc.code,
+            message=f"Endpoint returned HTTP {exc.code}: {exc.reason}",
+        )
+    except urllib.error.URLError as exc:
+        return schemas.WebhookTestResponse(
+            success=False,
+            status_code=None,
+            message=f"Connection failed: {exc.reason}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return schemas.WebhookTestResponse(
+            success=False,
+            status_code=None,
+            message=f"Delivery failed: {exc!s}",
+        )

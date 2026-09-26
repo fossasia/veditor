@@ -137,8 +137,8 @@
   <div class="events-modal-card events-modal-card-lg">
     <div class="events-modal-header">
       <div>
-        <h3 class="events-modal-title">API Key for <span id="api-keys-event-name-display"></span></h3>
-        <p class="events-modal-desc">Manage API credentials to integrate conference schedules and video pipelines with this event.</p>
+        <h3 class="events-modal-title">API Key & Integrations for <span id="api-keys-event-name-display"></span></h3>
+        <p class="events-modal-desc">Manage API credentials and outbound webhooks to integrate conference schedules and video pipelines with this event.</p>
       </div>
       <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal">✕</button>
     </div>
@@ -193,6 +193,62 @@
           </tbody>
         </table>
         <p id="api-keys-empty" class="text-muted text-center api-key-alert-hidden api-keys-empty-msg">No active API key found. Click "+ Generate API Key" above to create one.</p>
+      </div>
+    </div>
+
+    <!-- Outbound Webhooks Section -->
+    <div class="api-keys-section webhook-section">
+      <div class="api-keys-section-header">
+        <div>
+          <h4 class="api-keys-subtitle">Outbound Webhooks</h4>
+          <p class="events-modal-desc webhook-section-desc">
+            Automatically dispatch signed lifecycle events (e.g. cut bounds submissions, published videos) to your external platform.
+          </p>
+        </div>
+        <span id="webhook-status-badge" class="badge badge-neutral">Not Configured</span>
+      </div>
+
+      <div class="webhook-form-card">
+        <div class="form-group">
+          <label for="webhook-url-input" class="form-label">Endpoint URL</label>
+          <input type="url" id="webhook-url-input" class="input-field" placeholder="https://eventyay.example.org/api/v1/veditor/webhook/" />
+          <span class="text-muted form-hint">Payloads are delivered via HTTP POST with an HMAC-SHA256 signature in the <code>X-VEditor-Signature</code> header.</span>
+        </div>
+
+        <div class="form-group webhook-secret-group">
+          <div class="form-label-row">
+            <label for="webhook-secret-input" class="form-label">Shared Secret</label>
+            <div class="form-label-actions">
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-generate-webhook-secret" title="Generate a cryptographically secure random secret">⚡ Generate Secret</button>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-copy-webhook-secret" title="Copy secret to clipboard">Copy Secret</button>
+            </div>
+          </div>
+          <div class="secret-input-wrapper">
+            <input type="password" id="webhook-secret-input" class="input-field input-mono" placeholder="Enter shared secret or generate one" />
+            <button type="button" id="btn-toggle-secret-visibility" class="btn btn-ghost btn-xs btn-toggle-secret" title="Show or hide secret">👁</button>
+          </div>
+          <span class="text-muted form-hint" id="webhook-secret-hint">Used by your server to verify payload authenticity. Keep this private.</span>
+        </div>
+
+        <!-- Webhook Test Result Alert (hidden by default) -->
+        <div id="webhook-test-alert" class="alert webhook-alert-hidden">
+          <span id="webhook-test-message"></span>
+        </div>
+
+        <!-- Actions -->
+        <div class="webhook-actions-row">
+          <div class="webhook-actions-left">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-test-webhook">
+              Test Webhook
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-save-webhook">
+              Save Webhook
+            </button>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm btn-danger-ghost webhook-alert-hidden" id="btn-delete-webhook">
+            Clear Webhook
+          </button>
+        </div>
       </div>
     </div>
 

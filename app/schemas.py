@@ -97,6 +97,31 @@ class WebhookRegisterResponse(BaseModel):
 class WebhookInfoResponse(BaseModel):
     url: str | None = None
     has_secret: bool = False
+    masked_secret: str | None = None
+
+
+class WebhookTestRequest(BaseModel):
+    url: str | None = None
+    secret: str | None = Field(default=None, max_length=255)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        parsed = urlsplit(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "Webhook URL must be a valid HTTP or HTTPS URL with a valid host"
+            )
+        return v
+
+
+class WebhookTestResponse(BaseModel):
+    success: bool
+    status_code: int | None = None
+    message: str
 
 
 class TalkBase(BaseModel):
@@ -382,6 +407,7 @@ class ApiKeyRead(BaseModel):
     masked_key: str
     event_ids: list[int] = []
     webhook_url: str | None = None
+    has_webhook_secret: bool = False
     created_at: datetime | None = None
     last_used_at: datetime | None = None
     model_config = ConfigDict(from_attributes=True)
@@ -390,6 +416,7 @@ class ApiKeyRead(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: str | None = None
     webhook_url: str | None = None
+    webhook_secret: str | None = Field(default=None, max_length=255)
 
 
 class ApiKeyCreatedResponse(BaseModel):

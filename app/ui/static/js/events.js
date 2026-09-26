@@ -77,6 +77,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCopyNewKey = document.getElementById('btn-copy-new-key');
   const btnCopyEventId = document.querySelector('.btn-copy-event-id');
 
+  // Webhook DOM elements
+  const webhookUrlInput = document.getElementById('webhook-url-input');
+  const webhookSecretInput = document.getElementById('webhook-secret-input');
+  const webhookSecretHint = document.getElementById('webhook-secret-hint');
+  const webhookStatusBadge = document.getElementById('webhook-status-badge');
+  const webhookTestAlert = document.getElementById('webhook-test-alert');
+  const webhookTestMessage = document.getElementById('webhook-test-message');
+  const btnToggleSecret = document.getElementById('btn-toggle-secret-visibility');
+  const btnGenerateSecret = document.getElementById('btn-generate-webhook-secret');
+  const btnCopySecret = document.getElementById('btn-copy-webhook-secret');
+  const btnTestWebhook = document.getElementById('btn-test-webhook');
+  const btnSaveWebhook = document.getElementById('btn-save-webhook');
+  const btnDeleteWebhook = document.getElementById('btn-delete-webhook');
+
   let currentActiveEventId = null;
 
   function renderApiKeysStatus(text, isDanger = false) {
@@ -201,6 +215,70 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 
+  function showWebhookAlert(message, type = 'info') {
+    if (!webhookTestAlert || !webhookTestMessage) return;
+    webhookTestAlert.className = `alert alert-${type}`;
+    webhookTestMessage.textContent = message;
+    webhookTestAlert.classList.remove('webhook-alert-hidden');
+  }
+
+  function hideWebhookAlert() {
+    if (!webhookTestAlert) return;
+    webhookTestAlert.classList.add('webhook-alert-hidden');
+    if (webhookTestMessage) webhookTestMessage.textContent = '';
+  }
+
+  function setWebhookBadge(status, type = 'neutral') {
+    if (!webhookStatusBadge) return;
+    webhookStatusBadge.textContent = status;
+    webhookStatusBadge.className = `badge badge-${type}`;
+  }
+
+  async function loadWebhook(eventId) {
+    hideWebhookAlert();
+    if (!webhookUrlInput || !webhookSecretInput) return;
+
+    try {
+      const resp = await fetch(`/events/${eventId}/webhook`);
+      if (currentActiveEventId !== eventId) return;
+      if (!resp.ok) {
+        setWebhookBadge('Error', 'neutral');
+        return;
+      }
+      const data = await resp.json();
+      if (currentActiveEventId !== eventId) return;
+      if (data.url) {
+        webhookUrlInput.value = data.url;
+        if (data.has_secret) {
+          webhookSecretInput.value = '';
+          webhookSecretInput.placeholder = data.masked_secret ? `Configured (${data.masked_secret})` : '••••••••••••••••';
+          if (webhookSecretHint) {
+            webhookSecretHint.textContent = `Secret is configured (${data.masked_secret || 'masked'}). Enter a new secret to rotate it.`;
+          }
+        } else {
+          webhookSecretInput.value = '';
+          webhookSecretInput.placeholder = 'Enter shared secret or generate one';
+          if (webhookSecretHint) {
+            webhookSecretHint.textContent = 'No secret configured. Generate or enter one to sign payloads.';
+          }
+        }
+        setWebhookBadge('Active', 'success');
+        if (btnDeleteWebhook) btnDeleteWebhook.classList.remove('webhook-alert-hidden');
+      } else {
+        webhookUrlInput.value = '';
+        webhookSecretInput.value = '';
+        webhookSecretInput.placeholder = 'Enter shared secret or generate one';
+        if (webhookSecretHint) {
+          webhookSecretHint.textContent = 'Used by your server to verify payload authenticity. Keep this private.';
+        }
+        setWebhookBadge('Not Configured', 'neutral');
+        if (btnDeleteWebhook) btnDeleteWebhook.classList.add('webhook-alert-hidden');
+      }
+    } catch (err) {
+      setWebhookBadge('Error', 'neutral');
+    }
+  }
+
   document.querySelectorAll('.btn-api-keys').forEach(btn => {
     btn.addEventListener('click', () => {
       const eventId = btn.getAttribute('data-event-id');
@@ -214,6 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (apiKeysModal) {
         apiKeysModal.classList.add('active');
         loadApiKeys(eventId);
+        loadWebhook(eventId);
       }
     });
   });
@@ -222,6 +301,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (apiKeysModal) apiKeysModal.classList.remove('active');
     if (newKeyAlert) newKeyAlert.classList.add('api-key-alert-hidden');
     if (newKeyInput) newKeyInput.value = '';
+    hideWebhookAlert();
+    if (webhookUrlInput) webhookUrlInput.value = '';
+    if (webhookSecretInput) {
+      webhookSecretInput.value = '';
+      webhookSecretInput.type = 'password';
+    }
+    if (btnToggleSecret) btnToggleSecret.textContent = '👁';
     currentActiveEventId = null;
   }
 
@@ -290,6 +376,158 @@ document.addEventListener('DOMContentLoaded', () => {
           btnCopyEventId.textContent = 'Copied!';
           setTimeout(() => { btnCopyEventId.textContent = orig; }, 2000);
         });
+      }
+    });
+  }
+
+  // ── Webhook Configuration Event Listeners ───────────────────────
+  if (btnToggleSecret && webhookSecretInput) {
+    btnToggleSecret.addEventListener('click', () => {
+      const isPassword = webhookSecretInput.type === 'password';
+      webhookSecretInput.type = isPassword ? 'text' : 'password';
+      btnToggleSecret.textContent = isPassword ? '🔒' : '👁';
+    });
+  }
+
+  if (btnGenerateSecret && webhookSecretInput) {
+    btnGenerateSecret.addEventListener('click', () => {
+      const array = new Uint8Array(24);
+      window.crypto.getRandomValues(array);
+      const generated = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+      webhookSecretInput.value = generated;
+      webhookSecretInput.type = 'text';
+      if (btnToggleSecret) btnToggleSecret.textContent = '🔒';
+      if (webhookSecretHint) webhookSecretHint.textContent = 'New secret generated. Click "Save Webhook" to apply.';
+      showWebhookAlert('Generated new secret. Remember to save your settings.', 'info');
+    });
+  }
+
+  if (btnCopySecret && webhookSecretInput) {
+    btnCopySecret.addEventListener('click', () => {
+      const val = webhookSecretInput.value;
+      if (!val) {
+        showWebhookAlert('No visible secret to copy. If already configured, generate or type a new secret to view/copy.', 'info');
+        return;
+      }
+      navigator.clipboard.writeText(val).then(() => {
+        const orig = btnCopySecret.textContent;
+        btnCopySecret.textContent = 'Copied!';
+        setTimeout(() => { btnCopySecret.textContent = orig; }, 2000);
+      }).catch(() => {
+        showWebhookAlert('Failed to copy secret to clipboard. Please copy it manually.', 'danger');
+      });
+    });
+  }
+
+  if (btnTestWebhook) {
+    btnTestWebhook.addEventListener('click', async () => {
+      if (!currentActiveEventId) return;
+      hideWebhookAlert();
+
+      const url = webhookUrlInput ? webhookUrlInput.value.trim() : '';
+      const secret = webhookSecretInput ? webhookSecretInput.value.trim() : '';
+
+      if (!url && btnDeleteWebhook && btnDeleteWebhook.classList.contains('webhook-alert-hidden')) {
+        showWebhookAlert('Please enter an endpoint URL before testing.', 'danger');
+        return;
+      }
+
+      btnTestWebhook.disabled = true;
+      btnTestWebhook.textContent = 'Testing...';
+
+      try {
+        const body = {};
+        if (url) body.url = url;
+        if (secret) body.secret = secret;
+
+        const resp = await fetch(`/events/${currentActiveEventId}/webhook/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+          showWebhookAlert(`✓ ${data.message || 'Webhook ping delivered successfully!'}`, 'success');
+        } else {
+          showWebhookAlert(`✕ ${data.message || data.detail || 'Test ping failed.'}`, 'danger');
+        }
+      } catch (err) {
+        showWebhookAlert(`✕ Error dispatching test webhook: ${err.message}`, 'danger');
+      } finally {
+        btnTestWebhook.disabled = false;
+        btnTestWebhook.textContent = 'Test Webhook';
+      }
+    });
+  }
+
+  if (btnSaveWebhook) {
+    btnSaveWebhook.addEventListener('click', async () => {
+      if (!currentActiveEventId) return;
+      hideWebhookAlert();
+
+      const url = webhookUrlInput ? webhookUrlInput.value.trim() : '';
+      const secret = webhookSecretInput ? webhookSecretInput.value.trim() : '';
+
+      if (!url) {
+        showWebhookAlert('Endpoint URL is required to configure webhooks.', 'danger');
+        return;
+      }
+
+      btnSaveWebhook.disabled = true;
+      btnSaveWebhook.textContent = 'Saving...';
+
+      try {
+        const payload = { url };
+        if (secret) payload.secret = secret;
+
+        const resp = await fetch(`/events/${currentActiveEventId}/webhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          showWebhookAlert('✓ Webhook configuration saved successfully.', 'success');
+          await loadWebhook(currentActiveEventId);
+        } else {
+          const detail = data.detail;
+          const msg = Array.isArray(detail) ? detail.map(d => d.msg).join(', ') : (detail || 'Failed to save webhook');
+          showWebhookAlert(`✕ ${msg}`, 'danger');
+        }
+      } catch (err) {
+        showWebhookAlert(`✕ Error saving webhook: ${err.message}`, 'danger');
+      } finally {
+        btnSaveWebhook.disabled = false;
+        btnSaveWebhook.textContent = 'Save Webhook';
+      }
+    });
+  }
+
+  if (btnDeleteWebhook) {
+    btnDeleteWebhook.addEventListener('click', async () => {
+      if (!currentActiveEventId) return;
+      if (!confirm('Are you sure you want to remove the outbound webhook configuration for this event?')) {
+        return;
+      }
+      hideWebhookAlert();
+      btnDeleteWebhook.disabled = true;
+      btnDeleteWebhook.textContent = 'Clearing...';
+
+      try {
+        const resp = await fetch(`/events/${currentActiveEventId}/webhook`, {
+          method: 'DELETE',
+        });
+        if (resp.ok) {
+          showWebhookAlert('Webhook settings cleared.', 'info');
+          await loadWebhook(currentActiveEventId);
+        } else {
+          showWebhookAlert('✕ Failed to clear webhook settings.', 'danger');
+        }
+      } catch (err) {
+        showWebhookAlert(`✕ Error clearing webhook: ${err.message}`, 'danger');
+      } finally {
+        btnDeleteWebhook.disabled = false;
+        btnDeleteWebhook.textContent = 'Clear Webhook';
       }
     });
   }
