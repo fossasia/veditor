@@ -1848,7 +1848,7 @@ async def attach_room_recording(
             .filter(models.Talk.room == room)
             .distinct()
         )
-        if user.source == "api_key":
+        if user.source in ("api_key", "sso"):
             query = query.filter(models.Event.id.in_(user.event_ids))
         elif user.role != "admin":
             query = query.filter(models.Event.created_by_user_id == user.user_id)
@@ -2052,12 +2052,14 @@ async def attach_room_recording(
 
     # Zero-copy stage into each talk's storage & advance state
     talk_ids = []
+    staged_keys = []
     try:
         for talk in matched_talks:
             if talk.status == "detecting":
                 _cancel_talk_jobs(talk.id)
             raw_key = f"{talk.id}/raw/raw.mp4"
             storage.link_or_copy(raw_key, staged_path)
+            staged_keys.append(raw_key)
 
             talk.status = "detecting"
             talk.raw_duration_seconds = duration
@@ -2073,6 +2075,14 @@ async def attach_room_recording(
             talk_ids.append(talk.id)
 
         db.commit()
+    except Exception:
+        db.rollback()
+        for key in staged_keys:
+            try:
+                storage.delete(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed cleaning up staged key %s: %s", key, exc)
+        raise
     finally:
         if is_ephemeral_upload:
             # storage-boundary-exempt: upload staging cleanup

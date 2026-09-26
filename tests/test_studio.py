@@ -2961,3 +2961,119 @@ def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
             == b"video content bytes for multi talk attachment"
         )
         assert source_file.exists()
+
+
+def test_attach_room_recording_sso_discovery_without_event_id(
+    client: TestClient, db_session, tmp_path
+):
+    from app.auth import CurrentUser, get_current_user
+    from app.main import app
+
+    event = models.Event(
+        name="SSO Room Event",
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="SSO Talk",
+        room="Hall SSO",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=888,
+        role="organizer",
+        source="sso",
+        is_sso=True,
+        event_ids=[event.id],
+    )
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={"room": "Hall SSO"},  # Note: event_id is omitted!
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+            )
+            assert res.status_code == 200
+            assert res.json()["attached_count"] == 1
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        clip.unlink(missing_ok=True)
+
+
+def test_attach_room_recording_staging_failure_cleans_up(
+    client: TestClient, db_session, temp_storage, tmp_path
+):
+    event = models.Event(name="Rollback Event")
+    db_session.add(event)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    t1 = models.Talk(
+        event_id=event.id,
+        title="Talk 1",
+        room="Rollback Room",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    t2 = models.Talk(
+        event_id=event.id,
+        title="Talk 2",
+        room="Rollback Room",
+        start=now + timedelta(minutes=30),
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+    db_session.add(t1)
+    db_session.add(t2)
+    db_session.commit()
+
+    call_count = 0
+    real_link_or_copy = temp_storage.link_or_copy
+
+    def mock_link_or_copy(key, source):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("Disk write failed on talk 2")
+        return real_link_or_copy(key, source)
+
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        import pytest
+
+        with (
+            pytest.raises(RuntimeError),
+            patch.object(temp_storage, "link_or_copy", side_effect=mock_link_or_copy),
+            open(clip, "rb") as f_vid,
+        ):
+            client.post(
+                "/talks/room/attach-recording",
+                data={"room": "Rollback Room", "event_id": str(event.id)},
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+
+        # Assert talk 1 raw file was cleaned up on failure!
+        assert not temp_storage.exists(f"{t1.id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
+        # Assert talk status was not updated in DB
+        db_session.refresh(t1)
+        assert t1.status == "waiting_for_files"
+    finally:
+        clip.unlink(missing_ok=True)
