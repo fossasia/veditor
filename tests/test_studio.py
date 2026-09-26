@@ -418,16 +418,16 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
             f"/studio/media/{talk.id}/preview.mp4", headers={"X-API-Key": api_key}
         )
         assert response.status_code == 200
-        assert response.headers.get("cache-control") == "no-cache"
+        assert response.headers.get("cache-control") == "no-store"
         assert "video/mp4" in response.headers.get("content-type", "")
 
-        # Categorized media route also includes no-cache
+        # Categorized media route for protected media uses no-store
         response_cat = client.get(
             f"/studio/media/{talk.id}/preview/preview.mp4",
             headers={"X-API-Key": api_key},
         )
         assert response_cat.status_code == 200
-        assert response_cat.headers.get("cache-control") == "no-cache"
+        assert response_cat.headers.get("cache-control") == "no-store"
 
         not_found = client.get(
             f"/studio/media/{talk.id}/missing.mp4", headers={"X-API-Key": api_key}

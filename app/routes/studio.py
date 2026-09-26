@@ -566,7 +566,7 @@ def get_talk_media_default(
                 path,
                 media_type="video/mp4",
                 filename=download_filename,
-                headers={"Cache-Control": "no-cache"},
+                headers={"Cache-Control": "no-store"},
             )
     raise HTTPException(status_code=404, detail="Media not found")
 
@@ -619,11 +619,16 @@ def get_talk_media_categorized(
         else None
     )
 
+    is_public_final = (
+        safe_category == "final" and getattr(talk, "status", None) == "done"
+    )
+    cache_control = "no-cache" if is_public_final else "no-store"
+
     return FileResponse(
         path,
         media_type="video/mp4",
         filename=download_filename,
-        headers={"Cache-Control": "no-cache"},
+        headers={"Cache-Control": cache_control},
     )
 
 
