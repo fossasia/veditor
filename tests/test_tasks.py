@@ -167,6 +167,7 @@ def test_job_ingest_success(dummy_talk, mock_storage, tmp_path):
         job_detect,
         dummy_talk.id,
         f"{dummy_talk.id}/raw/raw.mp4",
+        None,
         job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
     )
     # Staged file is unlinked
