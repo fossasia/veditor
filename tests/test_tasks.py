@@ -167,6 +167,7 @@ def test_job_ingest_success(dummy_talk, mock_storage, tmp_path):
         job_detect,
         dummy_talk.id,
         f"{dummy_talk.id}/raw/raw.mp4",
+        None,
         job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
     )
     # Staged file is unlinked
@@ -1345,3 +1346,112 @@ def test_encoder_threads_forwarded_when_configured(
         job_transcode(1, "1/cut/cut_loud.mp4", "1/final/final.mp4")
 
     assert captured_transcode_kwargs.get("threads") == 2
+
+
+# ── Cut-Bounds Pre-Seeding Tests ────────────────────────────────────────────
+
+
+def _make_detect_result(duration: float) -> DetectResult:
+    return DetectResult(
+        passed=True,
+        actual_duration_seconds=duration,
+        has_video=True,
+        has_audio=True,
+        reason=None,
+    )
+
+
+def _run_detect_with_seed(talk: Talk, recording_start) -> None:
+    """Helper: run job_detect with mocked DB & storage, returning the mutated talk."""
+    jobs: dict = {}
+    db_ctx = MockDBContext(talk, jobs)
+    mock_storage = MagicMock()
+    mock_storage.get.return_value = Path("/tmp/fake.mp4")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.detect", return_value=_make_detect_result(14400.0)),
+    ):
+        job_detect(talk.id, "1/raw/raw.mp4", recording_start)
+
+
+def test_seed_cut_bounds_happy_path(dummy_talk):
+    """Seeds cut_start/cut_end from schedule offsets when both are unset."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = None
+    dummy_talk.cut_end = None
+    # Recording started at 09:00 UTC; talk is 09:15–09:55
+    dummy_talk.start = datetime(2026, 8, 29, 9, 15, tzinfo=UTC)
+    dummy_talk.end = datetime(2026, 8, 29, 9, 55, tzinfo=UTC)
+    rec_start = datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
+
+    _run_detect_with_seed(dummy_talk, rec_start)
+
+    assert dummy_talk.cut_start == pytest.approx(900.0)  # 15 min
+    assert dummy_talk.cut_end == pytest.approx(3300.0)  # 55 min
+    assert dummy_talk.status == "pending_approval"
+
+
+def test_seed_cut_bounds_no_overwrite_when_already_set(dummy_talk):
+    """Does not overwrite existing cut_start/cut_end if user already set them."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = 42.0
+    dummy_talk.cut_end = 1800.0
+    dummy_talk.start = datetime(2026, 8, 29, 9, 15, tzinfo=UTC)
+    dummy_talk.end = datetime(2026, 8, 29, 9, 55, tzinfo=UTC)
+    rec_start = datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
+
+    _run_detect_with_seed(dummy_talk, rec_start)
+
+    # Guard: both were set, so seeding must be skipped
+    assert dummy_talk.cut_start == pytest.approx(42.0)
+    assert dummy_talk.cut_end == pytest.approx(1800.0)
+
+
+def test_seed_cut_bounds_no_op_without_recording_start(dummy_talk):
+    """Bounds stay None when recording_start is not provided (graceful degradation)."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = None
+    dummy_talk.cut_end = None
+    dummy_talk.start = datetime(2026, 8, 29, 9, 15, tzinfo=UTC)
+    dummy_talk.end = datetime(2026, 8, 29, 9, 55, tzinfo=UTC)
+
+    _run_detect_with_seed(dummy_talk, recording_start=None)
+
+    assert dummy_talk.cut_start is None
+    assert dummy_talk.cut_end is None
+    assert dummy_talk.status == "pending_approval"
+
+
+def test_seed_cut_bounds_talk_entirely_outside_recording(dummy_talk):
+    """Skips seeding when offset_e <= offset_s (talk is before the recording start)."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = None
+    dummy_talk.cut_end = None
+    # Recording started at 10:00; talk ended before that
+    dummy_talk.start = datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
+    dummy_talk.end = datetime(2026, 8, 29, 9, 30, tzinfo=UTC)
+    rec_start = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
+
+    _run_detect_with_seed(dummy_talk, rec_start)
+
+    # offset_s = max(0, -3600) = 0; offset_e = min(14400, -1800) → negative → clamped to ≤0
+    assert dummy_talk.cut_start is None
+    assert dummy_talk.cut_end is None
+
+
+def test_seed_cut_bounds_clamped_to_duration(dummy_talk):
+    """cut_end is clamped to raw_duration_seconds when talk extends past the recording."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = None
+    dummy_talk.cut_end = None
+    # Recording started at 09:00; 4 h long (14400 s); talk goes until 13:15 → end at 15300 s > 14400
+    dummy_talk.start = datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
+    dummy_talk.end = datetime(2026, 8, 29, 13, 15, tzinfo=UTC)
+    rec_start = datetime(2026, 8, 29, 9, 0, tzinfo=UTC)
+
+    _run_detect_with_seed(dummy_talk, rec_start)
+
+    assert dummy_talk.cut_start == pytest.approx(0.0)
+    assert dummy_talk.cut_end == pytest.approx(14400.0)  # clamped to duration

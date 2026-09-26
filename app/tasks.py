@@ -115,7 +115,12 @@ def _get_scratch_dir(storage) -> Path | None:
     return None
 
 
-def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> None:
+def job_ingest(
+    talk_id: int,
+    staged_path: str,
+    raw_key: str | None = None,
+    recording_start: datetime | None = None,
+) -> None:
     raw_key = raw_key or f"{talk_id}/raw/raw.mp4"
     job_id = None
     storage = get_storage_backend()
@@ -189,6 +194,7 @@ def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> No
             job_detect,
             talk_id,
             raw_key,
+            recording_start,
             job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
         )
     except Exception as exc:
@@ -205,7 +211,11 @@ def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> No
         staged.unlink(missing_ok=True)
 
 
-def job_detect(talk_id: int, raw_key: str) -> None:
+def job_detect(
+    talk_id: int,
+    raw_key: str,
+    recording_start: datetime | None = None,
+) -> None:
     job_id = None
     storage = get_storage_backend()
     try:
@@ -255,6 +265,43 @@ def job_detect(talk_id: int, raw_key: str) -> None:
                     db.commit()
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
+
+            # Seed cut bounds from schedule offsets when not already set by user.
+            # ponytail: only seeds when both are None; user edits are always preserved.
+            if (
+                talk.cut_start is None
+                and talk.cut_end is None
+                and recording_start is not None
+                and talk.start is not None
+                and talk.end is not None
+                and result.actual_duration_seconds
+            ):
+                if isinstance(recording_start, str):
+                    recording_start = datetime.fromisoformat(recording_start)
+                rec_s = (
+                    recording_start
+                    if recording_start.tzinfo is not None
+                    else recording_start.replace(tzinfo=UTC)
+                )
+                t_start = (
+                    talk.start
+                    if talk.start.tzinfo is not None
+                    else talk.start.replace(tzinfo=UTC)
+                )
+                t_end = (
+                    talk.end
+                    if talk.end.tzinfo is not None
+                    else talk.end.replace(tzinfo=UTC)
+                )
+                offset_s = max(0.0, (t_start - rec_s).total_seconds())
+                offset_e = min(
+                    result.actual_duration_seconds,
+                    (t_end - rec_s).total_seconds(),
+                )
+                if offset_e > offset_s:
+                    talk.cut_start = offset_s
+                    talk.cut_end = offset_e
+
             advance(talk, "pending_approval")
             job.status = "done"
             job.updated_at = datetime.now(UTC)
