@@ -2932,3 +2932,32 @@ def test_attach_room_recording_studio_alias(
             assert res.json()["attached_count"] == 1
     finally:
         clip.unlink(missing_ok=True)
+
+
+def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
+    from app.storage import LocalDiskBackend
+
+    storage = LocalDiskBackend(data_dir=tmp_path / "storage")
+    source_file = storage.get_temp_dir() / "shared_recording.mp4"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_bytes(b"video content bytes for multi talk attachment")
+
+    # Simulate cross-device or unsupported hardlinks by forcing os.link to raise OSError
+    with patch("os.link", side_effect=OSError("Cross-device link")):
+        storage.link_or_copy("talk_1/raw/raw.mp4", source_file)
+        # Verify source file still exists and was not moved or deleted!
+        assert source_file.exists(), (
+            "source file must not be deleted or moved during fallback copy"
+        )
+        assert (
+            storage.get("talk_1/raw/raw.mp4").read_bytes()
+            == b"video content bytes for multi talk attachment"
+        )
+
+        # Attach second talk with the same source file
+        storage.link_or_copy("talk_2/raw/raw.mp4", source_file)
+        assert (
+            storage.get("talk_2/raw/raw.mp4").read_bytes()
+            == b"video content bytes for multi talk attachment"
+        )
+        assert source_file.exists()
