@@ -87,22 +87,114 @@ def admin_dashboard(
     )
 
 
-@router.get("/users", response_model=list[schemas.UserRead])
+@router.get("/users")
 def list_users(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
-    skip: int = Query(0, ge=0),
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
+    skip: int | None = Query(None, ge=0),
+    search: str | None = Query(None),
+    q: str | None = Query(None),
+    email: str | None = Query(None),
 ):
-    return (
-        db.query(models.User)
-        .order_by(models.User.id.asc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+    search_term = (search or q or email or "").strip()
+    query = db.query(models.User)
+    if search_term:
+        escaped_search = (
+            search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        query = query.filter(
+            models.User.email.ilike(f"%{escaped_search}%", escape="\\")
+        )
+
+    total_users = query.count()
+    total_pages = max(1, (total_users + limit - 1) // limit) if total_users > 0 else 1
+
+    accept = request.headers.get("accept", "")
+    format_param = request.query_params.get("format", "")
+    wants_html = format_param == "html" or (
+        "text/html" in accept
+        and "application/json" not in accept
+        and format_param != "json"
     )
+
+    if skip is not None:
+        offset = skip
+        calculated_page = (skip // limit) + 1
+    else:
+        calculated_page = page
+        offset = (page - 1) * limit
+
+    if (
+        wants_html
+        and total_users > 0
+        and (calculated_page > total_pages or offset >= total_users)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Page not found",
+        )
+
+    users = query.order_by(models.User.id.asc()).offset(offset).limit(limit).all()
+
+    if wants_html:
+        macro_row = db.query(
+            func.count(models.User.id).label("total_users"),
+            func.count(case((models.User.is_active.is_(True), 1))).label(
+                "active_users"
+            ),
+            func.count(case((models.User.is_active.is_(False), 1))).label(
+                "inactive_users"
+            ),
+            func.count(case((models.User.role == "admin", 1))).label("admin_users"),
+            func.count(case((models.User.role == "organizer", 1))).label(
+                "organizer_users"
+            ),
+        ).first()
+
+        macro_stats = {
+            "total_users": 0,
+            "active_users": 0,
+            "inactive_users": 0,
+            "admin_users": 0,
+            "organizer_users": 0,
+            **(
+                {k: v or 0 for k, v in macro_row._asdict().items()} if macro_row else {}
+            ),
+        }
+
+        pagination = {
+            "page": calculated_page,
+            "limit": limit,
+            "total_items": total_users,
+            "total_pages": total_pages,
+            "has_prev": calculated_page > 1,
+            "has_next": calculated_page < total_pages,
+            "prev_page": calculated_page - 1,
+            "next_page": calculated_page + 1,
+            "start_item": offset + 1 if total_users > 0 and offset < total_users else 0,
+            "end_item": min(offset + limit, total_users) if total_users > 0 else 0,
+        }
+
+        return templates.TemplateResponse(
+            request,
+            "admin_users.html.jinja",
+            {
+                "user": current_user,
+                "users": users,
+                "macro_stats": macro_stats,
+                "pagination": pagination,
+                "search": search_term,
+            },
+        )
+
+    return [schemas.UserRead.model_validate(u) for u in users]
 
 
 @router.post("/users/{id}/promote", response_model=schemas.UserRead)
+@router.post("/users/{id}/role", response_model=schemas.UserRead)
 def promote_user(
     id: int,
     payload: schemas.UserPromoteRequest,
@@ -125,6 +217,24 @@ def promote_user(
             )
 
     target.role = payload.role
+    db.commit()
+    db.refresh(target)
+    return target
+
+
+@router.post("/users/{id}/activate", response_model=schemas.UserRead)
+def activate_user(
+    id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    target = db.query(models.User).filter(models.User.id == id).first()
+    if not target:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    target.is_active = True
     db.commit()
     db.refresh(target)
     return target

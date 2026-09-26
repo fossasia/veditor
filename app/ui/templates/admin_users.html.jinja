@@ -1,0 +1,210 @@
+{% extends "admin_base.html.jinja" %}
+{% block title %}Users Overview — Admin Console{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin">Admin Console</a>
+  <span class="sep">/</span>
+  <span class="current">Users</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body">
+
+  <!-- Macro Platform User Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-label">Total Users</span>
+      <span class="stat-value">{{ macro_stats.total_users }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Active Accounts</span>
+      <span class="stat-value green">{{ macro_stats.active_users }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Inactive / Revoked</span>
+      <span class="stat-value {% if macro_stats.inactive_users > 0 %}red{% else %}green{% endif %}">{{ macro_stats.inactive_users }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Administrators</span>
+      <span class="stat-value purple">{{ macro_stats.admin_users }}</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-label">Organizers</span>
+      <span class="stat-value blue">{{ macro_stats.organizer_users }}</span>
+    </div>
+  </div>
+
+  <!-- Notification Banner -->
+  <div class="admin-feedback-banner hidden" id="admin-feedback-banner" role="alert">
+    <span class="admin-feedback-text" id="admin-feedback-text"></span>
+    <button type="button" class="admin-feedback-close" id="admin-feedback-close" aria-label="Close notification">&times;</button>
+  </div>
+
+  <!-- Users Table Card -->
+  <div class="table-wrap">
+    <div class="table-header admin-table-header">
+      <div class="admin-header-title-group">
+        <span class="table-title">Platform Users</span>
+        {% if pagination and pagination.total_items > 0 %}
+          <span class="table-count table-count-spaced">Showing {{ pagination.start_item }}&ndash;{{ pagination.end_item }} of {{ pagination.total_items }} user{% if pagination.total_items != 1 %}s{% endif %}{% if search %} matching "{{ search }}"{% endif %}</span>
+        {% else %}
+          <span class="table-count table-count-spaced">0 users{% if search %} matching "{{ search }}"{% endif %}</span>
+        {% endif %}
+      </div>
+
+      <!-- Search by Email Filter -->
+      <form method="get" action="/admin/users" class="admin-search-form" id="user-search-form">
+        <div class="admin-search-input-wrap">
+          <input
+            type="search"
+            name="search"
+            id="user-search-input"
+            class="admin-search-input"
+            placeholder="Search by email..."
+            value="{{ search or '' }}"
+            autocomplete="off"
+          >
+          <button type="submit" class="btn btn-primary btn-sm admin-search-btn" id="btn-user-search">
+            Search
+          </button>
+          {% if search %}
+            <a href="/admin/users" class="btn btn-ghost btn-sm admin-search-clear" id="btn-user-search-clear">
+              Clear
+            </a>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+
+    {% if users %}
+    <table>
+      <thead>
+        <tr>
+          <th class="col-user-id">ID</th>
+          <th class="col-user-email">Email</th>
+          <th class="col-user-role">Role</th>
+          <th class="col-user-status">Status</th>
+          <th class="col-user-created">Created At</th>
+          <th class="col-actions-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        {% for item in users %}
+        <tr id="user-row-{{ item.id }}" class="user-table-row {% if not item.is_active %}row-inactive{% endif %}">
+          <td class="td-mono col-user-id">#{{ item.id }}</td>
+          <td class="col-user-email">
+            <span class="user-email-text" id="user-email-{{ item.id }}">{{ item.email }}</span>
+            {% if user and (user.id == item.id or user.user_id == item.id) %}
+              <span class="badge badge-current-user">You</span>
+            {% endif %}
+          </td>
+          <td class="col-user-role">
+            <span class="badge badge-role badge-role-{{ item.role }}" id="badge-role-{{ item.id }}">
+              {{ item.role | capitalize }}
+            </span>
+          </td>
+          <td class="col-user-status">
+            {% if item.is_active %}
+              <span class="badge badge-status badge-status-active" id="badge-status-{{ item.id }}">
+                <span class="badge-dot dot-active"></span>Active
+              </span>
+            {% else %}
+              <span class="badge badge-status badge-status-inactive" id="badge-status-{{ item.id }}">
+                <span class="badge-dot dot-inactive"></span>Inactive
+              </span>
+            {% endif %}
+          </td>
+          <td class="td-muted col-user-created">
+            {{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '—' }}
+          </td>
+          <td class="col-actions-right">
+            <div class="user-actions-group">
+              <select
+                class="user-role-select"
+                id="role-select-{{ item.id }}"
+                data-user-id="{{ item.id }}"
+                data-current-role="{{ item.role }}"
+                aria-label="Change role for {{ item.email }}"
+              >
+                <option value="user" {% if item.role == 'user' %}selected{% endif %}>User</option>
+                <option value="organizer" {% if item.role == 'organizer' %}selected{% endif %}>Organizer</option>
+                <option value="admin" {% if item.role == 'admin' %}selected{% endif %}>Admin</option>
+                {% if item.role == 'speaker' %}
+                <option value="speaker" selected disabled>Speaker</option>
+                {% endif %}
+              </select>
+
+              {% if item.is_active %}
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs btn-toggle-active btn-deactivate"
+                  id="toggle-active-btn-{{ item.id }}"
+                  data-user-id="{{ item.id }}"
+                  data-action="deactivate"
+                  {% if user and (user.id == item.id or user.user_id == item.id) %}disabled title="Cannot deactivate your own account"{% endif %}
+                >
+                  Deactivate
+                </button>
+              {% else %}
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs btn-toggle-active btn-activate"
+                  id="toggle-active-btn-{{ item.id }}"
+                  data-user-id="{{ item.id }}"
+                  data-action="activate"
+                >
+                  Activate
+                </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if pagination and pagination.total_pages > 1 %}
+    <div class="pagination-bar">
+      <div class="pagination-info">
+        Showing <strong>{{ pagination.start_item }}</strong> &ndash; <strong>{{ pagination.end_item }}</strong> of <strong>{{ pagination.total_items }}</strong> users
+      </div>
+      <div class="pagination-controls">
+        <a
+          href="/admin/users?page={{ pagination.prev_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}"
+          class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_prev %}disabled{% endif %}"
+          {% if not pagination.has_prev %}aria-disabled="true" tabindex="-1"{% endif %}
+        >
+          &larr; Previous
+        </a>
+        <span class="pagination-page-label">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+        <a
+          href="/admin/users?page={{ pagination.next_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}"
+          class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_next %}disabled{% endif %}"
+          {% if not pagination.has_next %}aria-disabled="true" tabindex="-1"{% endif %}
+        >
+          Next &rarr;
+        </a>
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="events-empty-state">
+      {% if search %}
+        <p class="events-empty-title">No users found matching "{{ search }}"</p>
+        <p class="events-empty-desc">Check the spelling or try searching for another email.</p>
+        <a href="/admin/users" class="btn btn-ghost btn-sm events-empty-action">Clear search filter</a>
+      {% else %}
+        <p class="events-empty-title">No users found</p>
+        <p class="events-empty-desc">No platform users have registered yet.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/admin_users.js"></script>
+{% endblock %}

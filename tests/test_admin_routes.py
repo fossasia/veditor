@@ -884,3 +884,304 @@ def test_admin_events_pagination(client: TestClient, db_session):
 
     res_bad_limit_zero = client.get("/admin/events?limit=0")
     assert res_bad_limit_zero.status_code == 422
+
+
+def test_admin_users_html_view_rendering(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_ui_user@admin-test.com", role="admin"
+    )
+    managed_user = _create_test_user(
+        db_session, "managed_one@admin-test.com", role="user"
+    )
+    _create_test_user(
+        db_session, "managed_two@admin-test.com", role="organizer", is_active=False
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.get("/admin/users", headers={"Accept": "text/html"})
+    assert res.status_code == 200
+    html = res.text
+
+    # Page structure & headers
+    assert "Users Overview" in html
+    assert "Platform Users" in html
+    assert 'href="/admin/users"' in html
+
+    # Macro stats
+    assert "Total Users" in html
+    assert "Active Accounts" in html
+    assert "Inactive / Revoked" in html
+    assert "Administrators" in html
+    assert "Organizers" in html
+
+    # Table columns
+    assert "Email" in html
+    assert "Role" in html
+    assert "Status" in html
+    assert "Created At" in html
+    assert "Actions" in html
+
+    # User rows & elements
+    assert "admin_ui_user@admin-test.com" in html
+    assert "managed_one@admin-test.com" in html
+    assert "managed_two@admin-test.com" in html
+    assert "badge-current-user" in html  # "(You)" badge for signed-in admin
+    assert "Active" in html
+    assert "Inactive" in html
+
+    # Role action menu and toggle active buttons
+    assert f'id="role-select-{managed_user.id}"' in html
+    assert f'id="toggle-active-btn-{managed_user.id}"' in html
+    assert "Deactivate" in html
+    assert "Activate" in html
+
+    # Script tag present
+    assert '<script src="/static/js/admin_users.js"></script>' in html
+
+
+def test_admin_users_search_filter_html_and_json(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_search_mgr@admin-test.com", role="admin"
+    )
+    _create_test_user(db_session, "findme_special@admin-test.com", role="user")
+    _create_test_user(db_session, "other_normal@admin-test.com", role="user")
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Search via JSON API
+    res_json = client.get("/admin/users?search=findme_special")
+    assert res_json.status_code == 200
+    data = res_json.json()
+    assert isinstance(data, list)
+    matching_emails = [u["email"] for u in data]
+    assert "findme_special@admin-test.com" in matching_emails
+    assert "other_normal@admin-test.com" not in matching_emails
+
+    # Search via HTML UI
+    res_html = client.get(
+        "/admin/users?search=findme_special", headers={"Accept": "text/html"}
+    )
+    assert res_html.status_code == 200
+    html = res_html.text
+    assert "findme_special@admin-test.com" in html
+    assert "other_normal@admin-test.com" not in html
+    assert 'matching "findme_special"' in html
+
+
+def test_admin_users_search_empty_state(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_search_empty@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Empty search JSON
+    res_json = client.get("/admin/users?search=thisemaildoesnotexistatall12345")
+    assert res_json.status_code == 200
+    assert res_json.json() == []
+
+    # Empty search HTML
+    res_html = client.get(
+        "/admin/users?search=thisemaildoesnotexistatall12345",
+        headers={"Accept": "text/html"},
+    )
+    assert res_html.status_code == 200
+    html = res_html.text
+    assert 'No users found matching "thisemaildoesnotexistatall12345"' in html
+    assert "Clear search filter" in html
+
+
+def test_activate_user_endpoint_success(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_act_mgr@admin-test.com", role="admin"
+    )
+    inactive_user = _create_test_user(
+        db_session, "inactive_test@admin-test.com", role="user", is_active=False
+    )
+    assert inactive_user.is_active is False
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(f"/admin/users/{inactive_user.id}/activate")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["id"] == inactive_user.id
+    assert data["is_active"] is True
+
+    db_session.refresh(inactive_user)
+    assert inactive_user.is_active is True
+
+
+def test_activate_user_not_found(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_act_nf@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post("/admin/users/999999/activate")
+    assert res.status_code == 404
+    assert res.json()["detail"] == "User not found"
+
+
+def test_promote_demote_to_user_role(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_demote_mgr@admin-test.com", role="admin"
+    )
+    target_user = _create_test_user(
+        db_session, "target_demote@admin-test.com", role="organizer"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Demote from organizer to user
+    res = client.post(f"/admin/users/{target_user.id}/promote", json={"role": "user"})
+    assert res.status_code == 200
+    assert res.json()["role"] == "user"
+
+    db_session.refresh(target_user)
+    assert target_user.role == "user"
+
+
+def test_promote_rejects_speaker_role(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_no_spk@admin-test.com", role="admin"
+    )
+    target_user = _create_test_user(
+        db_session, "target_no_spk@admin-test.com", role="user"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Promoting to speaker via admin area must be rejected
+    res = client.post(
+        f"/admin/users/{target_user.id}/promote", json={"role": "speaker"}
+    )
+    assert res.status_code == 422
+
+
+def test_admin_users_role_alias_endpoint(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_alias@admin-test.com", role="admin"
+    )
+    target_user = _create_test_user(
+        db_session, "target_alias@admin-test.com", role="user"
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Test POST /admin/users/{id}/role alias
+    res = client.post(f"/admin/users/{target_user.id}/role", json={"role": "organizer"})
+    assert res.status_code == 200
+    assert res.json()["role"] == "organizer"
+
+    db_session.refresh(target_user)
+    assert target_user.role == "organizer"
+
+
+def test_admin_nav_includes_users_link(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_nav_test@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Verify /admin has Users link
+    res_dash = client.get("/admin")
+    assert res_dash.status_code == 200
+    assert 'href="/admin/users"' in res_dash.text
+    assert "Users" in res_dash.text
+
+    # Verify /admin/events has Users link
+    res_events = client.get("/admin/events")
+    assert res_events.status_code == 200
+    assert 'href="/admin/users"' in res_events.text
+
+
+def test_admin_users_search_wildcard_escaping(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_escape_test@admin-test.com", role="admin"
+    )
+    _create_test_user(db_session, "user_abc@admin-test.com", role="user")
+    _create_test_user(db_session, "userXabc@admin-test.com", role="user")
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Search with '_' which should only match literal '_' and NOT 'userXabc'
+    res = client.get("/admin/users?search=user_abc")
+    assert res.status_code == 200
+    data = res.json()
+    emails = [u["email"] for u in data]
+    assert "user_abc@admin-test.com" in emails
+    assert "userXabc@admin-test.com" not in emails
+
+    # Search with '%' which should match nothing when no user has a literal '%'
+    res_pct = client.get("/admin/users?search=%")
+    assert res_pct.status_code == 200
+    assert res_pct.json() == []
+
+
+def test_admin_users_pagination_url_encoding(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_urlenc@admin-test.com", role="admin"
+    )
+    _create_test_user(db_session, "other_normal@admin-test.com", role="user")
+    # Create 3 users matching a tag search
+    for i in range(3):
+        _create_test_user(
+            db_session, f"tag_user_{i}+special@admin-test.com", role="user"
+        )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Search with '+' (URL encoded as %2B in the query string) and limit=1 to trigger pagination
+    res = client.get(
+        "/admin/users?page=1&limit=1&search=%2Bspecial",
+        headers={"Accept": "text/html"},
+    )
+    assert res.status_code == 200
+    html = res.text
+    # Check that the Next link properly encodes '+special' as '%2Bspecial'
+    assert "search=%2Bspecial" in html
+    assert "other_normal@admin-test.com" not in html
+
+    res_page2 = client.get(
+        "/admin/users?page=2&limit=1&search=%2Bspecial",
+        headers={"Accept": "text/html"},
+    )
+    assert res_page2.status_code == 200
+    html_page2 = res_page2.text
+    assert "tag_user_1+special@admin-test.com" in html_page2
+    assert "other_normal@admin-test.com" not in html_page2
+    assert 'of 3 users matching "+special"' in html_page2
+    assert "search=%2Bspecial" in html_page2
+
+
+def test_admin_users_html_skip_out_of_range_raises_404(client: TestClient, db_session):
+    admin_user = _create_test_user(
+        db_session, "admin_skip_test@admin-test.com", role="admin"
+    )
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", token)
+
+    # HTML request with skip exceeding total users must return 404
+    res = client.get("/admin/users?skip=999999", headers={"Accept": "text/html"})
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Page not found"
+
+    # HTML request where skip is within page 1 bounds (calculated_page=1 <= total_pages=1) but offset >= total_users
+    res_search = client.get(
+        f"/admin/users?search={admin_user.email}&skip=1",
+        headers={"Accept": "text/html"},
+    )
+    assert res_search.status_code == 404
+    assert res_search.json()["detail"] == "Page not found"
