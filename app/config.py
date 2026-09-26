@@ -1,4 +1,3 @@
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,27 +214,20 @@ EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
 def _cast_setting_value(key: str, raw_val: str, default: Any = None) -> Any:
     defn = SYSTEM_SETTING_DEFINITIONS.get(key)
     fallback = (
-        default if default is not None else (defn.default_value if defn else None)
+        default if default is not None else (defn.default_value if defn else raw_val)
     )
     v_type = (
         defn.value_type if defn else (type(default) if default is not None else str)
     )
-
     try:
         if v_type is float:
             val = float(raw_val)
             if not math.isfinite(val):
-                raise ValueError("non-finite float")
+                raise ValueError
             return val
-        if v_type is int:
-            return int(raw_val)
-        if v_type is bool:
-            return raw_val.strip().lower() in ("true", "1", "yes", "on")
-        if v_type is str:
-            return str(raw_val)
-        return json.loads(raw_val)
-    except Exception:  # noqa: BLE001
-        return fallback if fallback is not None else raw_val
+        return v_type(raw_val)
+    except ValueError, TypeError:
+        return fallback
 
 
 def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
@@ -249,15 +241,13 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
 
         if db is not None:
             row = db.get(SystemSetting, normalized_key)
-            if row is not None:
-                return _cast_setting_value(normalized_key, row.value, default)
         else:
             from app.db import SessionLocal
 
             with SessionLocal() as session:
                 row = session.get(SystemSetting, normalized_key)
-                if row is not None:
-                    return _cast_setting_value(normalized_key, row.value, default)
+        if row is not None:
+            return _cast_setting_value(normalized_key, row.value, default)
     except Exception:  # noqa: BLE001, S110
         pass
 

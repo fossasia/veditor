@@ -176,8 +176,8 @@ def deactivate_user(
 
 
 def _validate_system_setting(key: str, value: str) -> None:
-    normalized_key = key.strip().lower()
-    if normalized_key in EXCLUDED_SETTING_KEYS:
+    norm = key.strip().lower()
+    if norm in EXCLUDED_SETTING_KEYS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Setting '{key}' is a protected credential or infrastructure parameter and cannot be modified dynamically.",
@@ -187,42 +187,36 @@ def _validate_system_setting(key: str, value: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Setting '{key}' is not a recognized platform setting.",
         )
-    if key == "detect_duration_tolerance_seconds":
-        try:
-            val = float(value)
-            if not math.isfinite(val) or val < 0:
+
+    try:
+        if key == "detect_duration_tolerance_seconds":
+            v = float(value)
+            if not math.isfinite(v) or v < 0:
                 raise ValueError
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="detect_duration_tolerance_seconds must be a finite non-negative number",
-            )
-    elif key == "loudness_target_lufs":
-        try:
-            val = float(value)
-            if not math.isfinite(val) or val < -70.0 or val > 0.0:
+        elif key == "loudness_target_lufs":
+            v = float(value)
+            if not math.isfinite(v) or not (-70.0 <= v <= 0.0):
                 raise ValueError
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="loudness_target_lufs must be a finite float between -70.0 and 0.0",
-            )
-    elif key == "default_preview_preset":
-        valid_presets = set(settings.preview_presets.keys()) | set(
-            PREVIEW_PRESETS.keys()
+        elif key == "default_preview_preset":
+            valid = set(settings.preview_presets.keys()) | set(PREVIEW_PRESETS.keys())
+            if value not in valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"default_preview_preset must be one of: {sorted(valid)}",
+                )
+        elif key == "default_transcode_preset":
+            if value not in ("1080p_default", "720p", "4k_master"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="default_transcode_preset must be one of: ['1080p_default', '720p', '4k_master']",
+                )
+    except ValueError:
+        detail = (
+            "detect_duration_tolerance_seconds must be a finite non-negative number"
+            if key == "detect_duration_tolerance_seconds"
+            else "loudness_target_lufs must be a finite float between -70.0 and 0.0"
         )
-        if value not in valid_presets:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"default_preview_preset must be one of: {sorted(valid_presets)}",
-            )
-    elif key == "default_transcode_preset":
-        valid_transcodes = ("1080p_default", "720p", "4k_master")
-        if value not in valid_transcodes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"default_transcode_preset must be one of: {list(valid_transcodes)}",
-            )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 def _get_all_settings_data(db: Session) -> list[schemas.SystemSettingRead]:
@@ -232,20 +226,15 @@ def _get_all_settings_data(db: Session) -> list[schemas.SystemSettingRead]:
     for def_key, defn in SYSTEM_SETTING_DEFINITIONS.items():
         row = db_rows.get(def_key)
         current_value = row.value if row else str(defn.default_value)
-        is_overridden = False
-        if row is not None:
-            if defn.value_type in (int, float):
-                try:
-                    is_overridden = float(row.value) != float(defn.default_value)
-                except ValueError, TypeError:
-                    is_overridden = True
-            else:
-                is_overridden = row.value != str(defn.default_value)
+        try:
+            is_overridden = row is not None and (
+                float(row.value) != float(defn.default_value)
+                if defn.value_type is float
+                else row.value != str(defn.default_value)
+            )
+        except ValueError, TypeError:
+            is_overridden = True
 
-        options = [
-            schemas.SystemSettingOption(value=opt_val, label=opt_lbl)
-            for opt_val, opt_lbl in defn.options
-        ]
         results.append(
             schemas.SystemSettingRead(
                 key=def_key,
@@ -255,7 +244,10 @@ def _get_all_settings_data(db: Session) -> list[schemas.SystemSettingRead]:
                 updated_at=row.updated_at if row else None,
                 is_overridden=is_overridden,
                 default_value=str(defn.default_value),
-                options=options,
+                options=[
+                    schemas.SystemSettingOption(value=v, label=lbl)
+                    for v, lbl in defn.options
+                ],
                 input_type=defn.input_type,
                 min_value=defn.min_value,
                 max_value=defn.max_value,
@@ -457,36 +449,24 @@ async def update_setting(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ):
-    content_type = request.headers.get("content-type", "")
-
-    if "application/json" in content_type:
+    if "application/json" in request.headers.get("content-type", ""):
         try:
             payload = await request.json()
-        except ValueError, json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid JSON payload",
-            )
-        if not isinstance(payload, dict):
+            if not isinstance(payload, dict):
+                raise TypeError
+        except TypeError, ValueError, json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="JSON payload must be an object",
             )
 
-        raw_key = payload.get("key")
-        raw_val = payload.get("value")
         setting = _upsert_setting(
             db,
-            "" if raw_key is None else str(raw_key),
-            "" if raw_val is None else str(raw_val),
+            str(payload.get("key") or ""),
+            str(payload.get("value") or ""),
             payload.get("description"),
         )
         defn = SYSTEM_SETTING_DEFINITIONS.get(setting.key)
-        options = (
-            [schemas.SystemSettingOption(value=v, label=lbl) for v, lbl in defn.options]
-            if defn
-            else []
-        )
         return schemas.SystemSettingRead(
             key=setting.key,
             title=defn.title if defn else None,
@@ -495,17 +475,19 @@ async def update_setting(
             updated_at=setting.updated_at,
             is_overridden=True,
             default_value=str(defn.default_value) if defn else None,
-            options=options,
+            options=[
+                schemas.SystemSettingOption(value=v, label=lbl)
+                for v, lbl in defn.options
+            ]
+            if defn
+            else [],
             input_type=defn.input_type if defn else "select",
             min_value=defn.min_value if defn else None,
             max_value=defn.max_value if defn else None,
             step=defn.step if defn else None,
         )
 
-    # Form submission
     form = await request.form()
-
-    # Bulk reset to defaults
     if form.get("action") == "reset_all":
         db.query(models.SystemSetting).filter(
             models.SystemSetting.key.in_(SYSTEM_SETTING_DEFINITIONS.keys())
@@ -516,7 +498,6 @@ async def update_setting(
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
-    # Single-key form submission
     if "key" in form:
         _upsert_setting(
             db,
@@ -529,37 +510,35 @@ async def update_setting(
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
-    # Common save button: saves all 4 selectable settings at once
     for def_key, defn in SYSTEM_SETTING_DEFINITIONS.items():
         if def_key in form:
             val = str(form.get(def_key)).strip()
             _validate_system_setting(def_key, val)
             setting = db.get(models.SystemSetting, def_key)
-
-            is_default = False
-            if defn.value_type in (int, float):
-                try:
-                    is_default = float(val) == float(defn.default_value)
-                except ValueError, TypeError:
-                    is_default = False
-            else:
-                is_default = val == str(defn.default_value)
+            try:
+                is_default = (
+                    float(val) == float(defn.default_value)
+                    if defn.value_type is float
+                    else val == str(defn.default_value)
+                )
+            except ValueError, TypeError:
+                is_default = False
 
             if is_default:
                 if setting:
                     db.delete(setting)
+            elif setting:
+                setting.value = val
+                setting.updated_at = datetime.now(UTC)
             else:
-                if not setting:
-                    setting = models.SystemSetting(
+                db.add(
+                    models.SystemSetting(
                         key=def_key,
                         value=val,
                         description=defn.description,
                         updated_at=datetime.now(UTC),
                     )
-                    db.add(setting)
-                else:
-                    setting.value = val
-                    setting.updated_at = datetime.now(UTC)
+                )
 
     db.commit()
     return RedirectResponse(

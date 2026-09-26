@@ -124,20 +124,6 @@
 
         <div class="setting-control-area">
           {% if s.input_type == 'range' %}
-            {% set val_sec = s.value|float|round|int %}
-            {% if val_sec <= 100 %}
-              {% set cur_idx = 0 %}
-            {% elif val_sec <= 240 %}
-              {% set cur_idx = 1 %}
-            {% elif val_sec <= 450 %}
-              {% set cur_idx = 2 %}
-            {% elif val_sec <= 750 %}
-              {% set cur_idx = 3 %}
-            {% elif val_sec <= 1350 %}
-              {% set cur_idx = 4 %}
-            {% else %}
-              {% set cur_idx = 5 %}
-            {% endif %}
             <div class="setting-slider-wrap">
               <label for="slider-{{ s.key }}" class="setting-label">{{ s.title or s.key }}</label>
               <div class="slider-track-container">
@@ -148,7 +134,7 @@
                   min="0"
                   max="5"
                   step="1"
-                  value="{{ cur_idx }}"
+                  value="2"
                   aria-label="{{ s.title or s.key }}"
                 >
                 <input
@@ -158,14 +144,9 @@
                   value="{{ s.value }}"
                 >
               </div>
-              <div class="slider-ticks" id="ticks-{{ s.key }}">
-                {% for lbl in ['1m (Strict)', '3m', '5m (Default)', '10m', '15m', '30m (Max)'] %}
-                <button type="button" class="tick-label" data-index="{{ loop.index0 }}">{{ lbl }}</button>
-                {% endfor %}
-              </div>
               <div class="quick-preset-bar">
                 <span class="quick-preset-label">Quick select:</span>
-                {% for lbl in ['1m', '3m', '5m (Default)', '10m', '15m', '30m'] %}
+                {% for lbl in ['1m (Strict)', '3m', '5m (Default)', '10m', '15m', '30m (Max)'] %}
                 <button type="button" class="preset-pill" data-index="{{ loop.index0 }}">{{ lbl }}</button>
                 {% endfor %}
               </div>

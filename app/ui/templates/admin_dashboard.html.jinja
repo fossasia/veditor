@@ -83,32 +83,17 @@
       <div class="summary-item-card">
         <div class="summary-item-top">
           <div class="summary-item-icon-box">
-            {% if s.key == 'detect_duration_tolerance_seconds' %}
-            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              {% if s.key == 'detect_duration_tolerance_seconds' %}
+              <circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>
+              {% elif s.key == 'loudness_target_lufs' %}
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+              {% elif s.key == 'default_preview_preset' %}
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line>
+              {% else %}
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              {% endif %}
             </svg>
-            {% elif s.key == 'loudness_target_lufs' %}
-            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-            </svg>
-            {% elif s.key == 'default_preview_preset' %}
-            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
-              <line x1="7" y1="2" x2="7" y2="22"></line>
-              <line x1="17" y1="2" x2="17" y2="22"></line>
-              <line x1="2" y1="12" x2="22" y2="12"></line>
-              <line x1="2" y1="7" x2="7" y2="7"></line>
-              <line x1="2" y1="17" x2="7" y2="17"></line>
-              <line x1="17" y1="17" x2="22" y2="17"></line>
-              <line x1="17" y1="7" x2="22" y2="7"></line>
-            </svg>
-            {% else %}
-            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path>
-            </svg>
-            {% endif %}
           </div>
           <span class="setting-badge {% if s.is_overridden %}badge-custom{% else %}badge-default{% endif %}">
             {% if s.is_overridden %}Custom Override{% else %}System Default{% endif %}
@@ -116,41 +101,18 @@
         </div>
         <div class="summary-item-body">
           <span class="summary-item-label">
-            {% if s.key == 'detect_duration_tolerance_seconds' %}
-              Schedule Margin
-            {% elif s.key == 'loudness_target_lufs' %}
-              Speech Volume
-            {% elif s.key == 'default_preview_preset' %}
-              Draft Preview
-            {% elif s.key == 'default_transcode_preset' %}
-              Final Transcode
-            {% else %}
-              {{ s.title or s.key }}
-            {% endif %}
+            {% if s.key == 'detect_duration_tolerance_seconds' %}Schedule Margin
+            {% elif s.key == 'loudness_target_lufs' %}Speech Volume
+            {% elif s.key == 'default_preview_preset' %}Draft Preview
+            {% elif s.key == 'default_transcode_preset' %}Final Transcode
+            {% else %}{{ s.title or s.key }}{% endif %}
           </span>
           <span class="summary-item-val">
-            {% if s.key == 'detect_duration_tolerance_seconds' %}
-              {% set val_sec = s.value|float|round|int %}
-              ±{{ (val_sec / 60)|int }} mins
-            {% elif s.key == 'loudness_target_lufs' %}
-              {{ s.value|float|round(1) }} LUFS
-            {% elif s.key == 'default_preview_preset' %}
-              {% if s.value == 'big_video' %}
-                High Detail (640x360)
-              {% else %}
-                Standard (320x180)
-              {% endif %}
-            {% elif s.key == 'default_transcode_preset' %}
-              {% if s.value == '720p' %}
-                HD (720p)
-              {% elif s.value == '4k_master' %}
-                Ultra HD (4K)
-              {% else %}
-                Full HD (1080p)
-              {% endif %}
-            {% else %}
-              {{ s.value }}
-            {% endif %}
+            {% if s.key == 'detect_duration_tolerance_seconds' %}±{{ (s.value|float / 60)|int }} mins
+            {% elif s.key == 'loudness_target_lufs' %}{{ s.value|float|round(1) }} LUFS
+            {% elif s.key == 'default_preview_preset' %}{{ 'High Detail (640x360)' if s.value == 'big_video' else 'Standard (320x180)' }}
+            {% elif s.key == 'default_transcode_preset' %}{{ 'HD (720p)' if s.value == '720p' else ('Ultra HD (4K)' if s.value == '4k_master' else 'Full HD (1080p)') }}
+            {% else %}{{ s.value }}{% endif %}
           </span>
         </div>
       </div>

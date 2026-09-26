@@ -1,137 +1,66 @@
 document.addEventListener("DOMContentLoaded", () => {
-  // ── 1. Tolerance Stepped Slider & Preset Definitions ──
   const PRESET_VALUES = [60, 180, 300, 600, 900, 1800];
-  const toleranceSlider = document.getElementById("slider-detect_duration_tolerance_seconds");
+  const slider = document.getElementById("slider-detect_duration_tolerance_seconds");
   const hiddenInput = document.getElementById("input-detect_duration_tolerance_seconds");
-  const toleranceReadout = document.getElementById("readout-detect_duration_tolerance_seconds");
-  const toleranceBadge = document.getElementById("badge-detect_duration_tolerance_seconds");
+  const readout = document.getElementById("readout-detect_duration_tolerance_seconds");
+  const badge = document.getElementById("badge-detect_duration_tolerance_seconds");
   const presetPills = document.querySelectorAll(".preset-pill");
-  const tickLabels = document.querySelectorAll(".tick-label");
 
-  function formatTolerance(seconds) {
-    const sec = parseInt(seconds, 10);
-    const mins = Math.floor(sec / 60);
-    const remSec = sec % 60;
-    let label = `${mins} min${mins !== 1 ? "s" : ""}`;
-    if (remSec > 0) {
-      label += ` ${remSec}s`;
+  function syncTolerance(index) {
+    const idx = Math.max(0, Math.min(PRESET_VALUES.length - 1, index));
+    const sec = PRESET_VALUES[idx];
+    if (slider) slider.value = idx;
+    if (hiddenInput) hiddenInput.value = sec.toFixed(1);
+    if (readout) readout.textContent = `${Math.round(sec / 60)} mins${sec === 300 ? " (Default)" : ""}`;
+    if (badge) {
+      const isDef = sec === 300;
+      badge.className = `setting-badge ${isDef ? "badge-default" : "badge-custom"}`;
+      badge.textContent = isDef ? "System Default" : "Custom Override";
     }
-    if (sec === 300) {
-      label += " (Default)";
-    } else if (sec <= 60) {
-      label += " (Strict)";
-    } else if (sec >= 1800) {
-      label += " (Max)";
-    }
-    return label;
+    presetPills.forEach((p) => p.classList.toggle("active", Number(p.dataset.index) === idx));
   }
 
-  function syncToleranceByIndex(index) {
-    const clampedIndex = Math.max(0, Math.min(PRESET_VALUES.length - 1, index));
-    const seconds = PRESET_VALUES[clampedIndex];
-    const pct = (clampedIndex / (PRESET_VALUES.length - 1)) * 100;
-
-    if (toleranceSlider) {
-      toleranceSlider.value = clampedIndex;
-      toleranceSlider.style.setProperty("--range-pct", `${pct}%`);
-    }
-
-    if (hiddenInput) {
-      hiddenInput.value = seconds.toFixed(1);
-    }
-
-    if (toleranceReadout) {
-      toleranceReadout.textContent = formatTolerance(seconds);
-    }
-
-    if (toleranceBadge) {
-      if (seconds === 300) {
-        toleranceBadge.className = "setting-badge badge-default";
-        toleranceBadge.textContent = "System Default";
-      } else {
-        toleranceBadge.className = "setting-badge badge-custom";
-        toleranceBadge.textContent = "Custom Override";
-      }
-    }
-
-    // Update active pill and tick label
-    [...presetPills, ...tickLabels].forEach((el) => {
-      el.classList.toggle("active", Number(el.dataset.index) === clampedIndex);
-    });
+  if (slider && hiddenInput) {
+    const initialSec = parseFloat(hiddenInput.value || "300");
+    const initialIdx = PRESET_VALUES.reduce((closest, val, i, arr) =>
+      Math.abs(val - initialSec) < Math.abs(arr[closest] - initialSec) ? i : closest, 2
+    );
+    syncTolerance(initialIdx);
+    slider.addEventListener("input", (e) => syncTolerance(parseInt(e.target.value, 10)));
   }
 
-  if (toleranceSlider) {
-    const initialIdx = parseInt(toleranceSlider.value, 10);
-    syncToleranceByIndex(Number.isInteger(initialIdx) ? initialIdx : 2);
-
-    toleranceSlider.addEventListener("input", (e) => {
-      syncToleranceByIndex(parseInt(e.target.value, 10));
-    });
-  }
-
-  // ── 2. Preset Pill & Tick Click Handlers ──
-  [...presetPills, ...tickLabels].forEach((el) => {
-    el.addEventListener("click", () => {
-      syncToleranceByIndex(parseInt(el.dataset.index, 10));
-    });
+  presetPills.forEach((pill) => {
+    pill.addEventListener("click", () => syncTolerance(parseInt(pill.dataset.index, 10)));
   });
 
-  // ── 3. Dropdown Live Sync with Badges ──
   const defaults = {
-    loudness_target_lufs: "-16.0",
-    default_preview_preset: "small_video",
-    default_transcode_preset: "1080p_default",
+    loudness_target_lufs: (v) => parseFloat(v) === -16.0,
+    default_preview_preset: (v) => v === "small_video",
+    default_transcode_preset: (v) => v === "1080p_default",
   };
-
-  Object.entries(defaults).forEach(([key, defaultVal]) => {
+  Object.entries(defaults).forEach(([key, checkDefault]) => {
     const sel = document.getElementById(`select-${key}`);
-    const badge = document.getElementById(`badge-${key}`);
-    if (sel && badge) {
-      const update = () => {
-        const isDefault =
-          key === "loudness_target_lufs"
-            ? parseFloat(sel.value) === -16.0
-            : sel.value === defaultVal;
-        badge.className = `setting-badge ${isDefault ? "badge-default" : "badge-custom"}`;
-        badge.textContent = isDefault ? "System Default" : "Custom Override";
-      };
-      sel.addEventListener("change", update);
+    const b = document.getElementById(`badge-${key}`);
+    if (sel && b) {
+      sel.addEventListener("change", () => {
+        const isDef = checkDefault(sel.value);
+        b.className = `setting-badge ${isDef ? "badge-default" : "badge-custom"}`;
+        b.textContent = isDef ? "System Default" : "Custom Override";
+      });
     }
   });
 
-  // ── 4. Native Website Reset Confirmation Modal ──
-  const resetModal = document.getElementById("reset-modal");
-  const openResetBtn = document.getElementById("btn-open-reset-modal");
-  const cancelModalBtn = document.getElementById("btn-cancel-modal");
+  const modal = document.getElementById("reset-modal");
+  document.getElementById("btn-open-reset-modal")?.addEventListener("click", () => modal?.showModal());
+  document.getElementById("btn-cancel-modal")?.addEventListener("click", () => modal?.close());
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) modal.close();
+  });
 
-  if (openResetBtn && resetModal) {
-    openResetBtn.addEventListener("click", () => {
-      resetModal.showModal();
+  setTimeout(() => {
+    document.querySelectorAll(".admin-alert").forEach((a) => {
+      a.classList.add("alert-fade-out");
+      setTimeout(() => a.remove(), 400);
     });
-  }
-
-  if (cancelModalBtn && resetModal) {
-    cancelModalBtn.addEventListener("click", () => {
-      resetModal.close();
-    });
-  }
-
-  if (resetModal) {
-    resetModal.addEventListener("click", (e) => {
-      if (e.target === resetModal) {
-        resetModal.close();
-      }
-    });
-  }
-
-  // ── 6. Auto-dismiss success/status alerts after 5 seconds ──
-  const alerts = document.querySelectorAll(".admin-alert");
-  if (alerts.length > 0) {
-    setTimeout(() => {
-      alerts.forEach((alert) => {
-        alert.classList.add("alert-fade-out");
-        setTimeout(() => alert.remove(), 400);
-      });
-    }, 5000);
-  }
+  }, 5000);
 });
