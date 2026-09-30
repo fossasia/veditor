@@ -26,6 +26,7 @@ def detect(
     scheduled_start: datetime,
     scheduled_end: datetime,
     tolerance_seconds: float = DETECT_DURATION_TOLERANCE_SECONDS,
+    is_room_recording: bool = False,
 ) -> DetectResult:
     """Inspect a media file and return a pass/fail validation result.
 
@@ -69,7 +70,7 @@ def detect(
 
     scheduled_duration = (scheduled_end - scheduled_start).total_seconds()
     duration_delta = abs(actual_duration - scheduled_duration)
-    if duration_delta > tolerance_seconds:
+    if not is_room_recording and duration_delta > tolerance_seconds:
         return DetectResult(
             passed=False,
             actual_duration_seconds=actual_duration,

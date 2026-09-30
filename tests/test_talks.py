@@ -560,6 +560,7 @@ def test_post_recording_success_enqueues_detect():
             job_detect,
             1,
             "1/raw/video.mp4",
+            None,
             job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
         )
 
@@ -1276,6 +1277,7 @@ def test_full_pipeline_flow_recordings_to_preview_halt():
             job_detect,
             1,
             "1/raw/session.mp4",
+            None,
             job_timeout=300,
         )
 
@@ -1375,5 +1377,54 @@ def test_full_pipeline_flow_recordings_to_preview_halt():
     data = resp.json()
     assert data["status"] == "preview"
     assert data["preview_urls"] == ["memory://1/preview/preview.mp4"]
+
+    app.dependency_overrides.clear()
+
+
+def test_post_recording_with_recording_start_enqueues_detect():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+    fake_storage = FakeStorageBackend()
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Test Talk",
+        room="Room 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="waiting_for_files",
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
+
+    with (
+        patch(
+            "app.routes.talks.stage_recording", return_value="1/raw/video.mp4"
+        ) as mock_stage,
+        patch("app.routes.talks.light_queue.enqueue") as mock_enqueue,
+    ):
+        response = client.post(
+            "/talks/1/recordings",
+            json={
+                "relative_key": "video.mp4",
+                "recording_start": "2026-09-26T10:00:00Z",
+            },
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert response.status_code == 202
+
+        expected_dt = datetime(2026, 9, 26, 10, 0, tzinfo=UTC)
+        mock_stage.assert_called_once()
+        mock_enqueue.assert_called_once_with(
+            job_detect,
+            1,
+            "1/raw/video.mp4",
+            expected_dt,
+            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        )
 
     app.dependency_overrides.clear()

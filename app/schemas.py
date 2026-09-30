@@ -258,6 +258,11 @@ class TalkJobsResponse(BaseModel):
 class RecordingIngestRequest(BaseModel):
     source_path: str | None = None
     relative_key: str | None = None
+    recording_start: datetime | None = Field(
+        default=None,
+        description="room recording wall-clock start for cut-bound seeding",
+        examples=["2026-09-26T10:00:00Z"],
+    )
 
     @model_validator(mode="after")
     def exactly_one_path(self):

@@ -294,6 +294,7 @@ def ingest_recording(
         job_detect,
         talk.id,
         raw_key,
+        payload.recording_start,
         job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
     )
 

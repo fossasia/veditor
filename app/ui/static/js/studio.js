@@ -556,6 +556,10 @@ if (video) {
     } else if (outPointSec <= 0 || outPointSec > duration) {
       outPointSec = duration;
     }
+    // Seek playhead to pre-seeded inPoint so the speaker sees their talk start, not 00:00.
+    if (!boundsEdited && inPointSec > 0 && video.duration > inPointSec) {
+      video.currentTime = inPointSec;
+    }
     updateTimecode();
     updateTimelineTicks();
     updateCutMarkersUI();
