@@ -129,6 +129,22 @@
     </div>
     {% endif %}
 
+    {% if user and user.role == 'user' and not user.is_sso %}
+    <!-- Organizer Access Request Banner -->
+    {% if user.organizer_requested %}
+    <div class="role-request-banner role-request-pending" id="role-request-banner">
+      <span class="role-request-icon">🕐</span>
+      <span>Your request for organizer access has been submitted and is pending administrator review.</span>
+    </div>
+    {% else %}
+    <div class="role-request-banner" id="role-request-banner">
+      <span class="role-request-icon">ℹ️</span>
+      <span>You are signed in as a standard user. You need organizer privileges to edit talks and manage pipeline workflows.</span>
+      <button class="btn btn-sm btn-primary" id="btn-request-organizer" type="button">Request Organizer Role</button>
+    </div>
+    {% endif %}
+    {% endif %}
+
     {% if talk.status == 'waiting_for_files' %}
     <!-- Upload Dropzone Box (Pending Upload State) -->
     <div class="upload-pending-container">
@@ -803,6 +819,29 @@
     <div class="dashboard-modal-footer">
       <button class="btn btn-ghost btn-sm btn-close-edit-talk">Cancel</button>
       <button class="btn btn-primary btn-sm" id="btn-submit-edit-talk-studio">Save Changes</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if user and user.role == 'user' and not user.is_sso %}
+<!-- Request Organizer Modal -->
+<div class="modal-overlay hidden" id="modal-request-organizer" role="dialog" aria-modal="true" aria-labelledby="modal-request-organizer-title">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 class="modal-title" id="modal-request-organizer-title">Request Organizer Access</h2>
+      <button class="modal-close" id="btn-close-request-organizer" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-description">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
+      <label for="organizer-request-note" class="form-label">Note <span class="text-muted">(optional)</span></label>
+      <textarea id="organizer-request-note" class="form-input" rows="3" maxlength="500" placeholder="e.g. I am organizing FOSSASIA Summit 2027 and need to upload recordings..."></textarea>
+      <p class="form-hint" id="organizer-request-note-chars">0 / 500</p>
+      <p class="form-error hidden" id="organizer-request-error"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-cancel-request-organizer" type="button">Cancel</button>
+      <button class="btn btn-primary" id="btn-submit-request-organizer" type="button">Submit Request</button>
     </div>
   </div>
 </div>

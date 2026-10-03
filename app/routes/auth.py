@@ -15,6 +15,7 @@ from app.security import (
     create_access_token,
     create_session_token,
     decode_session_token,
+    decode_sso_token,
     hash_password,
     is_valid_email,
     verify_password,
@@ -372,3 +373,66 @@ async def api_auth_token(
         token_type="bearer",
         expires_in=settings.access_token_expire_seconds,
     )
+
+
+@router.post("/users/request-organizer", response_model=schemas.UserRead)
+def request_organizer_role(
+    payload: schemas.OrganizerRequestCreate,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Allow a standard user to request organizer role elevation."""
+    cookie_token = request.cookies.get("veditor_session")
+    if (
+        cookie_token and decode_sso_token(cookie_token) is not None
+    ) or request.headers.get("X-SSO-Token"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SSO sessions cannot request organizer access",
+        )
+
+    user = _get_authenticated_user_from_cookie(request, db)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    if user.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only standard users can request organizer access",
+        )
+    if user.organizer_requested:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An organizer access request is already pending",
+        )
+    from datetime import UTC, datetime
+
+    requested_at = datetime.now(UTC)
+    note_val = (payload.note or "").strip() or None
+
+    rows_updated = (
+        db.query(models.User)
+        .filter(
+            models.User.id == user.id,
+            models.User.organizer_requested.is_(False),
+        )
+        .update(
+            {
+                models.User.organizer_requested: True,
+                models.User.organizer_request_note: note_val,
+                models.User.organizer_requested_at: requested_at,
+            },
+            synchronize_session="fetch",
+        )
+    )
+    if not rows_updated:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An organizer access request is already pending",
+        )
+    db.commit()
+    db.refresh(user)
+    logger.info("User %s submitted organizer role request", user.email)
+    return user

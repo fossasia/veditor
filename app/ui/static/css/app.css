@@ -1382,3 +1382,98 @@ details[open] > summary.user-bubble-btn {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ---------------------------------------------------------------------------
+   Organizer Role Request Banner
+   --------------------------------------------------------------------------- */
+.role-request-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--v-status-active-bg, rgba(59, 130, 246, 0.1));
+  border: 1px solid var(--v-status-active-border, rgba(59, 130, 246, 0.25));
+  border-radius: var(--v-radius-md, 8px);
+  font-size: 0.875rem;
+  color: var(--v-status-active-text, #60a5fa);
+  flex-wrap: wrap;
+}
+
+.role-request-banner.role-request-pending {
+  background: var(--v-status-pending-bg, rgba(245, 158, 11, 0.1));
+  border-color: var(--v-status-pending-border, rgba(245, 158, 11, 0.25));
+  color: var(--v-status-pending-text, #f59e0b);
+}
+
+.role-request-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+.role-request-banner .btn { margin-left: auto; }
+
+/* ---------------------------------------------------------------------------
+   Request Organizer Modal
+   --------------------------------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-overlay.hidden { display: none; }
+
+.modal-box {
+  background: var(--v-bg-surface, var(--color-surface, #1e293b));
+  border: 1px solid var(--v-border-default, var(--color-border, #334155));
+  border-radius: var(--v-radius-lg, 12px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+  width: 100%;
+  max-width: 480px;
+  overflow: hidden;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  color: var(--v-text-muted, #94a3b8);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.25rem;
+}
+
+.modal-close:hover {
+  color: var(--v-text-primary, #f8fafc);
+}
+
+#modal-request-organizer .modal-description {
+  font-size: 0.875rem;
+  color: var(--v-text-muted);
+  margin-bottom: 1rem;
+}
+
+#organizer-request-note {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-hint {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  text-align: right;
+  margin-top: 0.25rem;
+}
+
+.form-error {
+  color: var(--v-status-danger-text, #ef4444);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.form-error.hidden { display: none; }

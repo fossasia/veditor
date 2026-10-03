@@ -147,4 +147,56 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
+
+  // ── Approve Organizer Request ──────────────────────────────────
+  document.querySelectorAll('.btn-approve-organizer').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const userId = btn.getAttribute('data-user-id');
+      btn.disabled = true;
+      btn.textContent = 'Approving…';
+
+      try {
+        const resp = await fetch(`/admin/users/${userId}/promote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ role: 'organizer' }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          showBanner(errData.detail || `Failed to approve (${resp.status})`, 'error');
+          btn.disabled = false;
+          btn.textContent = 'Approve';
+          return;
+        }
+
+        const updated = await resp.json();
+
+        // Update role badge
+        const roleBadge = document.getElementById(`badge-role-${userId}`);
+        if (roleBadge) {
+          roleBadge.className = `badge badge-role badge-role-${updated.role}`;
+          roleBadge.textContent = updated.role.charAt(0).toUpperCase() + updated.role.slice(1);
+        }
+
+        // Update role select
+        const roleSelect = document.getElementById(`role-select-${userId}`);
+        if (roleSelect) {
+          roleSelect.value = 'organizer';
+          roleSelect.setAttribute('data-current-role', 'organizer');
+        }
+
+        // Remove pending badge and approve button
+        const pendingBadge = document.getElementById(`pending-badge-${userId}`);
+        if (pendingBadge) pendingBadge.remove();
+        btn.remove();
+
+        showBanner(`User #${userId} promoted to organizer`, 'success');
+      } catch (err) {
+        showBanner(`Network error: ${err.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Approve';
+      }
+    });
+  });
 });

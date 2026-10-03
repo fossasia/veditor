@@ -182,3 +182,62 @@
   font-size: 0.82rem;
 }
 
+
+/* ---------------------------------------------------------------------------
+   Organizer Role Request Banner
+   --------------------------------------------------------------------------- */
+.role-request-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--v-status-active-bg);
+  border: 1px solid var(--v-status-active-border);
+  border-radius: var(--v-radius-md);
+  font-size: 0.875rem;
+  color: var(--v-status-active-text);
+  flex-wrap: wrap;
+}
+
+.role-request-banner.role-request-pending {
+  background: var(--v-status-pending-bg);
+  border-color: var(--v-status-pending-border);
+  color: var(--v-status-pending-text);
+}
+
+.role-request-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+.role-request-banner .btn { margin-left: auto; }
+
+/* ---------------------------------------------------------------------------
+   Request Organizer Modal
+   --------------------------------------------------------------------------- */
+.modal-overlay.hidden { display: none; }
+
+#modal-request-organizer .modal-description {
+  font-size: 0.875rem;
+  color: var(--v-text-muted);
+  margin-bottom: 1rem;
+}
+
+#organizer-request-note {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-hint {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  text-align: right;
+  margin-top: 0.25rem;
+}
+
+.form-error {
+  color: var(--v-status-danger-text);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.form-error.hidden { display: none; }

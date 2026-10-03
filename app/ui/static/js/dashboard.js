@@ -696,3 +696,73 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Organizer Role Request Flow
+// ---------------------------------------------------------------------------
+(function initOrganizerRequest() {
+  const btnRequest = document.getElementById('btn-request-organizer');
+  const modal      = document.getElementById('modal-request-organizer');
+  const btnClose   = document.getElementById('btn-close-request-organizer');
+  const btnCancel  = document.getElementById('btn-cancel-request-organizer');
+  const btnSubmit  = document.getElementById('btn-submit-request-organizer');
+  const noteInput  = document.getElementById('organizer-request-note');
+  const noteChars  = document.getElementById('organizer-request-note-chars');
+  const errorEl    = document.getElementById('organizer-request-error');
+  const banner     = document.getElementById('role-request-banner');
+
+  if (!btnRequest || !modal) return;
+
+  function openModal() {
+    if (noteInput) noteInput.value = '';
+    if (noteChars) noteChars.textContent = '0 / 500';
+    if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+    modal.classList.remove('hidden');
+    if (noteInput) noteInput.focus();
+  }
+
+  function closeModal() { modal.classList.add('hidden'); }
+
+  btnRequest.addEventListener('click', openModal);
+  if (btnClose) btnClose.addEventListener('click', closeModal);
+  if (btnCancel) btnCancel.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+  if (noteInput && noteChars) {
+    noteInput.addEventListener('input', () => {
+      noteChars.textContent = `${noteInput.value.length} / 500`;
+    });
+  }
+
+  if (btnSubmit) {
+    btnSubmit.addEventListener('click', async () => {
+      if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Submitting\u2026';
+      try {
+        const resp = await fetch('/users/request-organizer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: noteInput ? noteInput.value.trim() : '' }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          closeModal();
+          if (banner) {
+            banner.classList.add('role-request-pending');
+            banner.innerHTML = '<span class="role-request-icon">\uD83D\uDD50</span><span>Your request for organizer access has been submitted and is pending administrator review.</span>';
+          }
+        } else {
+          const msg = data.detail || 'Failed to submit request. Please try again.';
+          if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = 'Submit Request';
+        }
+      } catch (_err) {
+        if (errorEl) { errorEl.textContent = 'Network error. Please try again.'; errorEl.classList.remove('hidden'); }
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Submit Request';
+      }
+    });
+  }
+})();

@@ -1576,3 +1576,179 @@ def test_admin_users_html_skip_out_of_range_raises_404(client: TestClient, db_se
     assert res_search.status_code == 404
     assert "Page not found" in res_search.text
     assert "text/html" in res_search.headers.get("content-type", "")
+
+
+# ---------------------------------------------------------------------------
+# Organizer Role Request Flow Tests
+# ---------------------------------------------------------------------------
+
+
+def test_request_organizer_role_success(client: TestClient, db_session):
+    """Standard user can submit an organizer request."""
+    user = _create_test_user(db_session, "req_org_1@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(
+        "/users/request-organizer",
+        json={"note": "Organizing FOSSASIA Summit"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["organizer_requested"] is True
+    assert data["organizer_request_note"] == "Organizing FOSSASIA Summit"
+    assert data["organizer_requested_at"] is not None
+
+    db_session.refresh(user)
+    assert user.organizer_requested is True
+
+
+def test_request_organizer_role_idempotency_rejected(client: TestClient, db_session):
+    """Cannot submit a second organizer request when one is already pending."""
+    user = _create_test_user(db_session, "req_org_2@admin-test.com", role="user")
+    user.organizer_requested = True
+    db_session.commit()
+
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post("/users/request-organizer", json={})
+    assert res.status_code == 409
+    assert "already pending" in res.json()["detail"]
+
+
+def test_request_organizer_role_rejected_for_organizer(client: TestClient, db_session):
+    """Organizers cannot submit a request (they already have access)."""
+    user = _create_test_user(db_session, "req_org_3@admin-test.com", role="organizer")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post("/users/request-organizer", json={})
+    assert res.status_code == 400
+    assert "Only standard users" in res.json()["detail"]
+
+
+def test_request_organizer_role_unauthenticated(client: TestClient):
+    """Unauthenticated requests are rejected."""
+    client.cookies.clear()
+    res = client.post("/users/request-organizer", json={})
+    assert res.status_code == 401
+
+
+def test_request_organizer_role_sso_rejected(client: TestClient):
+    """SSO sessions are forbidden from requesting organizer access."""
+    from app.security import create_sso_token
+
+    sso_token = create_sso_token(
+        scope_type="event", scope_id=1, role="speaker", email="sso@example.com"
+    )
+    client.cookies.set("veditor_session", sso_token)
+
+    res = client.post("/users/request-organizer", json={"note": "SSO note"})
+    assert res.status_code == 403
+    assert "SSO sessions cannot request organizer access" in res.json()["detail"]
+
+    client.cookies.clear()
+    res_hdr = client.post(
+        "/users/request-organizer",
+        json={"note": "SSO note"},
+        headers={"X-SSO-Token": sso_token},
+    )
+    assert res_hdr.status_code == 403
+    assert "SSO sessions cannot request organizer access" in res_hdr.json()["detail"]
+
+
+def test_request_organizer_optional_note_empty_string(client: TestClient, db_session):
+    """Empty note is treated as None."""
+    user = _create_test_user(db_session, "req_org_4@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post("/users/request-organizer", json={"note": "   "})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["organizer_request_note"] is None
+
+
+def test_request_organizer_note_exceeding_max_length_rejected(
+    client: TestClient, db_session
+):
+    """Note exceeding 500 characters is rejected with 422 Unprocessable Entity."""
+    user = _create_test_user(db_session, "req_org_len@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post("/users/request-organizer", json={"note": "a" * 501})
+    assert res.status_code == 422
+
+
+def test_admin_approve_clears_pending_request(client: TestClient, db_session):
+    """Admin promoting a user to organizer clears the pending request flag."""
+    admin = _create_test_user(db_session, "admin_appv@admin-test.com", role="admin")
+    user = _create_test_user(db_session, "req_org_5@admin-test.com", role="user")
+    user.organizer_requested = True
+    user.organizer_request_note = "Please approve"
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(f"/admin/users/{user.id}/promote", json={"role": "organizer"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["role"] == "organizer"
+    assert data["organizer_requested"] is False
+    assert data["organizer_request_note"] is None
+
+    db_session.refresh(user)
+    assert user.organizer_requested is False
+
+
+def test_admin_demotion_does_not_clear_already_false_request(
+    client: TestClient, db_session
+):
+    """Demoting a user (no pending request) doesn't error."""
+    admin = _create_test_user(db_session, "admin_dem@admin-test.com", role="admin")
+    user = _create_test_user(db_session, "req_org_6@admin-test.com", role="organizer")
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    res = client.post(f"/admin/users/{user.id}/promote", json={"role": "user"})
+    assert res.status_code == 200
+    assert res.json()["role"] == "user"
+
+
+def test_admin_users_pending_requests_filter(client: TestClient, db_session):
+    """Admin can filter user list by pending organizer requests."""
+    admin = _create_test_user(db_session, "admin_filter@admin-test.com", role="admin")
+    user_pending = _create_test_user(
+        db_session, "pending_user@admin-test.com", role="user"
+    )
+    user_pending.organizer_requested = True
+    user_pending.organizer_request_note = "I am a summit organizer"
+    _create_test_user(db_session, "normal_user@admin-test.com", role="user")
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    # 1. Unfiltered list contains both users
+    res = client.get("/admin/users", headers={"Accept": "text/html"})
+    assert res.status_code == 200
+    assert "pending_user@admin-test.com" in res.text
+    assert "normal_user@admin-test.com" in res.text
+    assert "Pending Requests" in res.text
+
+    # 2. Filtered list with ?pending=true contains only pending_user
+    res_filtered = client.get(
+        "/admin/users?pending=true", headers={"Accept": "text/html"}
+    )
+    assert res_filtered.status_code == 200
+    assert "pending_user@admin-test.com" in res_filtered.text
+    assert "normal_user@admin-test.com" not in res_filtered.text
+    assert "I am a summit organizer" in res_filtered.text
+    assert "stat-card-link active" in res_filtered.text
+
+    # 3. Filtered list preserves pending parameter in search form and links
+    assert 'name="pending" value="true"' in res_filtered.text

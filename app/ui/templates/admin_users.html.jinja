@@ -32,6 +32,10 @@
       <span class="stat-label">Organizers</span>
       <span class="stat-value blue">{{ macro_stats.organizer_users }}</span>
     </div>
+    <a href="/admin/users{% if not pending_filter %}?pending=true{% endif %}" class="stat-card stat-card-link {% if pending_filter %}active{% endif %}" id="stat-card-pending" title="Filter pending organizer requests">
+      <span class="stat-label">Pending Requests</span>
+      <span class="stat-value {% if macro_stats.pending_requests > 0 %}amber{% endif %}">{{ macro_stats.pending_requests }}</span>
+    </a>
   </div>
 
   <!-- Notification Banner -->
@@ -46,14 +50,32 @@
       <div class="admin-header-title-group">
         <span class="table-title">Platform Users</span>
         {% if pagination and pagination.total_items > 0 %}
-          <span class="table-count table-count-spaced">Showing {{ pagination.start_item }}&ndash;{{ pagination.end_item }} of {{ pagination.total_items }} user{% if pagination.total_items != 1 %}s{% endif %}{% if search %} matching "{{ search }}"{% endif %}</span>
+          <span class="table-count table-count-spaced">Showing {{ pagination.start_item }}&ndash;{{ pagination.end_item }} of {{ pagination.total_items }} user{% if pagination.total_items != 1 %}s{% endif %}{% if search %} matching "{{ search }}"{% endif %}{% if pending_filter %} with pending requests{% endif %}</span>
         {% else %}
-          <span class="table-count table-count-spaced">0 users{% if search %} matching "{{ search }}"{% endif %}</span>
+          <span class="table-count table-count-spaced">0 users{% if search %} matching "{{ search }}"{% endif %}{% if pending_filter %} with pending requests{% endif %}</span>
         {% endif %}
+      </div>
+
+      <!-- Filter Tabs / Pills -->
+      <div class="admin-table-filters">
+        <div class="filter-pill-group">
+          <a href="/admin/users{% if search %}?search={{ search | urlencode }}{% endif %}" class="filter-pill {% if not pending_filter %}active{% endif %}" id="filter-all-users">
+            All Users
+          </a>
+          <a href="/admin/users?pending=true{% if search %}&search={{ search | urlencode }}{% endif %}" class="filter-pill {% if pending_filter %}active{% endif %}" id="filter-pending-users">
+            Pending Requests
+            {% if macro_stats.pending_requests > 0 %}
+              <span class="filter-pill-count">{{ macro_stats.pending_requests }}</span>
+            {% endif %}
+          </a>
+        </div>
       </div>
 
       <!-- Search by Email Filter -->
       <form method="get" action="/admin/users" class="admin-search-form" id="user-search-form">
+        {% if pending_filter %}
+          <input type="hidden" name="pending" value="true">
+        {% endif %}
         <div class="admin-search-input-wrap">
           <input
             type="search"
@@ -68,7 +90,7 @@
             Search
           </button>
           {% if search %}
-            <a href="/admin/users" class="btn btn-ghost btn-sm admin-search-clear" id="btn-user-search-clear">
+            <a href="/admin/users{% if pending_filter %}?pending=true{% endif %}" class="btn btn-ghost btn-sm admin-search-clear" id="btn-user-search-clear">
               Clear
             </a>
           {% endif %}
@@ -102,6 +124,11 @@
             <span class="badge badge-role badge-role-{{ item.role }}" id="badge-role-{{ item.id }}">
               {{ item.role | capitalize }}
             </span>
+            {% if item.organizer_requested and item.role == 'user' %}
+              <span class="badge badge-pending-request" id="pending-badge-{{ item.id }}"
+                title="{{ item.organizer_request_note or 'No note provided' }}"
+              >Pending Request</span>
+            {% endif %}
           </td>
           <td class="col-user-status">
             {% if item.is_active %}
@@ -135,6 +162,18 @@
                 <option value="speaker" selected disabled>Speaker</option>
                 {% endif %}
               </select>
+
+              {% if item.organizer_requested and item.role == 'user' %}
+                <button
+                  type="button"
+                  class="btn btn-primary btn-xs btn-approve-organizer"
+                  id="approve-organizer-btn-{{ item.id }}"
+                  data-user-id="{{ item.id }}"
+                  title="Approve organizer request"
+                >
+                  Approve
+                </button>
+              {% endif %}
 
               {% if item.is_active %}
                 <button
@@ -172,7 +211,7 @@
       </div>
       <div class="pagination-controls">
         <a
-          href="/admin/users?page={{ pagination.prev_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}"
+          href="/admin/users?page={{ pagination.prev_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}{% if pending_filter %}&pending=true{% endif %}"
           class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_prev %}disabled{% endif %}"
           {% if not pagination.has_prev %}aria-disabled="true" tabindex="-1"{% endif %}
         >
@@ -180,7 +219,7 @@
         </a>
         <span class="pagination-page-label">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
         <a
-          href="/admin/users?page={{ pagination.next_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}"
+          href="/admin/users?page={{ pagination.next_page }}&limit={{ pagination.limit }}{% if search %}&search={{ search | urlencode }}{% endif %}{% if pending_filter %}&pending=true{% endif %}"
           class="btn btn-ghost btn-sm pagination-btn {% if not pagination.has_next %}disabled{% endif %}"
           {% if not pagination.has_next %}aria-disabled="true" tabindex="-1"{% endif %}
         >
@@ -195,7 +234,11 @@
       {% if search %}
         <p class="events-empty-title">No users found matching "{{ search }}"</p>
         <p class="events-empty-desc">Check the spelling or try searching for another email.</p>
-        <a href="/admin/users" class="btn btn-ghost btn-sm events-empty-action">Clear search filter</a>
+        <a href="/admin/users{% if pending_filter %}?pending=true{% endif %}" class="btn btn-ghost btn-sm events-empty-action">Clear search filter</a>
+      {% elif pending_filter %}
+        <p class="events-empty-title">No pending organizer requests</p>
+        <p class="events-empty-desc">All user access requests have been reviewed.</p>
+        <a href="/admin/users" class="btn btn-ghost btn-sm events-empty-action">View all users</a>
       {% else %}
         <p class="events-empty-title">No users found</p>
         <p class="events-empty-desc">No platform users have registered yet.</p>
