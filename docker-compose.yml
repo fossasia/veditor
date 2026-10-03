@@ -1,85 +1,79 @@
+x-app-base: &app-base
+  build: .
+  restart: unless-stopped
+  environment: &app-env
+    POSTGRES_USER: veditor
+    POSTGRES_PASSWORD: password
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: veditor
+    REDIS_URL: redis://redis:6379/0
+    INGEST_ROOTS: '["/app/ingest"]'
+    ENCODER_THREADS: 1
+  volumes:
+    - veditor_data:/app/data
+    - veditor_ingest:/app/ingest
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
 services:
+  migrate:
+    <<: *app-base
+    restart: "no"
+    command: uv run alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
-    build: .
+    <<: *app-base
     ports:
       - "8000:8000"
-    environment:
-      - POSTGRES_USER=veditor
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=veditor
-      - REDIS_URL=redis://redis:6379/0
-      - 'INGEST_ROOTS=["/app/ingest"]'
-    volumes:
-      - veditor_data:/app/data
-      - veditor_ingest:/app/ingest
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   worker-light:
-    build: .
+    <<: *app-base
     command: uv run python scripts/run_worker.py light --concurrency 2 --with-scheduler --nice 10
-    environment:
-      - POSTGRES_USER=veditor
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=veditor
-      - REDIS_URL=redis://redis:6379/0
-      - 'INGEST_ROOTS=["/app/ingest"]'
-      - ENCODER_THREADS=1
-    volumes:
-      - veditor_data:/app/data
-      - veditor_ingest:/app/ingest
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   worker-heavy:
-    build: .
+    <<: *app-base
     command: uv run python scripts/run_worker.py heavy --concurrency 1 --nice 10
-    environment:
-      - POSTGRES_USER=veditor
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=veditor
-      - REDIS_URL=redis://redis:6379/0
-      - 'INGEST_ROOTS=["/app/ingest"]'
-      - ENCODER_THREADS=1
-    volumes:
-      - veditor_data:/app/data
-      - veditor_ingest:/app/ingest
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=veditor
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U veditor"]
+      test: ["CMD-SHELL", "pg_isready -U veditor -d veditor"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -89,4 +83,5 @@ services:
 volumes:
   veditor_data:
   veditor_ingest:
-
+  postgres_data:
+  redis_data:

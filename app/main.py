@@ -1,10 +1,14 @@
 from collections.abc import MutableMapping
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
+from app.db import get_db
 from app.queue import redis_conn
 from app.routes import admin, auth, client, events, jobs, ops, reviews, studio, talks
 from app.ui.templating import templates
@@ -129,6 +133,7 @@ def favicon():
 
 
 @app.get("/health")
-def health_check():
+def health_check(db: Annotated[Session, Depends(get_db)]):
     redis_conn.ping()
+    db.execute(text("SELECT 1"))
     return {"status": "ok"}
