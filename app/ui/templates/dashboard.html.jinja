@@ -51,6 +51,7 @@
 
 {% block content %}
 {% set can_manage = (user and user.role in ['organizer', 'admin'] and not user.is_sso) or (user is none) %}
+{% set can_attach_room = (user and user.role in ['organizer', 'admin']) or (user is none) %}
 <div class="page-body">
 
   {% if error %}
@@ -164,16 +165,18 @@
           <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
           Events
         </a>
-        {% endif %}
-        {% if can_manage %}
         <button class="btn btn-ghost btn-sm" id="btn-open-import">
           <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Import Schedule
         </button>
+        {% endif %}
+        {% if can_attach_room %}
         <button class="btn btn-ghost btn-sm" id="btn-open-room-attach">
           <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
           Attach Room Video
         </button>
+        {% endif %}
+        {% if can_manage %}
         <button class="btn btn-primary btn-sm" id="btn-open-quick-talk">
           <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Talk
@@ -320,7 +323,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if can_attach_room %}
 <!-- ── MODAL: Attach Room Video ─────────────────────────────────── -->
 <div id="modal-attach-room" class="dashboard-modal-backdrop">
   <div class="dashboard-modal-card modal-attach-card">
@@ -356,7 +361,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if can_manage %}
 <!-- ── MODAL: Quick Add Talk ────────────────────────────────────── -->
 <div id="modal-quick-talk" class="dashboard-modal-backdrop">
   <div class="dashboard-modal-card modal-quick-card">

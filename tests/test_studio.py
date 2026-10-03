@@ -3402,3 +3402,70 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         clip.unlink(missing_ok=True)
+
+
+def test_sso_organizer_management_controls_visible(client, db_session):
+    """Verify organizers arriving via SSO have full access to management buttons while speakers do not."""
+    import uuid
+
+    from app.security import create_sso_token
+
+    event = models.Event(name=f"SSO Org Event {uuid.uuid4().hex}")
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    from datetime import UTC, datetime, timedelta
+
+    now_utc = datetime.now(UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Keynote Session",
+        speaker_email="speaker.sso@example.com",
+        status="waiting_for_files",
+        room="Auditorium A",
+        start=now_utc,
+        end=now_utc + timedelta(minutes=30),
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # 1. Organizer via SSO
+    org_token = create_sso_token(
+        scope_type="event", scope_id=event.id, role="organizer"
+    )
+    client.cookies.set("veditor_session", org_token)
+
+    res_org_dash = client.get(f"/studio?event_id={event.id}")
+    assert res_org_dash.status_code == 200
+    assert 'id="btn-open-room-attach"' in res_org_dash.text
+    assert 'id="modal-attach-room"' in res_org_dash.text
+    assert 'id="btn-open-import"' not in res_org_dash.text
+    assert 'id="btn-open-quick-talk"' not in res_org_dash.text
+
+    res_org_studio = client.get(f"/studio/talks/{talk.id}")
+    assert res_org_studio.status_code == 200
+    assert 'id="btn-edit-talk-studio"' not in res_org_studio.text
+    assert 'id="modal-edit-talk-studio"' not in res_org_studio.text
+
+    # 2. Speaker via SSO
+    spk_token = create_sso_token(
+        scope_type="event",
+        scope_id=event.id,
+        role="speaker",
+        email="speaker.sso@example.com",
+    )
+    client.cookies.set("veditor_session", spk_token)
+
+    res_spk_dash = client.get(f"/studio?event_id={event.id}")
+    assert res_spk_dash.status_code == 200
+    assert 'id="btn-open-room-attach"' not in res_spk_dash.text
+    assert 'id="btn-open-import"' not in res_spk_dash.text
+    assert 'id="btn-open-quick-talk"' not in res_spk_dash.text
+    assert 'id="modal-attach-room"' not in res_spk_dash.text
+
+    res_spk_studio = client.get(f"/studio/talks/{talk.id}")
+    assert res_spk_studio.status_code == 200
+    assert 'id="btn-edit-talk-studio"' not in res_spk_studio.text
+    assert 'id="modal-edit-talk-studio"' not in res_spk_studio.text

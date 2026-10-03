@@ -648,8 +648,8 @@ def test_studio_dashboard_redirects_talk_scoped_sso():
 
 
 def test_studio_dashboard_hides_action_buttons_for_sso(mock_db):
-    """In rendered HTML, dashboard suppresses New Talk, Import, Attach, Events, and Delete actions for SSO."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    """In rendered HTML, dashboard permits management controls for SSO organizers while hiding global events links, and suppresses management controls for speakers."""
+    org_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
 
     app.dependency_overrides[get_db] = lambda: mock_db
     t = models.Talk(
@@ -666,29 +666,48 @@ def test_studio_dashboard_hides_action_buttons_for_sso(mock_db):
         id=1, name="Test Conf"
     )
 
-    response = client.get("/studio", cookies={"veditor_session": event_token})
+    # 1. Organizer arriving via SSO
+    response = client.get("/studio", cookies={"veditor_session": org_token})
     assert response.status_code == 200
     html = response.text
 
     # Topbar should display SSO role
     assert "SSO (Organizer)" in html
 
-    # Restricted action buttons should NOT be present
+    # Room recording controls SHOULD be present for SSO organizer
+    assert 'id="btn-open-room-attach"' in html
+    assert 'id="modal-attach-room"' in html
+
+    # Mutation controls unsupported for SSO should NOT be present
     assert 'id="btn-open-quick-talk"' not in html
     assert "+ New Talk" not in html
     assert 'id="btn-open-import"' not in html
-    assert 'id="btn-open-room-attach"' not in html
-    assert 'id="btn-events-link"' not in html
-    assert 'id="nav-events-link"' not in html
     assert 'id="modal-import"' not in html
-    assert 'id="modal-attach-room"' not in html
     assert 'id="modal-quick-talk"' not in html
-
-    # Bulk actions and talk delete controls should NOT be present
     assert 'id="bulk-actions-bar"' not in html
     assert 'id="select-all-talks"' not in html
     assert 'class="talk-checkbox"' not in html
     assert "btn-delete-talk" not in html
+
+    # Global cross-event links should NOT be present for scoped SSO session
+    assert 'id="btn-events-link"' not in html
+    assert 'id="nav-events-link"' not in html
+
+    # 2. Speaker arriving via SSO
+    spk_token = create_sso_token(
+        scope_type="event", scope_id=1, role="speaker", email="speaker@example.com"
+    )
+    response_spk = client.get("/studio", cookies={"veditor_session": spk_token})
+    assert response_spk.status_code == 200
+    html_spk = response_spk.text
+
+    assert 'id="btn-open-quick-talk"' not in html_spk
+    assert 'id="btn-open-import"' not in html_spk
+    assert 'id="btn-open-room-attach"' not in html_spk
+    assert 'id="modal-import"' not in html_spk
+    assert 'id="modal-attach-room"' not in html_spk
+    assert 'id="modal-quick-talk"' not in html_spk
+    assert 'id="bulk-actions-bar"' not in html_spk
 
 
 # ── 6. SSO Endpoint Restrictions (Events, Bulk Delete, Import) ─────────────────
