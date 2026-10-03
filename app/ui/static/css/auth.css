@@ -1,10 +1,110 @@
-/* ── Authentication Views Styles (login.html, signup.html) ───── */
+/* ── Authentication Views Styles (login.html, signup.html, verify_email_*.html) ───── */
 
 .btn-auth-submit {
   width: 100%;
   justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
+a.btn-auth-submit {
+  text-decoration: none;
 }
 
 .auth-error-hidden {
   display: none;
+}
+
+.auth-unverified-action {
+  margin-top: 8px;
+}
+
+.auth-resend-link {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: 600;
+}
+
+.auth-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--v-primary, #2563eb);
+  margin: 0 auto 16px auto;
+  border: 1px solid rgba(37, 99, 235, 0.25);
+}
+
+.auth-info-box {
+  padding: 20px 16px;
+  background: var(--v-bg-subtle, #172033);
+  border: 1px solid var(--v-border-subtle, #1e293b);
+  border-radius: var(--v-radius-md, 8px);
+  margin-bottom: 20px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--v-text-secondary, #94a3b8);
+  text-align: center;
+}
+
+.auth-info-text {
+  margin: 0 0 10px 0;
+  color: var(--v-text-secondary, #94a3b8);
+}
+
+.auth-email-badge {
+  display: inline-block;
+  background: var(--v-bg-surface, #101623);
+  border: 1px solid var(--v-border-strong, #334155);
+  border-radius: var(--v-radius-sm, 6px);
+  padding: 6px 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--v-text-primary, #f8fafc);
+  word-break: break-all;
+  margin: 0 0 12px 0;
+}
+
+.auth-info-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--v-text-muted, #64748b);
+}
+
+.auth-action-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Secondary Button styling */
+.btn-secondary {
+  background: var(--v-bg-subtle, #172033);
+  color: var(--v-text-primary, #f8fafc);
+  border: 1px solid var(--v-border-strong, #334155);
+}
+
+.btn-secondary:hover {
+  background: var(--v-border-subtle, #1e293b);
+  border-color: var(--v-text-muted, #64748b);
+  color: var(--v-text-primary, #f8fafc);
+  text-decoration: none;
+}
+
+/* Outline Button styling */
+.btn-outline {
+  background: transparent;
+  color: var(--v-text-secondary, #94a3b8);
+  border: 1px solid var(--v-border-subtle, #1e293b);
+}
+
+.btn-outline:hover {
+  background: var(--v-bg-subtle, #172033);
+  color: var(--v-text-primary, #f8fafc);
+  border-color: var(--v-border-strong, #334155);
+  text-decoration: none;
 }

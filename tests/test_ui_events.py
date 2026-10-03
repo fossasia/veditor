@@ -63,6 +63,7 @@ def create_user(db_session, email: str, role: str) -> models.User:
         hashed_password=hash_password("testpass123"),
         role=role,
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()

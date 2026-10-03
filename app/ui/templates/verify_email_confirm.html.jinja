@@ -1,0 +1,46 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Confirm Email Verification - VEditor{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Verify Email</span>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/auth.css">
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <div class="auth-header">
+      <div class="auth-icon-badge">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+          <polyline points="22 4 12 14.01 9 11.01"/>
+        </svg>
+      </div>
+      <h1 class="auth-title">Confirm Verification</h1>
+      <p class="auth-subtitle">Confirm your email address to activate your account</p>
+    </div>
+
+    <div class="auth-info-box">
+      <p class="auth-info-text">You are confirming email verification for:</p>
+      <div class="auth-email-badge">{{ email }}</div>
+      <p class="auth-info-hint">Click the button below to complete verification and sign in.</p>
+    </div>
+
+    <form method="post" action="/verify-email" class="auth-form">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="auth-action-row">
+        <button type="submit" class="btn btn-primary btn-lg btn-auth-submit">Verify & Sign In</button>
+        <a href="/login" class="btn btn-secondary btn-lg btn-auth-submit">Back to Sign In</a>
+      </div>
+    </form>
+
+    <div class="auth-footer">
+      <span>Need help? Contact your administrator.</span>
+    </div>
+  </div>
+</div>
+{% endblock %}

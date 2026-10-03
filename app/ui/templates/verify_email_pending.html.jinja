@@ -1,0 +1,53 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Verify Email - VEditor{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Verify Email</span>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/auth.css">
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <div class="auth-header">
+      <div class="auth-icon-badge">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect width="20" height="16" x="2" y="4" rx="2"/>
+          <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+        </svg>
+      </div>
+      <h1 class="auth-title">Verify your email</h1>
+      <p class="auth-subtitle">We sent a verification link to your inbox</p>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-warning" role="alert">
+        <span>{{ error }}</span>
+      </div>
+    {% endif %}
+
+    <div class="auth-info-box">
+      {% if email %}
+        <p class="auth-info-text">A verification email has been sent to:</p>
+        <div class="auth-email-badge">{{ email }}</div>
+      {% else %}
+        <p class="auth-info-text">A verification email has been sent to your email address.</p>
+      {% endif %}
+      <p class="auth-info-hint">Click the link in the email to activate your account and start using VEditor.</p>
+    </div>
+
+    <div class="auth-action-row">
+      <a href="/verify-email/resend?email={{ email | urlencode }}" class="btn btn-primary btn-lg btn-auth-submit">Resend Verification Email</a>
+      <a href="/login" class="btn btn-secondary btn-lg btn-auth-submit">Back to Sign In</a>
+    </div>
+
+    <div class="auth-footer">
+      <span>Need help? Check your spam folder or contact your administrator.</span>
+    </div>
+  </div>
+</div>
+{% endblock %}

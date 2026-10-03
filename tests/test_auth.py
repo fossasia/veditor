@@ -692,6 +692,7 @@ def test_login_routes_next_redirect_and_open_redirect_protection():
             hashed_password=hash_password("Pass1234!"),
             role="organizer",
             is_active=True,
+            is_verified=True,
         )
         db.add(user)
         db.commit()

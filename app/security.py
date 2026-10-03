@@ -195,6 +195,61 @@ def decode_access_token(token: str) -> dict | None:
         return None
 
 
+def create_email_verification_token(
+    user_id: int,
+    email: str,
+    expires_in_hours: int = 24,
+) -> str:
+    """
+    Generates a signed JWT for email verification carrying user_id and email.
+    """
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(user_id),
+        "user_id": user_id,
+        "email": email.strip().lower(),
+        "type": "email_verification",
+        "iat": now,
+        "exp": now + timedelta(hours=expires_in_hours),
+    }
+    return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
+
+
+def decode_email_verification_token(token: str) -> dict | None:
+    """
+    Decodes and validates an email verification token.
+    Returns the decoded payload dict if valid, or None if expired, tampered,
+    malformed, missing required claims, or not an email verification token.
+    """
+    if not token or not isinstance(token, str):
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            get_session_secret(),
+            algorithms=list(ALLOWED_JWT_ALGORITHMS),
+            options={"require": ["exp", "iat", "sub"]},
+        )
+        if payload.get("type") != "email_verification":
+            return None
+        user_id = payload.get("user_id")
+        email = payload.get("email")
+        sub = payload.get("sub")
+        if (
+            not isinstance(user_id, int)
+            or isinstance(user_id, bool)
+            or user_id <= 0
+            or not isinstance(email, str)
+            or not email.strip()
+            or not isinstance(sub, str)
+            or not sub.strip()
+        ):
+            return None
+        return payload
+    except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:
+        return None
+
+
 def is_valid_email(email: str) -> bool:
     """Validates an email address against RFC 5322 using the Python standard library."""
     if not email or not isinstance(email, str) or "@" not in email:

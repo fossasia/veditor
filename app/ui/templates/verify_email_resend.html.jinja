@@ -1,0 +1,51 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Resend Verification Email - VEditor{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Resend Verification</span>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/auth.css">
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <div class="auth-header">
+      <h1 class="auth-title">Resend Verification</h1>
+      <p class="auth-subtitle">Enter your email to receive a new activation link</p>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger" role="alert">
+        <span>{{ error }}</span>
+      </div>
+    {% endif %}
+
+    {% if message %}
+      <div class="alert alert-success" role="alert">
+        <span>{{ message }}</span>
+      </div>
+    {% endif %}
+
+    <form class="auth-form" method="post" action="/verify-email/resend">
+      <div class="form-group">
+        <label class="form-label" for="email">Email Address</label>
+        <input type="email" id="email" name="email" class="input-field" required autofocus maxlength="255" value="{{ email or '' }}" placeholder="name@example.com">
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg btn-auth-submit">Send Verification Link</button>
+    </form>
+
+    <div class="auth-action-row">
+      <a href="/login" class="btn btn-secondary btn-auth-submit">Back to Sign In</a>
+    </div>
+
+    <div class="auth-footer">
+      <span>Need an account? <a href="/signup">Sign up</a></span>
+    </div>
+  </div>
+</div>
+{% endblock %}

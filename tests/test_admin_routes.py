@@ -404,6 +404,7 @@ def test_deactivated_user_immediate_session_and_login_rejection(
         hashed_password=hash_password(user_password),
         role="user",
         is_active=True,
+        is_verified=True,
         created_at=datetime.now(UTC),
     )
     db_session.add(user)

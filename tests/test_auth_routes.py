@@ -76,6 +76,7 @@ def test_post_login_success(client: TestClient, db_session):
         hashed_password=hash_password("Secret12345!"),
         role="organizer",
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()
@@ -96,6 +97,7 @@ def test_post_login_case_insensitive_email(client: TestClient, db_session):
         hashed_password=hash_password("Secret12345!"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()
@@ -281,8 +283,8 @@ def test_post_signup_creates_user_role(client: TestClient, db_session):
         follow_redirects=False,
     )
     assert res.status_code == 303
-    assert res.headers["location"] == "/studio"
-    assert "veditor_session" in res.cookies
+    assert res.headers["location"].startswith("/verify-email/pending?email=")
+    assert "veditor_session" not in res.cookies
 
     user = (
         db_session.query(models.User)
@@ -291,6 +293,7 @@ def test_post_signup_creates_user_role(client: TestClient, db_session):
     )
     assert user is not None
     assert user.role == "user"
+    assert user.is_verified is False
     assert verify_password("userpassword123", user.hashed_password)
 
 
@@ -315,7 +318,8 @@ def test_post_signup_subsequent_user_becomes_user(client: TestClient, db_session
         follow_redirects=False,
     )
     assert res.status_code == 303
-    assert res.headers["location"] == "/studio"
+    assert res.headers["location"].startswith("/verify-email/pending?email=")
+    assert "veditor_session" not in res.cookies
 
     user = (
         db_session.query(models.User)
@@ -324,6 +328,7 @@ def test_post_signup_subsequent_user_becomes_user(client: TestClient, db_session
     )
     assert user is not None
     assert user.role == "user"
+    assert user.is_verified is False
 
 
 def test_logout_post_and_get(client: TestClient):
@@ -346,6 +351,7 @@ def test_api_auth_token_json_success(client: TestClient, db_session):
         hashed_password=hash_password("api_pass123"),
         role="organizer",
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()
@@ -380,6 +386,7 @@ def test_api_auth_token_form_success(client: TestClient, db_session):
         hashed_password=hash_password("form_pass123"),
         role="user",
         is_active=True,
+        is_verified=True,
     )
     db_session.add(user)
     db_session.commit()
@@ -494,7 +501,8 @@ def test_post_signup_always_defaults_to_user_role(client: TestClient, db_session
         follow_redirects=False,
     )
     assert res.status_code == 303
-    assert res.headers["location"] == "/studio"
+    assert res.headers["location"].startswith("/verify-email/pending?email=")
+    assert "veditor_session" not in res.cookies
 
     user = (
         db_session.query(models.User)
@@ -503,3 +511,4 @@ def test_post_signup_always_defaults_to_user_role(client: TestClient, db_session
     )
     assert user is not None
     assert user.role == "user"
+    assert user.is_verified is False

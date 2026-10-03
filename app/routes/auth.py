@@ -1,24 +1,30 @@
 import asyncio
 import logging
 import urllib.parse
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.config import settings
 from app.db import get_db
+from app.queue import light_queue, redis_conn
 from app.security import (
     create_access_token,
+    create_email_verification_token,
     create_session_token,
+    decode_email_verification_token,
     decode_session_token,
     hash_password,
     is_valid_email,
     verify_password,
 )
+from app.tasks import job_send_verification_email
 from app.ui.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -58,7 +64,14 @@ def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> s
         return default
 
     normalized_path = parsed.path.rstrip("/").lower()
-    if normalized_path in ("/login", "/logout", "/signup"):
+    if normalized_path in (
+        "/login",
+        "/logout",
+        "/signup",
+        "/verify-email",
+        "/verify-email/pending",
+        "/verify-email/resend",
+    ):
         return default
 
     return cleaned
@@ -140,6 +153,19 @@ def login_submit(
                 "error": "Invalid email or password.",
                 "email": clean_email,
                 "next": next or "",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not user.is_verified:
+        return templates.TemplateResponse(
+            request,
+            "login.html.jinja",
+            {
+                "error": "Please verify your email address before signing in.",
+                "email": clean_email,
+                "next": next or "",
+                "unverified": True,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -251,6 +277,7 @@ def signup_submit(
         hashed_password=hashed,
         role=user_role,
         is_active=True,
+        is_verified=False,
     )
     db.add(user)
     try:
@@ -268,21 +295,32 @@ def signup_submit(
         )
     db.refresh(user)
 
-    token = create_session_token(user.id, user.role)
-    response = RedirectResponse(url="/studio", status_code=status.HTTP_303_SEE_OTHER)
-    is_secure = (request.url.scheme == "https") or (
-        settings.environment.lower() in ("production", "prod")
+    verification_token = create_email_verification_token(
+        user_id=user.id,
+        email=user.email,
+        expires_in_hours=settings.email_verification_expire_hours,
     )
-    response.set_cookie(
-        key="veditor_session",
-        value=token,
-        max_age=settings.session_token_expire_hours * 3600,
-        httponly=True,
-        samesite="lax",
-        secure=is_secure,
-        path="/",
+    enqueue_error = False
+    try:
+        light_queue.enqueue(
+            job_send_verification_email,
+            user.id,
+            user.email,
+            verification_token,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to enqueue verification email for %s: %s", user.email, exc)
+        enqueue_error = True
+
+    encoded_email = urllib.parse.quote(clean_email)
+    redirect_url = f"/verify-email/pending?email={encoded_email}"
+    if enqueue_error:
+        redirect_url += "&error=delivery_failed"
+
+    return RedirectResponse(
+        url=redirect_url,
+        status_code=status.HTTP_303_SEE_OTHER,
     )
-    return response
 
 
 @router.post("/logout")
@@ -359,6 +397,12 @@ async def api_auth_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email address not verified",
+        )
+
     _sync_speaker_role(user, db, clean_email)
 
     token = create_access_token(
@@ -371,4 +415,276 @@ async def api_auth_token(
         access_token=token,
         token_type="bearer",
         expires_in=settings.access_token_expire_seconds,
+    )
+
+
+@router.get("/verify-email/pending", response_class=HTMLResponse)
+def verify_email_pending_page(
+    request: Request,
+    email: str = "",
+    error: str = "",
+):
+    error_msg = None
+    if error == "delivery_failed":
+        error_msg = (
+            "We were unable to deliver the verification email automatically. "
+            "Please click Resend Verification Email below to try again."
+        )
+    return templates.TemplateResponse(
+        request,
+        "verify_email_pending.html.jinja",
+        {"email": email.strip(), "error": error_msg},
+    )
+
+
+@router.get("/verify-email", response_class=HTMLResponse)
+def verify_email_confirm_page(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    token: str = "",
+):
+    """Render confirmation page for email verification without mutating account state.
+
+    Protects against automated email security scanners pre-fetching GET links
+    and prematurely consuming single-use verification tokens.
+    """
+    clean_token = token.strip()
+    if not clean_token:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {"error": "Verification link is missing or invalid.", "email": ""},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    payload = decode_email_verification_token(clean_token)
+    if not payload:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "Verification link is invalid or has expired.",
+                "email": "",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user_id = payload.get("user_id")
+    token_email = payload.get("email")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user or not user.is_active or user.email != token_email:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "User account not found, deactivated, or email has changed.",
+                "email": token_email or "",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if user.is_verified:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "This email address has already been verified. Please sign in.",
+                "email": user.email,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "verify_email_confirm.html.jinja",
+        {"email": user.email, "token": clean_token},
+    )
+
+
+@router.post("/verify-email")
+def verify_email_submit(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    token: Annotated[str, Form()] = "",
+):
+    """Perform atomic email verification and establish user session upon explicit user action."""
+    clean_token = token.strip() or request.query_params.get("token", "").strip()
+    if not clean_token:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {"error": "Verification link is missing or invalid.", "email": ""},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    payload = decode_email_verification_token(clean_token)
+    if not payload:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "Verification link is invalid or has expired.",
+                "email": "",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user_id = payload.get("user_id")
+    token_email = payload.get("email")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user or not user.is_active or user.email != token_email:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "User account not found, deactivated, or email has changed.",
+                "email": token_email or "",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    stmt = (
+        update(models.User)
+        .where(
+            models.User.id == user.id,
+            models.User.is_verified.is_(False),
+            models.User.is_active.is_(True),
+        )
+        .values(is_verified=True, verified_at=datetime.now(UTC))
+    )
+    result = db.execute(stmt)
+    db.commit()
+
+    if result.rowcount == 0:
+        return templates.TemplateResponse(
+            request,
+            "verify_email_error.html.jinja",
+            {
+                "error": "This email address has already been verified. Please sign in.",
+                "email": user.email,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    db.refresh(user)
+
+    _sync_speaker_role(user, db, user.email)
+
+    session_token = create_session_token(user.id, user.role)
+    response = RedirectResponse(
+        url="/studio?verified=1", status_code=status.HTTP_303_SEE_OTHER
+    )
+    is_secure = (request.url.scheme == "https") or settings.is_production
+    response.set_cookie(
+        key="veditor_session",
+        value=session_token,
+        max_age=settings.session_token_expire_hours * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=is_secure,
+        path="/",
+    )
+    return response
+
+
+@router.get("/verify-email/resend", response_class=HTMLResponse)
+def verify_email_resend_page(
+    request: Request,
+    email: str = "",
+):
+    return templates.TemplateResponse(
+        request,
+        "verify_email_resend.html.jinja",
+        {"error": None, "message": None, "email": email.strip()},
+    )
+
+
+@router.post("/verify-email/resend", response_class=HTMLResponse)
+def verify_email_resend_submit(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    email: Annotated[str, Form()] = "",
+):
+    clean_email = email.strip().lower()
+    if not clean_email or not is_valid_email(clean_email):
+        return templates.TemplateResponse(
+            request,
+            "verify_email_resend.html.jinja",
+            {
+                "error": "Please enter a valid email address.",
+                "message": None,
+                "email": clean_email,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limiting via Redis (60 seconds cooldown) - atomic NX
+    rate_key = f"rate:resend_verification:{clean_email}"
+    try:
+        acquired = redis_conn.set(rate_key, "1", ex=60, nx=True)
+        if not acquired:
+            ttl = redis_conn.ttl(rate_key)
+            wait_seconds = max(1, ttl) if ttl > 0 else 60
+            return templates.TemplateResponse(
+                request,
+                "verify_email_resend.html.jinja",
+                {
+                    "error": f"Please wait {wait_seconds} seconds before requesting another verification email.",
+                    "message": None,
+                    "email": clean_email,
+                },
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
+        return templates.TemplateResponse(
+            request,
+            "verify_email_resend.html.jinja",
+            {
+                "error": "The service is temporarily unavailable. Please try again later.",
+                "message": None,
+                "email": clean_email,
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    user = db.query(models.User).filter(models.User.email == clean_email).first()
+    if user and user.is_active and not user.is_verified:
+        token = create_email_verification_token(
+            user_id=user.id,
+            email=user.email,
+            expires_in_hours=settings.email_verification_expire_hours,
+        )
+        try:
+            light_queue.enqueue(
+                job_send_verification_email,
+                user.id,
+                user.email,
+                token,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to enqueue resend verification email for %s: %s",
+                user.email,
+                exc,
+            )
+            try:
+                redis_conn.delete(rate_key)
+            except Exception as del_exc:  # noqa: BLE001
+                logger.debug(
+                    "Failed to clear resend rate limit for %s: %s",
+                    clean_email,
+                    del_exc,
+                )
+
+    return templates.TemplateResponse(
+        request,
+        "verify_email_resend.html.jinja",
+        {
+            "error": None,
+            "message": "If an unverified account exists with that email address, a new verification link has been sent.",
+            "email": clean_email,
+        },
     )

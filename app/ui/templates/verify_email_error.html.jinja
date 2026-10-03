@@ -1,0 +1,39 @@
+{% extends "base.html.jinja" %}
+
+{% block title %}Verification Failed - VEditor{% endblock %}
+
+{% block breadcrumb %}
+  <span class="current">Verification Failed</span>
+{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/auth.css">
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <div class="auth-header">
+      <h1 class="auth-title">Verification Failed</h1>
+      <p class="auth-subtitle">We could not verify your email address</p>
+    </div>
+
+    <div class="alert alert-danger" role="alert">
+      <span>{{ error or "The verification link is invalid, expired, or has already been used." }}</span>
+    </div>
+
+    <div class="auth-info-box">
+      <p>Verification links are valid for 24 hours. You can request a fresh verification link to activate your account.</p>
+    </div>
+
+    <div class="auth-action-row">
+      <a href="/verify-email/resend?email={{ email | urlencode }}" class="btn btn-primary btn-auth-submit">Request New Link</a>
+      <a href="/login" class="btn btn-secondary btn-auth-submit">Back to Sign In</a>
+    </div>
+
+    <div class="auth-footer">
+      <span>Need an account? <a href="/signup">Sign up</a></span>
+    </div>
+  </div>
+</div>
+{% endblock %}

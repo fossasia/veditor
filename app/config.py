@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     session_token_expire_hours: int = 168
     access_token_expire_seconds: int = 3600
     sso_token_expire_seconds: int = 300
+    email_verification_expire_hours: int = 24
+
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_tls: bool = True
+    smtp_ssl: bool = False
+    smtp_from: str = "VEditor <noreply@veditor.org>"
+    smtp_timeout_seconds: int = 15
 
     @field_validator("jwt_algorithm", mode="after")
     @classmethod
@@ -95,6 +105,7 @@ class Settings(BaseSettings):
         "session_token_expire_hours",
         "access_token_expire_seconds",
         "sso_token_expire_seconds",
+        "email_verification_expire_hours",
         mode="after",
     )
     @classmethod
@@ -124,6 +135,10 @@ class Settings(BaseSettings):
             if not r.is_absolute():
                 raise ValueError(f"ingest_roots entries must be absolute paths: {r}")
         return [r.resolve() for r in roots]
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() in ("production", "prod")
 
     @property
     def database_url(self) -> str:
@@ -223,6 +238,7 @@ EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
         "data_dir",
         "ingest_roots",
         "storage_backend",
+        "smtp_password",
     }
 )
 

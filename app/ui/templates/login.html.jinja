@@ -21,6 +21,11 @@
     {% if error %}
       <div class="alert alert-danger" role="alert">
         <span>{{ error }}</span>
+        {% if unverified %}
+          <div class="auth-unverified-action">
+            <a href="/verify-email/resend?email={{ email | urlencode }}" class="auth-resend-link">Resend verification email</a>
+          </div>
+        {% endif %}
       </div>
     {% endif %}
 
