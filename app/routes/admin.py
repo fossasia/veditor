@@ -2,7 +2,7 @@ import json
 import math
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -25,7 +25,7 @@ from app.config import (
     settings,
 )
 from app.db import get_db
-from app.queue import redis_conn
+from app.queue import redis_conn, relocate_waiting_talk_job
 from app.storage import StorageBackend, get_storage_backend
 from app.ui.templating import templates
 
@@ -760,3 +760,230 @@ def admin_event_detail(
             "progress_pct": progress_pct,
         },
     )
+
+
+STAGE_PROGRESSION = {
+    "waiting_for_files": ["detect", "cut", "preview", "transcode", "publish"],
+    "detecting": ["cut", "preview", "transcode", "publish"],
+    "pending_approval": ["cut", "preview", "transcode", "publish"],
+    "pending_bounds": ["cut", "preview", "transcode", "publish"],
+    "pending_intro_outro": ["assemble", "preview", "transcode", "publish"],
+    "cutting": ["preview", "transcode", "publish"],
+    "generating_previews": ["preview", "transcode", "publish"],
+    "preview": ["transcode", "publish"],
+    "assembling": ["transcode", "publish"],
+    "transcoding": ["publish"],
+    "uploading": ["done"],
+    "done": [],
+    "broken": [],
+    "rejected": [],
+    "needs_work": ["cut", "preview"],
+}
+
+
+def _build_talk_queue_item(talk: models.Talk) -> dict[str, Any]:
+    running_job = (
+        next((j for j in talk.jobs if j.status == "running"), None)
+        if talk.jobs
+        else None
+    )
+
+    if running_job:
+        now_playing = {
+            "id": running_job.id,
+            "kind": running_job.kind,
+            "status": "running",
+            "progress_pct": running_job.progress_pct or 0.0,
+            "elapsed_time": running_job.elapsed_time,
+            "estimated_remaining": running_job.estimated_remaining,
+        }
+    else:
+        stage_map = {
+            "detecting": "detect",
+            "cutting": "cut",
+            "generating_previews": "preview",
+            "assembling": "assemble",
+            "transcoding": "transcode",
+            "uploading": "publish",
+        }
+        now_playing = {
+            "id": None,
+            "kind": stage_map.get(talk.status, talk.status),
+            "status": "queued",
+            "progress_pct": 0.0,
+            "elapsed_time": None,
+            "estimated_remaining": None,
+        }
+
+    return {
+        "id": talk.id,
+        "title": talk.title,
+        "event_id": talk.event_id,
+        "event_name": talk.event.name if talk.event else "Unknown Event",
+        "room": talk.room,
+        "speaker_email": talk.speaker_email,
+        "status": talk.status,
+        "priority_rank": talk.priority_rank,
+        "now_playing": now_playing,
+        "upcoming_stages": STAGE_PROGRESSION.get(talk.status, []),
+    }
+
+
+@router.get("/queue", response_class=HTMLResponse)
+def admin_queue_page(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Render the admin priority queue page."""
+    return templates.TemplateResponse(
+        request,
+        "admin_queue.html.jinja",
+        {},
+    )
+
+
+@router.get("/api/queue")
+def get_admin_queue_data(
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Return active talks categorized into light, heavy, and priority queues."""
+    active_talks = (
+        db.query(models.Talk)
+        .options(selectinload(models.Talk.event), selectinload(models.Talk.jobs))
+        .filter(
+            (models.Talk.status.in_(PROCESSING_STATUSES))
+            | (models.Talk.priority_rank.isnot(None))
+        )
+        .all()
+    )
+
+    light_items = []
+    heavy_items = []
+    priority_items = []
+
+    for talk in active_talks:
+        if talk.status in ("done", "broken", "rejected") and talk.priority_rank is None:
+            continue
+
+        item = _build_talk_queue_item(talk)
+        if talk.priority_rank is not None:
+            priority_items.append(item)
+        elif talk.status == "transcoding":
+            heavy_items.append(item)
+        else:
+            light_items.append(item)
+
+    priority_items.sort(key=lambda t: (t["priority_rank"] or 999999, t["id"]))
+    light_items.sort(key=lambda t: t["id"])
+    heavy_items.sort(key=lambda t: t["id"])
+
+    return {
+        "light": light_items,
+        "heavy": heavy_items,
+        "priority": priority_items,
+    }
+
+
+@router.post("/api/queue/talks/{talk_id}/prioritize")
+def prioritize_talk(
+    talk_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    payload: schemas.TalkPrioritizeRequest | None = None,
+):
+    """Move a talk to the priority lane and adjust ranks."""
+    talk = db.get(models.Talk, talk_id)
+    if not talk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
+        )
+    if talk.status not in PROCESSING_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot prioritize talk in '{talk.status}' status (must be actively processing).",
+        )
+
+    target_rank = (
+        payload.target_rank if payload and payload.target_rank is not None else None
+    )
+    existing_priorities = (
+        db.query(models.Talk)
+        .filter(models.Talk.priority_rank.isnot(None), models.Talk.id != talk_id)
+        .order_by(models.Talk.priority_rank.asc())
+        .all()
+    )
+
+    if target_rank is None or target_rank > len(existing_priorities) + 1:
+        target_rank = len(existing_priorities) + 1
+
+    ordered = list(existing_priorities)
+    ordered.insert(max(0, target_rank - 1), talk)
+    for idx, t in enumerate(ordered, start=1):
+        t.priority_rank = idx
+
+    db.commit()
+    db.refresh(talk)
+
+    relocate_waiting_talk_job(talk.id, to_priority=True)
+
+    return {"status": "ok", "talk_id": talk.id, "priority_rank": talk.priority_rank}
+
+
+@router.post("/api/queue/talks/{talk_id}/deprioritize")
+def deprioritize_talk(
+    talk_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Remove a talk from the priority lane and return its waiting jobs to regular queues."""
+    talk = db.get(models.Talk, talk_id)
+    if not talk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
+        )
+
+    talk.priority_rank = None
+    remaining = (
+        db.query(models.Talk)
+        .filter(models.Talk.priority_rank.isnot(None), models.Talk.id != talk_id)
+        .order_by(models.Talk.priority_rank.asc())
+        .all()
+    )
+    for idx, t in enumerate(remaining, start=1):
+        t.priority_rank = idx
+
+    db.commit()
+    db.refresh(talk)
+
+    relocate_waiting_talk_job(talk.id, to_priority=False)
+
+    return {"status": "ok", "talk_id": talk.id, "priority_rank": None}
+
+
+@router.put("/api/queue/reorder")
+def reorder_priority_queue(
+    payload: schemas.QueueReorderRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Atomically update priority order for prioritized talks."""
+    talk_ids = payload.ordered_talk_ids
+    talks = (
+        db.query(models.Talk)
+        .filter(
+            models.Talk.id.in_(talk_ids),
+            models.Talk.status.in_(PROCESSING_STATUSES),
+        )
+        .all()
+    )
+    talk_map = {t.id: t for t in talks}
+
+    rank = 1
+    for tid in talk_ids:
+        if tid in talk_map:
+            t = talk_map[tid]
+            was_unprioritized = t.priority_rank is None
+            t.priority_rank = rank
+            rank += 1
+            if was_unprioritized:
+                relocate_waiting_talk_job(t.id, to_priority=True)
+
+    db.commit()
+    return {"status": "ok", "ordered_talk_ids": talk_ids}

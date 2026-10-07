@@ -54,6 +54,17 @@
       </svg>
       Users
     </a>
+    <a href="/admin/queue" class="nav-item {% if request.url.path.startswith('/admin/queue') %}active{% endif %}" id="nav-queue-link">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <line x1="8" y1="6" x2="21" y2="6"/>
+        <line x1="8" y1="12" x2="21" y2="12"/>
+        <line x1="8" y1="18" x2="21" y2="18"/>
+        <circle cx="4" cy="6" r="1.5" fill="currentColor"/>
+        <circle cx="4" cy="12" r="1.5" fill="currentColor"/>
+        <circle cx="4" cy="18" r="1.5" fill="currentColor"/>
+      </svg>
+      Queue
+    </a>
     <a href="/studio" class="nav-item push-bottom danger">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>

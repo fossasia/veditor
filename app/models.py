@@ -200,6 +200,12 @@ class Talk(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    priority_rank: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        index=True,
+    )
 
     event: Mapped[Event] = relationship(back_populates="talks")
     jobs: Mapped[list[Job]] = relationship(

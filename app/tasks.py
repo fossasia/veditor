@@ -44,7 +44,12 @@ from app.pipeline.transcode import (
     transcode,
 )
 from app.pipeline.waveform import extract_waveform_peaks
-from app.queue import heavy_queue, light_queue
+from app.queue import (
+    heavy_queue,
+    light_queue,
+    priority_heavy_queue,
+    priority_light_queue,
+)
 from app.retention import (
     enqueue_retention_sweep,  # noqa: F401
     register_periodic_retention_sweep,  # noqa: F401
@@ -199,14 +204,24 @@ def job_ingest(talk_id: int, staged_path: str, raw_key: str | None = None) -> No
 
             job.status = "done"
             job.updated_at = datetime.now(UTC)
+            is_priority = talk.priority_rank is not None
             db.commit()
 
-        light_queue.enqueue(
-            job_detect,
-            talk_id,
-            raw_key,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
-        )
+        if is_priority:
+            priority_light_queue.enqueue(
+                job_detect,
+                talk_id,
+                raw_key,
+                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                at_front=True,
+            )
+        else:
+            light_queue.enqueue(
+                job_detect,
+                talk_id,
+                raw_key,
+                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            )
     except Exception as exc:
         if claimed:
             with SessionLocal() as db:
@@ -369,16 +384,27 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             advance(talk, "generating_previews")
             job.status = "done"
             job.updated_at = datetime.now(UTC)
+            is_priority = talk.priority_rank is not None
             db.commit()
 
         preview_key = f"{talk_id}/preview/preview.mp4"
-        light_queue.enqueue(
-            job_preview,
-            talk_id,
-            cut_key,
-            preview_key,
-            job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
-        )
+        if is_priority:
+            priority_light_queue.enqueue(
+                job_preview,
+                talk_id,
+                cut_key,
+                preview_key,
+                job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
+                at_front=True,
+            )
+        else:
+            light_queue.enqueue(
+                job_preview,
+                talk_id,
+                cut_key,
+                preview_key,
+                job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
+            )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -391,6 +417,10 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         if not talk or talk.status not in ("assembling", "generating_previews"):
             return
 
+        is_priority = talk.priority_rank is not None
+        target_q = priority_light_queue if is_priority else light_queue
+        extra_kwargs = {"at_front": True} if is_priority else {}
+
         # 1. Check if generated intro is required and not yet completed
         intro_needed = talk.include_intro and talk.intro_source == "generated"
         intro_done = (
@@ -400,12 +430,13 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             is not None
         )
         if intro_needed and not intro_done:
-            light_queue.enqueue(
+            target_q.enqueue(
                 job_intro,
                 talk_id,
                 cut_key,
                 f"{talk_id}/intro/intro.mp4",
                 job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+                **extra_kwargs,
             )
             return
 
@@ -418,12 +449,13 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             is not None
         )
         if outro_needed and not outro_done:
-            light_queue.enqueue(
+            target_q.enqueue(
                 job_outro,
                 talk_id,
                 cut_key,
                 f"{talk_id}/outro/outro.mp4",
                 job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+                **extra_kwargs,
             )
             return
 
@@ -431,7 +463,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         intro_key = f"{talk_id}/intro/intro.mp4" if talk.include_intro else None
         outro_key = f"{talk_id}/outro/outro.mp4" if talk.include_outro else None
         concat_key = f"{talk_id}/assemble/assemble.mp4"
-        light_queue.enqueue(
+        target_q.enqueue(
             job_concat,
             talk_id,
             cut_key,
@@ -439,6 +471,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             outro_key,
             concat_key,
             job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+            **extra_kwargs,
         )
 
 
@@ -692,16 +725,27 @@ def job_concat(
                 return
             job.status = "done"
             job.updated_at = datetime.now(UTC)
+            is_priority = talk.priority_rank is not None
             db.commit()
 
         loud_key = f"{talk_id}/assemble/assemble_loud.mp4"
-        light_queue.enqueue(
-            job_loudness,
-            talk_id,
-            concat_key,
-            loud_key,
-            job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
-        )
+        if is_priority:
+            priority_light_queue.enqueue(
+                job_loudness,
+                talk_id,
+                concat_key,
+                loud_key,
+                job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+                at_front=True,
+            )
+        else:
+            light_queue.enqueue(
+                job_loudness,
+                talk_id,
+                concat_key,
+                loud_key,
+                job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+            )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -922,16 +966,27 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             advance(talk, "transcoding")
             job.status = "done"
             job.updated_at = datetime.now(UTC)
+            is_priority = talk.priority_rank is not None
             db.commit()
 
         final_key = f"{talk_id}/final/final.mp4"
-        heavy_queue.enqueue(
-            job_transcode,
-            talk_id,
-            loud_key,
-            final_key,
-            job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
-        )
+        if is_priority:
+            priority_heavy_queue.enqueue(
+                job_transcode,
+                talk_id,
+                loud_key,
+                final_key,
+                job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+                at_front=True,
+            )
+        else:
+            heavy_queue.enqueue(
+                job_transcode,
+                talk_id,
+                loud_key,
+                final_key,
+                job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+            )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -1053,16 +1108,26 @@ def job_transcode(
             job.progress_pct = 100.0
             job.updated_at = datetime.now(UTC)
             custom_paths = (talk.custom_intro_path, talk.custom_outro_path)
+            is_priority = talk.priority_rank is not None
             db.commit()
 
         cleanup_bumpers(storage, talk_id, custom_paths)
 
-        light_queue.enqueue(
-            job_publish,
-            talk_id,
-            final_key,
-            job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
-        )
+        if is_priority:
+            priority_light_queue.enqueue(
+                job_publish,
+                talk_id,
+                final_key,
+                job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
+                at_front=True,
+            )
+        else:
+            light_queue.enqueue(
+                job_publish,
+                talk_id,
+                final_key,
+                job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
+            )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise

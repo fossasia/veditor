@@ -153,6 +153,7 @@ class TalkRead(TalkBase):
     custom_outro_path: str | None = None
     updated_at: datetime | None = None
     final_cleaned_at: datetime | None = None
+    priority_rank: int | None = None
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator("include_intro", "include_outro", mode="before")
@@ -492,3 +493,11 @@ class SystemSettingRead(BaseModel):
     step: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TalkPrioritizeRequest(BaseModel):
+    target_rank: int | None = None
+
+
+class QueueReorderRequest(BaseModel):
+    ordered_talk_ids: list[int]

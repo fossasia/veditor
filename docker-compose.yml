@@ -22,7 +22,7 @@ services:
 
   worker-light:
     build: .
-    command: uv run python scripts/run_worker.py light --concurrency 1 --with-scheduler --nice 10
+    command: uv run python scripts/run_worker.py priority_light light --concurrency 1 --with-scheduler --nice 10
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
@@ -43,7 +43,7 @@ services:
 
   worker-heavy:
     build: .
-    command: uv run python scripts/run_worker.py heavy --concurrency 1 --nice 15
+    command: uv run python scripts/run_worker.py priority_heavy heavy --concurrency 1 --nice 15
     environment:
       - POSTGRES_USER=veditor
       - POSTGRES_PASSWORD=password
