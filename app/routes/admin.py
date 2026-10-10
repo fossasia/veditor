@@ -177,9 +177,16 @@ def list_users(
     search: str | None = Query(None),
     q: str | None = Query(None),
     email: str | None = Query(None),
+    pending: bool | None = Query(None),
 ):
     search_term = (search or q or email or "").strip()
     query = db.query(models.User)
+    pending_filter = pending is True or request.query_params.get("pending") in (
+        "true",
+        "1",
+    )
+    if pending_filter:
+        query = query.filter(models.User.organizer_requested.is_(True))
     if search_term:
         escaped_search = (
             search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -231,6 +238,9 @@ def list_users(
             func.count(case((models.User.role == "organizer", 1))).label(
                 "organizer_users"
             ),
+            func.count(case((models.User.organizer_requested.is_(True), 1))).label(
+                "pending_requests"
+            ),
         ).first()
 
         macro_stats = {
@@ -239,6 +249,7 @@ def list_users(
             "inactive_users": 0,
             "admin_users": 0,
             "organizer_users": 0,
+            "pending_requests": 0,
             **(
                 {k: v or 0 for k, v in macro_row._asdict().items()} if macro_row else {}
             ),
@@ -266,6 +277,7 @@ def list_users(
                 "macro_stats": macro_stats,
                 "pagination": pagination,
                 "search": search_term,
+                "pending_filter": pending_filter,
             },
         )
 
@@ -279,13 +291,16 @@ def promote_user(
     payload: schemas.UserPromoteRequest,
     db: Annotated[Session, Depends(get_db)],
 ):
-    target = db.query(models.User).filter(models.User.id == id).first()
+    target = (
+        db.query(models.User).filter(models.User.id == id).with_for_update().first()
+    )
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
 
+    db.refresh(target)
     if target.role == "admin" and target.is_active and payload.role != "admin":
         admin_ids = lock_active_admins(db)
         db.refresh(target)
@@ -296,6 +311,9 @@ def promote_user(
             )
 
     target.role = payload.role
+    if payload.role == "organizer" and target.organizer_requested:
+        target.organizer_requested = False
+        target.organizer_request_note = None
     db.commit()
     db.refresh(target)
     return target

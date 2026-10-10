@@ -640,3 +640,132 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Organizer Role Request Flow
+// ---------------------------------------------------------------------------
+(function initOrganizerRequest() {
+  const btnRequest = document.getElementById('btn-request-organizer');
+  const modal      = document.getElementById('modal-request-organizer');
+  const btnClose   = document.getElementById('btn-close-request-organizer');
+  const btnCancel  = document.getElementById('btn-cancel-request-organizer');
+  const btnSubmit  = document.getElementById('btn-submit-request-organizer');
+  const noteInput  = document.getElementById('organizer-request-note');
+  const noteChars  = document.getElementById('organizer-request-note-chars');
+  const errorEl    = document.getElementById('organizer-request-error');
+  const banner     = document.getElementById('role-request-banner');
+
+  if (!btnRequest || !modal) return;
+
+  function openModal() {
+    if (noteInput) noteInput.value = '';
+    if (noteChars) noteChars.textContent = '0 / 500';
+    if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+    modal.classList.remove('hidden');
+    if (noteInput) noteInput.focus();
+  }
+
+  function closeModal() {
+    modal.classList.add('hidden');
+    if (btnRequest) btnRequest.focus();
+  }
+
+  btnRequest.addEventListener('click', openModal);
+  if (btnClose) btnClose.addEventListener('click', closeModal);
+  if (btnCancel) btnCancel.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+  modal.addEventListener('keydown', (e) => {
+    if (modal.classList.contains('hidden')) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeModal();
+      return;
+    }
+
+    if (e.key === 'Tab') {
+      const focusable = modal.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      const focusableEls = Array.from(focusable).filter(
+        (el) => !el.disabled && el.offsetParent !== null
+      );
+      if (!focusableEls.length) return;
+
+      const firstEl = focusableEls[0];
+      const lastEl = focusableEls[focusableEls.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === firstEl) {
+          e.preventDefault();
+          lastEl.focus();
+        }
+      } else {
+        if (document.activeElement === lastEl) {
+          e.preventDefault();
+          firstEl.focus();
+        }
+      }
+    }
+  });
+
+  if (noteInput && noteChars) {
+    noteInput.addEventListener('input', () => {
+      noteChars.textContent = `${noteInput.value.length} / 500`;
+    });
+  }
+
+  if (btnSubmit) {
+    btnSubmit.addEventListener('click', async () => {
+      if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Submitting\u2026';
+      try {
+        const resp = await fetch('/users/request-organizer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: noteInput ? noteInput.value.trim() : '' }),
+        });
+        let data = {};
+        try {
+          data = await resp.json();
+        } catch (_) {
+          data = {};
+        }
+        if (resp.ok) {
+          closeModal();
+          if (banner) {
+            banner.classList.add('role-request-pending');
+            banner.innerHTML = `
+              <div class="role-request-icon-wrap" aria-hidden="true">
+                <svg class="role-request-hero-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+              </div>
+              <div class="role-request-body">
+                <div class="role-request-title-row">
+                  <h3 class="role-request-title">Organizer Request Pending Review</h3>
+                  <span class="role-request-badge">Pending</span>
+                </div>
+                <p class="role-request-description">Your request for organizer access has been submitted and is pending administrator review.</p>
+              </div>
+            `;
+          }
+        } else {
+          const msg = (typeof data.detail === 'string' && data.detail.trim())
+            ? data.detail
+            : 'Failed to submit request. Please try again.';
+          if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
+          btnSubmit.disabled = false;
+          btnSubmit.textContent = 'Submit Request';
+        }
+      } catch (_err) {
+        if (errorEl) { errorEl.textContent = 'Network error. Please try again.'; errorEl.classList.remove('hidden'); }
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Submit Request';
+      }
+    });
+  }
+})();

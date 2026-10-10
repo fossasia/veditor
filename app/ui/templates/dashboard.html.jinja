@@ -60,6 +60,67 @@
     </div>
   {% endif %}
 
+  {% if user and user.role == 'user' and not user.is_sso %}
+    {% if user.organizer_requested %}
+      <div class="role-request-banner role-request-pending" id="role-request-banner">
+        <div class="role-request-icon-wrap" aria-hidden="true">
+          <svg class="role-request-hero-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </div>
+        <div class="role-request-body">
+          <div class="role-request-title-row">
+            <h3 class="role-request-title">Organizer Request Pending Review</h3>
+            <span class="role-request-badge">Pending</span>
+          </div>
+          <p class="role-request-description">Your request for organizer access has been submitted and is pending administrator review.</p>
+        </div>
+      </div>
+    {% else %}
+      <div class="role-request-banner" id="role-request-banner">
+        <div class="role-request-icon-wrap" aria-hidden="true">
+          <svg class="role-request-hero-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+            <path d="M2 17l10 5 10-5"></path>
+            <path d="M2 12l10 5 10-5"></path>
+          </svg>
+        </div>
+        <div class="role-request-body">
+          <h3 class="role-request-title">Organizer Privileges Required</h3>
+          <p class="role-request-description">You are signed in as a standard user. You need organizer privileges to register talks and ingest recordings.</p>
+        </div>
+        <div class="role-request-actions">
+          <button class="btn btn-primary btn-request-hero" id="btn-request-organizer" type="button">
+            <span>Request Organizer Role</span>
+            <svg class="btn-arrow-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+          </button>
+        </div>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <!-- Request Organizer Modal -->
+  <div class="modal-overlay hidden" id="modal-request-organizer" role="dialog" aria-modal="true" aria-labelledby="modal-request-organizer-title">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modal-request-organizer-title">Request Organizer Access</h2>
+        <button class="modal-close" id="btn-close-request-organizer" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
+        <label for="organizer-request-note" class="form-label">Note <span class="text-muted">(optional)</span></label>
+        <textarea id="organizer-request-note" class="form-input" rows="3" maxlength="500" placeholder="e.g. I am organizing FOSSASIA Summit 2027 and need to upload recordings..."></textarea>
+        <p class="form-hint" id="organizer-request-note-chars">0 / 500</p>
+        <p class="form-error hidden" id="organizer-request-error"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-request-organizer" type="button">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-request-organizer" type="button">Submit Request</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Stats Summary Row -->
   <div class="stats-grid">
     <div class="stat-card">

@@ -3554,3 +3554,102 @@ def test_sso_organizer_management_controls_visible(client, db_session):
     assert res_spk_studio.status_code == 200
     assert 'id="btn-edit-talk-studio"' not in res_spk_studio.text
     assert 'id="modal-edit-talk-studio"' not in res_spk_studio.text
+
+
+def test_talk_studio_organizer_request_prompt(client: TestClient, db_session):
+    """Standard user sees organizer request banner and modal in Studio; SSO and organizer do not."""
+    user = models.User(
+        email=f"std_user_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="user",
+        organizer_requested=False,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=user.id)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    now = datetime.now(tz=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Studio Role Request Talk",
+        room="Room B",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="preview",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+
+    # 1. Standard user without pending request sees request banner & modal
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+    res = client.get(f"/studio/talks/{talk.id}")
+    assert res.status_code == 200
+    assert "btn-request-organizer" in res.text
+    assert "modal-request-organizer" in res.text
+    assert "Request Organizer Role" in res.text
+    assert "Organizer Privileges Required" in res.text
+
+    # 2. Standard user with pending request sees pending banner
+    user.organizer_requested = True
+    db_session.commit()
+    res_pending = client.get(f"/studio/talks/{talk.id}")
+    assert res_pending.status_code == 200
+    assert "role-request-pending" in res_pending.text
+    assert "pending administrator review" in res_pending.text
+    assert "Organizer Request Pending Review" in res_pending.text
+    assert "btn-request-organizer" not in res_pending.text
+
+    # 3. Organizer user does not see organizer request prompt
+    org = models.User(
+        email=f"org_user_{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+
+    event_org = models.Event(
+        name=f"Org Event {uuid.uuid4().hex}", created_by_user_id=org.id
+    )
+    db_session.add(event_org)
+    db_session.commit()
+    db_session.refresh(event_org)
+
+    talk_org = models.Talk(
+        event_id=event_org.id,
+        title="Org Talk",
+        room="Main",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="preview",
+    )
+    db_session.add(talk_org)
+    db_session.commit()
+    db_session.refresh(talk_org)
+
+    org_token = create_session_token(org.id, org.role)
+    client.cookies.set("veditor_session", org_token)
+    res_org = client.get(f"/studio/talks/{talk_org.id}")
+    assert res_org.status_code == 200
+    assert "btn-request-organizer" not in res_org.text
+    assert "modal-request-organizer" not in res_org.text
+
+    # 4. SSO user does not see organizer request prompt
+    from app.security import create_sso_token
+
+    sso_token = create_sso_token(
+        scope_type="event", scope_id=event_org.id, role="organizer"
+    )
+    client.cookies.set("veditor_session", sso_token)
+    res_sso = client.get(f"/studio/talks/{talk_org.id}")
+    assert res_sso.status_code == 200
+    assert "btn-request-organizer" not in res_sso.text
+    assert "modal-request-organizer" not in res_sso.text

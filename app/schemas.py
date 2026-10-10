@@ -385,8 +385,15 @@ class UserRead(BaseModel):
     email: str
     role: str
     is_active: bool
+    organizer_requested: bool = False
+    organizer_request_note: str | None = None
+    organizer_requested_at: datetime | None = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class OrganizerRequestCreate(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
 
 
 class UserPromoteRequest(BaseModel):

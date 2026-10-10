@@ -61,6 +61,18 @@ document.addEventListener('DOMContentLoaded', () => {
           badge.textContent = updated.role.charAt(0).toUpperCase() + updated.role.slice(1);
         }
 
+        // Remove pending badge, note, container, and approve button if promoted away from user
+        if (updated.role !== 'user') {
+          const pendingBadge = document.getElementById(`pending-badge-${userId}`);
+          if (pendingBadge) pendingBadge.remove();
+          const pendingNote = document.getElementById(`pending-note-${userId}`);
+          if (pendingNote) pendingNote.remove();
+          const pendingContainer = document.getElementById(`pending-container-${userId}`);
+          if (pendingContainer) pendingContainer.remove();
+          const approveBtn = document.getElementById(`approve-organizer-btn-${userId}`);
+          if (approveBtn) approveBtn.remove();
+        }
+
         showBanner(`User #${userId} role updated to ${updated.role}`, 'success');
       } catch (err) {
         showBanner(`Network error: ${err.message}`, 'error');
@@ -144,6 +156,78 @@ document.addEventListener('DOMContentLoaded', () => {
         showBanner(`Network error: ${err.message}`, 'error');
       } finally {
         btn.disabled = false;
+      }
+    });
+  });
+
+  // ── Approve Organizer Request ──────────────────────────────────
+  document.querySelectorAll('.btn-approve-organizer').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const userId = btn.getAttribute('data-user-id');
+      btn.disabled = true;
+      btn.textContent = 'Approving…';
+
+      try {
+        const resp = await fetch(`/admin/users/${userId}/promote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ role: 'organizer' }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          showBanner(errData.detail || `Failed to approve (${resp.status})`, 'error');
+          btn.disabled = false;
+          btn.textContent = 'Approve';
+          return;
+        }
+
+        const updated = await resp.json();
+
+        // Update role badge
+        const roleBadge = document.getElementById(`badge-role-${userId}`);
+        if (roleBadge) {
+          roleBadge.className = `badge badge-role badge-role-${updated.role}`;
+          roleBadge.textContent = updated.role.charAt(0).toUpperCase() + updated.role.slice(1);
+        }
+
+        // Update role select
+        const roleSelect = document.getElementById(`role-select-${userId}`);
+        if (roleSelect) {
+          roleSelect.value = 'organizer';
+          roleSelect.setAttribute('data-current-role', 'organizer');
+        }
+
+        // Remove pending badge, note, container, and approve button
+        const pendingBadge = document.getElementById(`pending-badge-${userId}`);
+        if (pendingBadge) pendingBadge.remove();
+        const pendingNote = document.getElementById(`pending-note-${userId}`);
+        if (pendingNote) pendingNote.remove();
+        const pendingContainer = document.getElementById(`pending-container-${userId}`);
+        if (pendingContainer) pendingContainer.remove();
+        btn.remove();
+
+        showBanner(`User #${userId} promoted to organizer`, 'success');
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('pending') === 'true' || urlParams.get('pending') === '1') {
+          setTimeout(() => {
+            const remainingPending = document.querySelectorAll(
+              '.badge-pending-request, .btn-approve-organizer'
+            );
+            const currentPage = parseInt(urlParams.get('page') || '1', 10);
+            if (remainingPending.length === 0 && currentPage > 1) {
+              urlParams.set('page', String(currentPage - 1));
+              window.location.href = `${window.location.pathname}?${urlParams.toString()}`;
+            } else {
+              window.location.reload();
+            }
+          }, 600);
+        }
+      } catch (err) {
+        showBanner(`Network error: ${err.message}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Approve';
       }
     });
   });

@@ -1382,3 +1382,231 @@ details[open] > summary.user-bubble-btn {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ---------------------------------------------------------------------------
+   Organizer Role Request Banner
+   --------------------------------------------------------------------------- */
+.role-request-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(59, 130, 246, 0.03) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  border-left: 4px solid var(--v-primary, #2563eb);
+  border-radius: var(--v-radius-lg, 12px);
+  box-shadow: 0 4px 12px -2px rgba(37, 99, 235, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
+  position: relative;
+  overflow: hidden;
+}
+
+html[data-theme="dark"] .role-request-banner {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.15) 0%, rgba(30, 41, 59, 0.6) 100%);
+  border-color: rgba(59, 130, 246, 0.35);
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4);
+}
+
+.role-request-banner.role-request-pending {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(217, 119, 6, 0.03) 100%);
+  border-color: rgba(245, 158, 11, 0.25);
+  border-left-color: var(--color-amber, #f59e0b);
+  box-shadow: 0 4px 12px -2px rgba(245, 158, 11, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
+}
+
+html[data-theme="dark"] .role-request-banner.role-request-pending {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(30, 41, 59, 0.6) 100%);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.role-request-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--v-primary, #2563eb) 12%, transparent);
+  color: var(--v-primary, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.role-request-pending .role-request-icon-wrap {
+  background: color-mix(in srgb, var(--color-amber, #f59e0b) 15%, transparent);
+  color: var(--color-amber, #f59e0b);
+}
+
+.role-request-hero-icon {
+  flex-shrink: 0;
+}
+
+.role-request-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.role-request-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.role-request-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  line-height: 1.3;
+}
+
+.role-request-description {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--v-text-secondary);
+  line-height: 1.45;
+}
+
+.role-request-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--color-amber, #f59e0b) 18%, transparent);
+  color: var(--color-amber, #f59e0b);
+  border: 1px solid color-mix(in srgb, var(--color-amber, #f59e0b) 40%, transparent);
+}
+
+.role-request-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.role-request-banner .btn-request-hero {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.25rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  border-radius: var(--v-radius-md, 8px);
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.role-request-banner .btn-request-hero:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
+}
+
+.role-request-banner .btn-request-hero:active {
+  transform: translateY(0);
+}
+
+.role-request-banner .btn-arrow-icon {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.role-request-banner .btn-request-hero:hover .btn-arrow-icon {
+  transform: translateX(2px);
+}
+
+@media (max-width: 768px) {
+  .role-request-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.15rem;
+  }
+  .role-request-actions {
+    width: 100%;
+  }
+  .role-request-banner .btn-request-hero {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Request Organizer Modal
+   --------------------------------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-overlay.hidden { display: none; }
+
+.modal-box {
+  background: var(--v-bg-surface, var(--color-surface, #1e293b));
+  border: 1px solid var(--v-border-default, var(--color-border, #334155));
+  border-radius: var(--v-radius-lg, 12px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-box .modal-body {
+  overflow-y: auto;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  color: var(--v-text-muted, #94a3b8);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.25rem;
+}
+
+.modal-close:hover {
+  color: var(--v-text-primary, #f8fafc);
+}
+
+#modal-request-organizer .modal-description {
+  font-size: 0.875rem;
+  color: var(--v-text-muted);
+  margin-bottom: 1rem;
+}
+
+#organizer-request-note {
+  width: 100%;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-hint {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  text-align: right;
+  margin-top: 0.25rem;
+}
+
+.form-error {
+  color: var(--v-status-danger-text, #ef4444);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+.form-error.hidden { display: none; }
