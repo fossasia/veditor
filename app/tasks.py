@@ -17,7 +17,8 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,20 @@ import av
 
 from app.config import PREVIEW_PRESETS, get_setting, settings
 from app.db import SessionLocal
-from app.ingest import validate_media_file
+from app.ingest import (
+    InsufficientStorageError,
+    download_media_url,
+    get_upload_staging_dir,
+    validate_media_file,
+)
 from app.models import Job, Talk
 from app.pipeline.concat import concat
 from app.pipeline.cut import cut
-from app.pipeline.detect import DETECT_DURATION_TOLERANCE_SECONDS, detect
+from app.pipeline.detect import (
+    DETECT_DURATION_TOLERANCE_SECONDS,
+    container_duration_seconds,
+    detect,
+)
 from app.pipeline.intro import generate_intro_clip
 from app.pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
 from app.pipeline.outro import generate_outro_clip
@@ -225,6 +235,223 @@ def job_ingest(
     finally:
         # storage-boundary-exempt: upload staging cleanup
         staged.unlink(missing_ok=True)
+
+
+def job_ingest_room_url(
+    event_id: int,
+    room: str,
+    video_url: str,
+    recording_start_iso: str | None = None,
+    talk_ids: list[int] | None = None,
+) -> None:
+    """Download a room recording from a video/livestream URL using yt-dlp,
+
+    validate and probe duration, and attach to matching talks in the room.
+    """
+    import uuid
+
+    storage = get_storage_backend()
+    staged_target = get_upload_staging_dir() / f"room_url_{uuid.uuid4().hex}.mp4"
+    staged_path: Path | None = None
+    job_ids: dict[int, int] = {}
+    enqueued_talk_ids: set[int] = set()
+    try:
+        # Create ingest jobs for tracked talks so status and progress are recorded
+        with SessionLocal() as db:
+            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+            if talk_ids:
+                query = query.filter(Talk.id.in_(talk_ids))
+            room_talks = query.order_by(Talk.start).all()
+            for talk in room_talks:
+                if talk.status in ("waiting_for_files", "detecting", "broken"):
+                    job = Job(
+                        talk_id=talk.id,
+                        kind="ingest",
+                        status="running",
+                        started_at=datetime.now(UTC),
+                        updated_at=datetime.now(UTC),
+                    )
+                    db.add(job)
+                    talk.status = "detecting"
+                    db.flush()
+                    job_ids[talk.id] = job.id
+            db.commit()
+
+        # Download media using yt-dlp
+        staged_path = download_media_url(video_url, staged_target)
+
+        # Validate media & probe duration
+        validate_media_file(staged_path)
+        with av.open(str(staged_path)) as container:
+            duration = container_duration_seconds(container)
+            c_time = container.metadata.get("creation_time")
+            if not c_time and container.streams.video:
+                c_time = container.streams.video[0].metadata.get("creation_time")
+
+        if duration is None or duration <= 0:
+            raise ValueError("Could not determine video duration from downloaded URL")
+
+        # Storage space check
+        file_size = staged_path.stat().st_size
+        required_bytes = int(
+            (
+                Decimal(file_size) * Decimal(str(settings.disk_guard_multiplier))
+            ).to_integral_value(rounding=ROUND_CEILING)
+        )
+        available_bytes = storage.free_bytes()
+        if available_bytes < required_bytes:
+            raise InsufficientStorageError(required_bytes, available_bytes)
+
+        # Match talks with schedule window
+        recording_start = None
+        if recording_start_iso:
+            try:
+                recording_start = datetime.fromisoformat(recording_start_iso)
+            except (ValueError, TypeError):  # fmt: skip
+                pass
+
+        with SessionLocal() as db:
+            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+            if talk_ids:
+                query = query.filter(Talk.id.in_(talk_ids))
+            eligible_talks = [
+                t
+                for t in query.order_by(Talk.start).all()
+                if t.id in job_ids and t.status == "detecting"
+            ]
+            if not eligible_talks:
+                logger.warning(
+                    "No eligible talks found in room '%s' for event %d", room, event_id
+                )
+                for jid in job_ids.values():
+                    job = db.get(Job, jid)
+                    if job:
+                        job.status = "cancelled"
+                        job.updated_at = datetime.now(UTC)
+                for tid in job_ids:
+                    talk = db.get(Talk, tid)
+                    if talk and talk.status == "detecting":
+                        talk.status = "waiting_for_files"
+                db.commit()
+                return
+
+            rec_start = recording_start
+            if rec_start is None and c_time:
+                try:
+                    parsed_dt = datetime.fromisoformat(c_time)
+                    if parsed_dt.tzinfo is None:
+                        parsed_dt = parsed_dt.replace(tzinfo=UTC)
+                    cand_end = parsed_dt + timedelta(seconds=duration)
+                    if any(
+                        (
+                            t.start.replace(tzinfo=UTC)
+                            if t.start.tzinfo is None
+                            else t.start
+                        )
+                        < cand_end
+                        and (
+                            t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end
+                        )
+                        > parsed_dt
+                        for t in eligible_talks
+                    ):
+                        rec_start = parsed_dt
+                except (ValueError, TypeError):  # fmt: skip
+                    pass
+
+            if rec_start is None:
+                rec_start = min(
+                    t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start
+                    for t in eligible_talks
+                )
+
+            if rec_start.tzinfo is None:
+                rec_start = rec_start.replace(tzinfo=UTC)
+
+            rec_end = rec_start + timedelta(seconds=duration)
+            matched_talks = [
+                t
+                for t in eligible_talks
+                if (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
+                < rec_end
+                and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
+                > rec_start
+            ]
+
+            unmatched_talks = [t for t in eligible_talks if t not in matched_talks]
+            for untalk in unmatched_talks:
+                if untalk.id in job_ids:
+                    job = db.get(Job, job_ids[untalk.id])
+                    if job:
+                        job.status = "cancelled"
+                        job.updated_at = datetime.now(UTC)
+                untalk.status = "waiting_for_files"
+
+            matched_ids = []
+            for talk in matched_talks:
+                raw_key = f"{talk.id}/raw/raw.mp4"
+                storage.link_or_copy(raw_key, staged_path)
+                talk.status = "detecting"
+                talk.raw_duration_seconds = duration
+
+                talk_start_utc = (
+                    talk.start.replace(tzinfo=UTC)
+                    if talk.start.tzinfo is None
+                    else talk.start
+                )
+                talk_end_utc = (
+                    talk.end.replace(tzinfo=UTC)
+                    if talk.end.tzinfo is None
+                    else talk.end
+                )
+                offset_start = max(0.0, (talk_start_utc - rec_start).total_seconds())
+                offset_end = min(duration, (talk_end_utc - rec_start).total_seconds())
+                if offset_end > offset_start:
+                    talk.cut_start = offset_start
+                    talk.cut_end = offset_end
+
+                if talk.id in job_ids:
+                    job = db.get(Job, job_ids[talk.id])
+                    if job:
+                        job.status = "done"
+                        job.updated_at = datetime.now(UTC)
+
+                matched_ids.append(talk.id)
+
+            db.commit()
+
+        # Enqueue detection jobs
+        for tid in matched_ids:
+            light_queue.enqueue(
+                job_detect,
+                tid,
+                f"{tid}/raw/raw.mp4",
+                tolerance_seconds=float("inf"),
+                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            )
+            enqueued_talk_ids.add(tid)
+
+    except Exception:
+        logger.exception(
+            "Failed job_ingest_room_url for %s in room '%s'", video_url, room
+        )
+        with SessionLocal() as db:
+            for tid, jid in job_ids.items():
+                if tid in enqueued_talk_ids:
+                    continue
+                job = db.get(Job, jid)
+                if job:
+                    job.status = "failed"
+                    job.updated_at = datetime.now(UTC)
+                talk = db.get(Talk, tid)
+                if talk and talk.status == "detecting":
+                    talk.status = "broken"
+            db.commit()
+        raise
+    finally:
+        if staged_path and staged_path.exists():
+            # storage-boundary-exempt: upload staging cleanup
+            staged_path.unlink(missing_ok=True)
 
 
 def job_detect(

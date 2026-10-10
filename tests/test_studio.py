@@ -3554,3 +3554,214 @@ def test_sso_organizer_management_controls_visible(client, db_session):
     assert res_spk_studio.status_code == 200
     assert 'id="btn-edit-talk-studio"' not in res_spk_studio.text
     assert 'id="modal-edit-talk-studio"' not in res_spk_studio.text
+
+
+def test_attach_room_recording_with_video_url(
+    client: TestClient, db_session, temp_storage
+):
+    import uuid
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import patch
+
+    from app.auth import hash_api_key
+
+    user = models.User(
+        email="org_url@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    event = models.Event(name="URL Ingest Summit", created_by_user=user)
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk1 = models.Talk(
+        event_id=event.id,
+        title="Keynote Streamed",
+        room="Auditorium Stream",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talk2 = models.Talk(
+        event_id=event.id,
+        title="Session 2 Streamed",
+        room="Auditorium Stream",
+        start=now + timedelta(minutes=30),
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+    db_session.add(talk1)
+    db_session.add(talk2)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
+        # 1. Test JSON payload
+        res = client.post(
+            "/talks/room/attach-recording",
+            json={
+                "room": "Auditorium Stream",
+                "event_id": event.id,
+                "video_url": "https://www.youtube.com/watch?v=livestream123",
+            },
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["attached_count"] == 2
+        assert set(data["talk_ids"]) == {talk1.id, talk2.id}
+        assert data["recording_duration_seconds"] is None
+
+        db_session.refresh(talk1)
+        db_session.refresh(talk2)
+        assert talk1.status == "detecting"
+        assert talk2.status == "detecting"
+
+        mock_heavy_q.enqueue.assert_called_once()
+        call_args = mock_heavy_q.enqueue.call_args
+        assert call_args.args[1] == event.id
+        assert call_args.args[2] == "Auditorium Stream"
+        assert call_args.args[3] == "https://www.youtube.com/watch?v=livestream123"
+
+
+def test_attach_room_recording_with_video_url_multipart(
+    client: TestClient, db_session, temp_storage
+):
+    import uuid
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import patch
+
+    from app.auth import hash_api_key
+
+    user = models.User(
+        email="org_url_mp@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    event = models.Event(name="URL Ingest Summit MP", created_by_user=user)
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Keynote Streamed MP",
+        room="Auditorium Stream MP",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
+        res = client.post(
+            "/talks/room/attach-recording",
+            data={
+                "room": "Auditorium Stream MP",
+                "event_id": str(event.id),
+                "video_url": "https://vimeo.com/987654321",
+            },
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["attached_count"] == 1
+        assert data["talk_ids"] == [talk.id]
+        mock_heavy_q.enqueue.assert_called_once()
+
+
+def test_attach_room_recording_url_and_source_validations(
+    client: TestClient, db_session, tmp_path
+):
+    import uuid
+    from datetime import UTC, datetime, timedelta
+
+    from app.auth import hash_api_key
+    from tests.conftest import generate_clip
+
+    user = models.User(
+        email="org_val@example.com",
+        hashed_password="hash",
+        role="organizer",
+    )
+    event = models.Event(name="Validation Summit", created_by_user=user)
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
+    talk = models.Talk(
+        event_id=event.id,
+        title="Validation Talk",
+        room="Val Room",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # 1. Invalid URL scheme
+    res = client.post(
+        "/talks/room/attach-recording",
+        json={
+            "room": "Val Room",
+            "event_id": event.id,
+            "video_url": "ftp://bad-scheme.com/video.mp4",
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 400
+    assert "video_url must start with http:// or https://" in res.json()["detail"]
+
+    # 2. No source provided
+    res = client.post(
+        "/talks/room/attach-recording",
+        json={
+            "room": "Val Room",
+            "event_id": event.id,
+        },
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 400
+    assert (
+        "Either video_url, a video file upload, or relative_key/source_path"
+        in res.json()["detail"]
+    )
+
+    # 3. Conflicting sources: both file and video_url
+    clip = generate_clip(0.5, output_dir=tmp_path)
+    try:
+        with open(clip, "rb") as f_vid:
+            res = client.post(
+                "/talks/room/attach-recording",
+                data={
+                    "room": "Val Room",
+                    "event_id": str(event.id),
+                    "video_url": "https://youtube.com/watch?v=conflict",
+                },
+                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                headers={"X-API-Key": api_key},
+            )
+            assert res.status_code == 400
+            assert "Provide only one recording source" in res.json()["detail"]
+    finally:
+        clip.unlink(missing_ok=True)

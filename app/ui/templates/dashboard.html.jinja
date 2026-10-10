@@ -317,7 +317,7 @@
     </div>
 
     <p class="dashboard-modal-desc">
-      Upload a single multi-hour room recording to attach it to all scheduled sessions in that room.
+      Attach a continuous room recording from a video/livestream URL or file upload to all scheduled sessions in that room.
     </p>
 
     <div class="dashboard-modal-field">
@@ -330,8 +330,13 @@
       </datalist>
     </div>
 
+    <div class="dashboard-modal-field">
+      <label class="dashboard-modal-label dashboard-modal-label-tight">Video Stream / Recording URL (YouTube, Vimeo, Stream URL)</label>
+      <input type="url" id="attach-room-url" class="input-field" placeholder="https://www.youtube.com/watch?v=... or https://vimeo.com/...">
+    </div>
+
     <div class="dashboard-modal-field-lg">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Room Recording Video File</label>
+      <label class="dashboard-modal-label dashboard-modal-label-tight">OR Upload Video File</label>
       <input type="file" id="attach-room-file" accept="video/*" class="input-field dashboard-modal-file-input">
     </div>
 

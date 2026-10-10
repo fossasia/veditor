@@ -158,6 +158,7 @@ window.closeAttachRoomModal = function() {
 
 window.submitAttachRoomRecording = async function() {
   const roomInput = (document.getElementById('attach-room-input') || {}).value || '';
+  const urlInput = (document.getElementById('attach-room-url') || {}).value || '';
   const fileInput = document.getElementById('attach-room-file');
   const btn = document.getElementById('btn-submit-attach-room');
 
@@ -165,8 +166,15 @@ window.submitAttachRoomRecording = async function() {
     alert('Please enter or select a room name.');
     return;
   }
-  if (!fileInput || !fileInput.files || !fileInput.files[0]) {
-    alert('Please select a video recording file.');
+  const hasFile = fileInput && fileInput.files && fileInput.files[0];
+  const hasUrl = urlInput.trim().length > 0;
+
+  if (!hasFile && !hasUrl) {
+    alert('Please provide a video URL or select a video recording file.');
+    return;
+  }
+  if (hasFile && hasUrl) {
+    alert('Please provide either a video URL or a file upload, not both.');
     return;
   }
 
@@ -175,7 +183,11 @@ window.submitAttachRoomRecording = async function() {
   try {
     const fd = new FormData();
     fd.append('room', roomInput.trim());
-    fd.append('file', fileInput.files[0]);
+    if (hasUrl) {
+      fd.append('video_url', urlInput.trim());
+    } else {
+      fd.append('file', fileInput.files[0]);
+    }
 
     const urlParams = new URLSearchParams(window.location.search);
     const eventIdParam = urlParams.get('event_id');
