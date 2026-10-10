@@ -3,6 +3,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote_plus
 
 from pydantic import PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -144,7 +145,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        return f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        user = quote_plus(self.postgres_user)
+        password = quote_plus(self.postgres_password)
+        return f"postgresql+psycopg://{user}:{password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

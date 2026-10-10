@@ -619,3 +619,19 @@ def test_is_valid_email():
     assert is_valid_email("user@example..com") is False
     assert is_valid_email("a@b@c.com") is False
     assert is_valid_email("<script>@domain.com") is False
+
+
+def test_database_url_encodes_reserved_characters():
+    from app.config import Settings
+
+    s = Settings(
+        postgres_user="ved@user",
+        postgres_password="p@ss:word/with%special#chars",
+        postgres_host="pg-host",
+        postgres_port=5432,
+        postgres_db="ved_db",
+    )
+    url = s.database_url
+    assert "ved%40user" in url
+    assert "p%40ss%3Aword%2Fwith%25special%23chars" in url
+    assert "@pg-host:5432/ved_db" in url

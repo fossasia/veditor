@@ -92,6 +92,26 @@ def test_health_check():
     assert response.json() == {"status": "ok"}
 
 
+def test_health_check_redis_failure():
+    fail_client = TestClient(app, raise_server_exceptions=False)
+    with patch("app.main.redis_conn.ping", side_effect=Exception("Redis down")):
+        response = fail_client.get("/health")
+        assert 500 <= response.status_code < 600
+
+
+def test_health_check_database_failure():
+    fail_client = TestClient(app, raise_server_exceptions=False)
+    mock_db = MagicMock()
+    mock_db.execute.side_effect = Exception("DB connection failed")
+    app.dependency_overrides[get_db] = lambda: mock_db
+    try:
+        response = fail_client.get("/health")
+        assert 500 <= response.status_code < 600
+        mock_db.execute.assert_called_once()
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
 # ---------------------------------------------------------------------------
 # GET /talks/{id}/raw-preview — state gating
 # ---------------------------------------------------------------------------
