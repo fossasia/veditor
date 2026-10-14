@@ -1,0 +1,126 @@
+{% extends "admin_base.html.jinja" %}
+
+{% block title %}Priority Queue - Admin Console{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/admin.css">
+<link rel="stylesheet" href="/static/css/queue.css">
+<script src="/static/js/queue.js" defer></script>
+{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/admin">Admin Console</a>
+  <span class="sep">/</span>
+  <span class="current">Priority Queue</span>
+{% endblock %}
+
+{% block content %}
+<div class="page-body queue-page-body">
+  <div class="admin-header-row queue-header-row">
+    <div class="admin-header-title-group">
+      <div class="admin-header-icon-box queue-header-icon-box">
+        <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <line x1="8" y1="6" x2="21" y2="6"/>
+          <line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <circle cx="4" cy="6" r="1.5" fill="currentColor"/>
+          <circle cx="4" cy="12" r="1.5" fill="currentColor"/>
+          <circle cx="4" cy="18" r="1.5" fill="currentColor"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="admin-title">Live Processing Queues</h1>
+        <p class="admin-subtitle">Drag any talk into Priority to expedite processing, or reorder cards to adjust sequence.</p>
+      </div>
+    </div>
+    <div class="queue-header-actions">
+      <div class="live-indicator" id="queue-live-indicator">
+        <span class="live-dot"></span>
+        <span class="live-text" id="queue-live-text">Live Syncing</span>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="queue-refresh-btn" aria-label="Refresh queues">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <polyline points="23 4 23 10 17 10"/>
+          <polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="queue-layout" id="queue-layout">
+    <!-- Top-Left: Light Queue -->
+    <section class="queue-panel queue-panel-light" id="panel-light" data-queue-type="light" aria-labelledby="heading-light">
+      <header class="queue-panel-header">
+        <div class="queue-panel-title-wrap">
+          <div class="queue-badge-indicator badge-light"></div>
+          <h2 class="queue-panel-title" id="heading-light">Light Queue</h2>
+          <span class="queue-count-badge" id="count-light">0</span>
+        </div>
+        <span class="queue-panel-desc">Ingest, Detect, Cut, Bumpers, Preview, Publish</span>
+      </header>
+      <div class="queue-list" id="list-light" data-dropzone="light">
+        <div class="queue-empty-state" id="empty-light">
+          <div class="empty-state-icon-wrap empty-light">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+          </div>
+          <p class="empty-state-title">No Active Light Jobs</p>
+          <p class="empty-state-desc">Trimming, title cards, and previews will appear here when running.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bottom-Left: Heavy Queue -->
+    <section class="queue-panel queue-panel-heavy" id="panel-heavy" data-queue-type="heavy" aria-labelledby="heading-heavy">
+      <header class="queue-panel-header">
+        <div class="queue-panel-title-wrap">
+          <div class="queue-badge-indicator badge-heavy"></div>
+          <h2 class="queue-panel-title" id="heading-heavy">Heavy Queue</h2>
+          <span class="queue-count-badge" id="count-heavy">0</span>
+        </div>
+        <span class="queue-panel-desc">Broadcast Transcoding (CPU/GPU-Intensive)</span>
+      </header>
+      <div class="queue-list" id="list-heavy" data-dropzone="heavy">
+        <div class="queue-empty-state" id="empty-heavy">
+          <div class="empty-state-icon-wrap empty-heavy">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/>
+              <line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+          </div>
+          <p class="empty-state-title">No Heavy Transcoding Jobs</p>
+          <p class="empty-state-desc">Broadcast transcode jobs will appear here when active.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Priority Queue (Full Height) -->
+    <section class="queue-panel queue-panel-priority" id="panel-priority" data-queue-type="priority" aria-labelledby="heading-priority">
+      <header class="queue-panel-header">
+        <div class="queue-panel-title-wrap">
+          <div class="queue-badge-indicator badge-priority"></div>
+          <h2 class="queue-panel-title" id="heading-priority">Priority Queue</h2>
+          <span class="queue-count-badge" id="count-priority">0</span>
+        </div>
+        <span class="queue-panel-desc">Processed ahead of all other tasks. Drag cards here to prioritize.</span>
+      </header>
+      <div class="queue-list" id="list-priority" data-dropzone="priority">
+        <div class="queue-empty-state" id="empty-priority">
+          <div class="empty-state-icon-wrap empty-priority">
+            <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+          </div>
+          <p class="empty-state-title">Priority Queue is Empty</p>
+          <p class="empty-state-desc">Drag a talk here to expedite processing ahead of all other tasks.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

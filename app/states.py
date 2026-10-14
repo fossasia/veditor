@@ -45,4 +45,6 @@ def advance(talk, new_state: str):
 
     talk.status = new_state
     talk.updated_at = datetime.now(UTC)
+    if new_state in ("done", "preview", "pending_approval", "broken", "rejected"):
+        talk.priority_rank = None
     return talk
