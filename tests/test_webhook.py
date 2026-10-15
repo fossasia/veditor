@@ -269,6 +269,26 @@ def test_job_deliver_webhook_hmac_signing_and_success():
         assert sent_body == payload
 
 
+def test_job_deliver_webhook_logs_redacted_url(caplog):
+    url = "https://user:pass@example.com:8443/hook?token=abc#frag"
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__enter__.return_value = mock_resp
+
+    with (
+        caplog.at_level("INFO", logger="app.tasks"),
+        patch("app.tasks._webhook_opener.open", return_value=mock_resp) as mock_open,
+    ):
+        assert job_deliver_webhook(url, "secret", {"talk_id": 1}) is True
+
+    # The request still goes to the full URL; only the log line is redacted.
+    assert mock_open.call_args[0][0].get_full_url() == url
+    assert "https://example.com:8443/hook" in caplog.text
+    for secret_part in ("user", "pass", "token=abc", "frag"):
+        assert secret_part not in caplog.text
+
+
 def test_job_deliver_webhook_retry_success_on_second_attempt():
     payload = {"talk_id": 1, "event_id": 1, "timestamp": "2026-09-13T03:00:00Z"}
     secret = "retry-secret"
