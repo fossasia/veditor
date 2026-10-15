@@ -14,40 +14,24 @@ jobs:
   smoke-test-native:
     name: Native Smoke Test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: veditor_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     env:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_HOST: localhost
+      POSTGRES_USER: runner
+      POSTGRES_HOST: /var/run/postgresql
       POSTGRES_PORT: 5432
       POSTGRES_DB: veditor_test
       REDIS_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v7
+      - name: Install PostgreSQL and Redis
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql redis-server
+      - name: Set up database (peer auth, like README Linux setup)
+        run: |
+          sudo -u postgres createuser -s "$USER"
+          createdb "$POSTGRES_DB"
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:

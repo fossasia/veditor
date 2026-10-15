@@ -41,4 +41,3 @@ with open(
 # storage-boundary-exempt: inspecting external recording file before staging
 metadata = raw_path.read_bytes()
 ```
-
