@@ -26,13 +26,18 @@ def _run_single_worker(
     with_scheduler: bool = False,
     nice_level: int | None = None,
 ) -> None:
-    # App modules log through the root logger, which has no handler by default,
-    # so their INFO messages (e.g. the verification link printed when SMTP is
-    # unset) would otherwise never reach the worker output.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    # Nothing else gives app.* loggers a handler, so their INFO messages (e.g.
+    # the verification link printed when SMTP is unset) would never reach the
+    # worker output. Only the app logger is configured so that libraries such
+    # as SQLAlchemy keep their default levels.
+    app_logger = logging.getLogger("app")
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
 
     if nice_level is not None and hasattr(os, "nice"):
         try:
