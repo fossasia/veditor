@@ -213,3 +213,33 @@ def test_worker_nice_flag(
     mock_os_nice.assert_called_once_with(10)
     mock_worker = mock_worker_cls.return_value
     mock_worker.work.assert_called_once_with(burst=True)
+
+
+def test_run_single_worker_shows_app_info_logs():
+    """INFO logs from app modules, such as the dev-mode verification link, must
+    appear in the worker output (#315)."""
+    code = """
+import logging
+from unittest.mock import MagicMock, patch
+
+with (
+    patch("scripts.run_worker.redis.from_url"),
+    patch("scripts.run_worker.Worker", return_value=MagicMock()),
+    patch("app.db.engine.dispose"),
+):
+    from scripts.run_worker import _run_single_worker
+
+    _run_single_worker(["light"], "redis://localhost:6379/0", None, burst=True)
+
+logging.getLogger("app.email").info("verify link: http://localhost/verify-email")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent.parent,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "verify link: http://localhost/verify-email" in result.stderr
