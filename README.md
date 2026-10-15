@@ -67,7 +67,7 @@ It is recommended to use a relatively new Linux distribution equivalent to Ubunt
 1. Install PostgreSQL and Redis using your OS package manager. For example, on Ubuntu / Debian:
 
 ```
-sudo apt install postgresql redis
+sudo apt install postgresql redis-server ffmpeg
 ```
 
 (For other distributions, adapt the command to match your package manager and package names.)
@@ -79,7 +79,7 @@ The VEditor project leverages the Linux ecosystem to let you set up a database i
 - Create a PostgreSQL user with the same name as your Linux user:
 
   ```sh
-  sudo -u postgres createdb -s $USER
+  sudo -u postgres createuser -s $USER
   ```
 
   (`-s` means *superuser*)

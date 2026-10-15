@@ -15,13 +15,6 @@ jobs:
     name: Native Smoke Test
     runs-on: ubuntu-latest
 
-    env:
-      POSTGRES_USER: runner
-      POSTGRES_HOST: /var/run/postgresql
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: veditor_test
-      REDIS_URL: redis://localhost:6379/0
-
     steps:
       - uses: actions/checkout@v7
       - name: Install PostgreSQL and Redis
@@ -31,7 +24,7 @@ jobs:
       - name: Set up database (peer auth, like README Linux setup)
         run: |
           sudo -u postgres createuser -s "$USER"
-          createdb "$POSTGRES_DB"
+          createdb veditor
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
