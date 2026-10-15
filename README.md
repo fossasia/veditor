@@ -60,6 +60,106 @@ Earlier versions did not declare a named volume for PostgreSQL, storing database
 
 If you prefer to run the entire stack locally without Docker (for faster reloading and easier debugging), you must install the application, `ffmpeg`, Postgres, and Redis directly on your host machine.
 
+### Linux
+
+It is recommended to use a relatively new Linux distribution equivalent to Ubuntu 26.04+, as it includes Python 3.14 by default.
+
+1. Install PostgreSQL and Redis using your OS package manager. For example, on Ubuntu / Debian:
+
+```
+sudo apt install postgresql redis
+```
+
+(For other distributions, adapt the command to match your package manager and package names.)
+
+2. Setting up the database
+
+The VEditor project leverages the Linux ecosystem to let you set up a database in a quick and simple way.
+
+- Create a PostgreSQL user with the same name as your Linux user:
+
+  ```sh
+  sudo -u postgres createdb -s $USER
+  ```
+
+  (`-s` means *superuser*)
+
+- Create a database named "veditor"
+
+  ```sh
+  createdb veditor
+  ```
+
+  (As a *superuser*, you can create databases without switching to the `postgres` system user.)
+
+That's all you need to get started — no password required and no fixed PostgreSQL username needed.
+
+If you accidentally corrupt your data later, you can delete the database with:
+
+```sh
+dropdb veditor
+```
+
+Then recreate it with `createdb veditor`.
+
+No need to create a *.env* file if you installed PostgreSQL and Redis via your OS package manager (`apt` / `dnf` / `pacman`).
+If you installed them via Docker or other methods, you may need to copy the *.env.example* file to *.env* and adjust the `POSTGRES_*` and `REDIS_URL` variables.
+
+3. Install [`uv`][uv] and use it to create a Python virtual environment and install dependencies:
+
+```sh
+uv sync --all-groups
+```
+
+`uv` creates a Python virtual environment in the *.venv* folder. Activate it to use Python and the tools installed there:
+
+```bash
+. .venv/bin/activate
+```
+
+or
+
+```fish
+. .venv/bin/activate.fish
+```
+
+4. Optional: Install additional development tools:
+
+- [`just`][just]: A command runner for shortcuts (see the *justfile*).
+- [`fish`][fish]: A user-friendly shell with rich autocomplete. It can autocomplete the commands defined in our *justfile*.
+
+5. Create database tables
+
+```sh
+alembic upgrade head
+```
+
+or
+
+```sh
+just db-migrate
+```
+
+6. Start the FastAPI server:
+
+```sh
+uvicorn app.main:app --reload
+```
+
+or
+
+```sh
+just serve
+```
+
+7. Before modifying source code, install `git` hooks to ensure code style compliance:
+
+```sh
+pre-commit install
+```
+
+### Other OSes
+
 1. Install System Dependencies (macOS via Homebrew)
    ```bash
    brew install ffmpeg postgresql redis
@@ -108,7 +208,7 @@ If you prefer to run the entire stack locally without Docker (for faster reloadi
 
 ## End-to-End Smoke Test
 
-The project includes an end-to-end smoke test that runs through the complete state flow of a Talk, covering the core requirements of Phase 1. 
+The project includes an end-to-end smoke test that runs through the complete state flow of a Talk, covering the core requirements of Phase 1.
 
 **Note**: The smoke test expects a live API server and will wipe the database configured by your `POSTGRES_*` env vars to ensure a clean state.
 If your database name does not end with `_test`, set `ALLOW_SMOKE_DB_WIPE=1` to run it.
@@ -138,3 +238,8 @@ If your database name does not end with `_test`, set `ALLOW_SMOKE_DB_WIPE=1` to 
    ```bash
    uv run pytest tests/test_smoke.py
    ```
+
+
+[uv]: https://github.com/astral-sh/uv
+[just]: https://just.systems/
+[fish]: https://fishshell.com/

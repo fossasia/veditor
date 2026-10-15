@@ -20,7 +20,7 @@ from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 import app.models  # noqa: E402, F401
 
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.database_url.render_as_string())
 
 # add your model's MetaData object here
 # for 'autogenerate' support
