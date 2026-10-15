@@ -5,6 +5,7 @@ Redis configuration from app.config.settings and eagerly importing task modules.
 """
 
 import argparse
+import logging
 import multiprocessing
 import os
 import sys
@@ -25,6 +26,14 @@ def _run_single_worker(
     with_scheduler: bool = False,
     nice_level: int | None = None,
 ) -> None:
+    # App modules log through the root logger, which has no handler by default,
+    # so their INFO messages (e.g. the verification link printed when SMTP is
+    # unset) would otherwise never reach the worker output.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     if nice_level is not None and hasattr(os, "nice"):
         try:
             os.nice(nice_level)
