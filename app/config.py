@@ -3,8 +3,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote_plus
 
+import sqlalchemy
 from pydantic import PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -43,11 +43,14 @@ ALLOWED_JWT_ALGORITHMS: tuple[str, ...] = ("HS256", "HS384", "HS512")
 
 
 class Settings(BaseSettings):
-    postgres_user: str = "veditor"
-    postgres_password: str = "password"
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
     postgres_db: str = "veditor"
+    # The minimal config below for PostgreSQL is for "peer" mode,
+    # which is enabled by default under Linux.
+    # `None` means using the Postgres user with the same username as Linux user.
+    postgres_user: str | None = None
+    postgres_password: str = ""
+    postgres_host: str = ""
+    postgres_port: int | None = None
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -145,10 +148,43 @@ class Settings(BaseSettings):
         return self.environment.lower() in ("production", "prod")
 
     @property
-    def database_url(self) -> str:
-        user = quote_plus(self.postgres_user)
-        password = quote_plus(self.postgres_password)
-        return f"postgresql+psycopg://{user}:{password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+    def testing_db_name(self):
+        """
+        Deduce database name to use in test.
+
+        The convention is to prefix the main database name with "test_".
+        For example, "veditor" -> "test_veditor".
+        Why not suffix, like "veditor_test"? It is to prevent the mistake
+        when the developer types "ved", see some autocomplete then quickly select
+        the one without "_test".
+        """
+        return f"test_{self.postgres_db}"
+
+    @property
+    def database_url(self) -> sqlalchemy.URL:
+        return sqlalchemy.URL.create(
+            "postgresql+psycopg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
+
+    @property
+    def testing_database_url(self) -> sqlalchemy.URL:
+        """
+        Create database URL for use in test.
+        """
+        db_name = f"test_{self.postgres_db}"
+        return sqlalchemy.URL.create(
+            "postgresql+psycopg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=db_name,
+        )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

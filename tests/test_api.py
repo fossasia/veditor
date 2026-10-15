@@ -7,31 +7,13 @@ from sqlalchemy.orm import sessionmaker
 
 from app import models
 from app.auth import get_client
-from app.db import engine, get_db
+from app.db import get_db
 from app.main import app
 from app.storage import get_storage_backend
 
 client = TestClient(app)
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
-
-
-@pytest.fixture
-def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(
-        bind=connection, join_transaction_mode="create_savepoint"
-    )
-    app.dependency_overrides[get_db] = lambda: session
-
-    try:
-        yield session
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        session.close()
-        transaction.rollback()
-        connection.close()
 
 
 # ---------------------------------------------------------------------------

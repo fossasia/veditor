@@ -5,7 +5,7 @@ description = "VEditor"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.141.1",
+    "fastapi[standard]>=0.143.3",
     "uvicorn>=0.52.3",
     "rq>=2.11.0",
     "redis>=8.1.0",
@@ -20,6 +20,8 @@ dependencies = [
     "python-multipart>=0.0.20",
     "argon2-cffi>=23.1.0",
     "pyjwt>=2.10.1",
+    # FastAPI suggests to use `httpx2` instead of the deprecated `httpx`.
+    "httpx2>=2.13.1",
 ]
 
 [project.scripts]
@@ -27,10 +29,15 @@ veditor = "app.cli:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "httpx>=0.28.1",
     "ruff>=0.16.3",
     "pre-commit>=4.6.2",
+    "ptpython>=3.0.32",
+    "mypy>=2.4.0",
+]
+test = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-env>=1.8.0",
 ]
 
 [build-system]
@@ -44,3 +51,14 @@ packages = ["app"]
 line-length = 88
 target-version = "py314"
 exclude = ["migrations"]
+
+[tool.mypy]
+python_version = "3.14"
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true

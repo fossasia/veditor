@@ -14,47 +14,31 @@ jobs:
   smoke-test-native:
     name: Native Smoke Test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: veditor_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_HOST: localhost
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: veditor_test
-      REDIS_URL: redis://localhost:6379/0
+      ALLOW_SMOKE_DB_WIPE: "1"
 
     steps:
       - uses: actions/checkout@v7
+      # PostgreSQL is pre-installed on the runner, but its service is off.
+      - name: Install Redis
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+      - name: Start PostgreSQL
+        run: sudo systemctl start postgresql
+      - name: Set up database (peer auth, like README Linux setup)
+        run: |
+          sudo -u postgres createuser -s "$USER"
+          # POSTGRES_DB stays "veditor" (the default); tests use the derived
+          # "test_veditor" database (see app/config.py: Settings.testing_db_name).
+          createdb test_veditor
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.14"
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --group test
       - name: Run migrations
         run: uv run alembic upgrade head
       - name: Run API in background
@@ -83,7 +67,7 @@ jobs:
           enable-cache: true
           python-version: "3.14"
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --group test
       - name: Run migrations against docker stack
         run: uv run alembic upgrade head
       - name: Run smoke test

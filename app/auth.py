@@ -1,6 +1,7 @@
 import hashlib
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from fastapi import Cookie, Depends, HTTPException, Request, Security, status
@@ -22,6 +23,14 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 bearer_security = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
+
+class AuthRole(StrEnum):
+    USER = "user"
+    ORGANIZER = "organizer"
+    SPEAKER = "speaker"
+    ADMIN = "admin"
+
+
 ROLE_HIERARCHY: dict[str, int] = {
     "user": 0,
     "speaker": 1,
@@ -35,7 +44,7 @@ class CurrentUser(BaseModel):
     client_id: int | None = None
     email: str | None = None
     display_name: str | None = None
-    role: Literal["user", "organizer", "speaker", "admin"] = "user"
+    role: AuthRole = AuthRole.USER
     source: Literal["api_key", "cookie", "jwt", "sso"]
     event_ids: list[int] = Field(default_factory=list)
     scope_type: Literal["event", "talk"] | None = None
@@ -56,11 +65,11 @@ class CurrentUser(BaseModel):
 
     @property
     def is_admin(self) -> bool:
-        return self.role == "admin"
+        return self.role == AuthRole.ADMIN
 
     @property
     def is_human_admin(self) -> bool:
-        return self.role == "admin" and not self.is_machine and not self.is_sso
+        return self.role == AuthRole.ADMIN and not self.is_machine and not self.is_sso
 
     def has_event_access(self, event_id: int) -> bool:
         if self.is_platform or self.is_human_admin:
@@ -90,7 +99,7 @@ def lock_active_admins(session: Session) -> list[int]:
         .with_for_update()
         .all()
     )
-    return [r[0] if isinstance(r, (tuple, list)) else getattr(r, "id", r) for r in rows]
+    return [int(row[0]) for row in rows]
 
 
 def get_client(
@@ -179,7 +188,7 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
         user_id=None,
         client_id=client.id,
         email=None,
-        role="admin",
+        role=AuthRole.ADMIN,
         source="api_key",
         event_ids=list(client.event_ids or []),
         is_platform=bool(getattr(client, "is_platform", False)),
@@ -187,8 +196,8 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
 
 
 def get_current_user(
-    request: Request = None,
-    db: Annotated[Session, Depends(get_db)] = None,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
     api_key: Annotated[str | None, Security(api_key_header)] = None,
     cookie_token: Annotated[str | None, Cookie(alias="veditor_session")] = None,
     cookie_api_key: Annotated[str | None, Cookie(alias="veditor_api_key")] = None,
@@ -207,6 +216,9 @@ def get_current_user(
     Raises HTTP 401 Unauthorized if no credentials are present, or if
     provided credentials are invalid, expired, or deactivated.
     """
+    if db is None:
+        raise RuntimeError("Database session is required")
+
     app_overrides = (
         getattr(getattr(request, "app", None), "dependency_overrides", {})
         if request
@@ -220,7 +232,7 @@ def get_current_user(
                 user_id=None,
                 client_id=getattr(client, "id", None),
                 email=None,
-                role="admin",
+                role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
                 is_platform=bool(getattr(client, "is_platform", False)),
@@ -259,7 +271,7 @@ def get_current_user(
             client_id=None,
             email=sso_payload.get("email"),
             display_name=sso_payload.get("display_name"),
-            role=sso_payload["role"],
+            role=AuthRole(sso_payload["role"]),
             source="sso",
             event_ids=[sso_payload["scope_id"]]
             if sso_payload.get("scope_type") == "event"
@@ -285,7 +297,7 @@ def get_current_user(
                     client_id=None,
                     email=sso_payload.get("email"),
                     display_name=sso_payload.get("display_name"),
-                    role=sso_payload["role"],
+                    role=AuthRole(sso_payload["role"]),
                     source="sso",
                     event_ids=[sso_payload["scope_id"]]
                     if sso_payload.get("scope_type") == "event"
@@ -316,7 +328,7 @@ def get_current_user(
                 return CurrentUser(
                     user_id=user.id,
                     email=user.email,
-                    role=user.role,
+                    role=AuthRole(user.role),
                     source="cookie",
                     event_ids=[],
                 )
@@ -341,7 +353,7 @@ def get_current_user(
                 user_id=None,
                 client_id=client.id,
                 email=None,
-                role="admin",
+                role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
                 is_platform=bool(getattr(client, "is_platform", False)),
@@ -395,7 +407,7 @@ def get_current_user(
             return CurrentUser(
                 user_id=user.id,
                 email=user.email,
-                role=user.role,
+                role=AuthRole(user.role),
                 source="jwt",
                 event_ids=[],
             )
@@ -407,7 +419,7 @@ def get_current_user(
                 client_id=None,
                 email=sso_payload.get("email"),
                 display_name=sso_payload.get("display_name"),
-                role=sso_payload["role"],
+                role=AuthRole(sso_payload["role"]),
                 source="sso",
                 event_ids=[sso_payload["scope_id"]]
                 if sso_payload.get("scope_type") == "event"

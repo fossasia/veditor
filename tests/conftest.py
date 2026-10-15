@@ -5,20 +5,57 @@ from __future__ import annotations
 import logging
 import math
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import av
 import numpy as np
 import pytest
+from fastapi import FastAPI
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
+from app import models as _models  # noqa: F401
+from app.config import settings
+from app.db import Base, get_db
+from app.main import app
 from app.pipeline.detect import container_duration_seconds
 from app.storage import StorageBackend, StorageKeyNotFoundError
 
 logger = logging.getLogger(__name__)
+
+_test_engine = create_engine(settings.testing_database_url)
+TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
+
+
+@pytest.fixture(scope="session")
+def setup_test_database() -> Iterator[None]:
+    Base.metadata.create_all(bind=_test_engine)
+    yield
+
+
+@pytest.fixture
+def db_session(setup_test_database: Iterator[None]) -> Iterator[Session]:
+    connection = _test_engine.connect()
+    transaction = connection.begin()
+    session = TestSessionLocal(bind=connection)
+    previous_override = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        yield session
+    finally:
+        if previous_override is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_override
+        session.close()
+        transaction.rollback()
+        connection.close()
+
 
 # --- Fake Storage ---
 
@@ -62,7 +99,7 @@ class FakeStorageBackend(StorageBackend):
 
     DEFAULT_FREE_BYTES = 1024 * 1024 * 1024 * 100  # 100GB default
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.storage: dict[str, bytes] = {}
         self._free_bytes: int = self.DEFAULT_FREE_BYTES
 
@@ -119,7 +156,7 @@ def fake_storage() -> FakeStorageBackend:
     return FakeStorageBackend()
 
 
-def override_storage_backend(app, fake_backend: FakeStorageBackend):
+def override_storage_backend(app: FastAPI, fake_backend: FakeStorageBackend) -> None:
     """
     Helper to override the FastAPI dependency for route-level tests.
     Usage:
@@ -176,35 +213,39 @@ def generate_clip(
 
     target = _target_path(output_dir)
     with av.open(target, mode="w") as container:
-        video_stream = None
-        audio_stream = None
+        video_stream: av.VideoStream | None = None
+        audio_stream: av.AudioStream | None = None
 
         if has_video:
             width, height = resolution
-            video_stream = container.add_stream(_video_codec(codec), rate=fps)
+            video_stream = cast(
+                av.VideoStream, container.add_stream(_video_codec(codec), rate=fps)
+            )
             video_stream.width = width
             video_stream.height = height
             video_stream.pix_fmt = "yuv420p"
 
         if has_audio:
-            audio_stream = container.add_stream(AUDIO_CODEC, rate=sample_rate)
+            audio_stream = cast(
+                av.AudioStream, container.add_stream(AUDIO_CODEC, rate=sample_rate)
+            )
             audio_stream.layout = "mono"
 
         if video_stream is not None:
             frame_count = max(1, math.ceil(duration_s * fps))
             for frame_index in range(frame_count):
-                frame = av.VideoFrame.from_ndarray(
+                video_frame = av.VideoFrame.from_ndarray(
                     _video_array(frame_index, frame_count, resolution, pattern),
                     format="rgb24",
                 )
-                for packet in video_stream.encode(frame):
+                for packet in video_stream.encode(video_frame):
                     container.mux(packet)
             for packet in video_stream.encode():
                 container.mux(packet)
 
         if audio_stream is not None:
-            for frame in _audio_frames(duration_s, sample_rate, audio_waveform):
-                for packet in audio_stream.encode(frame):
+            for audio_frame in _audio_frames(duration_s, sample_rate, audio_waveform):
+                for packet in audio_stream.encode(audio_frame):
                     container.mux(packet)
             for packet in audio_stream.encode():
                 container.mux(packet)
@@ -355,20 +396,20 @@ def _audio_frames(
 
 
 @pytest.fixture
-def make_clip():
+def make_clip() -> Callable[..., Path]:
     return generate_clip
 
 
 @pytest.fixture
-def make_corrupt_clip():
+def make_corrupt_clip() -> Callable[..., Path]:
     return generate_corrupt_clip
 
 
 @pytest.fixture
-def make_mismatched_clip():
+def make_mismatched_clip() -> Callable[..., Path]:
     return generate_mismatched_duration_clip
 
 
 @pytest.fixture
-def inspect_clip():
+def inspect_clip() -> Callable[[Path | str], ClipInfo]:
     return open_and_inspect

@@ -22,7 +22,7 @@ from app.retention import (
 )
 from app.schemas import EventCreate, EventRead
 
-engine = create_engine(settings.database_url)
+engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -30,17 +30,6 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 def setup_database():
     Base.metadata.create_all(bind=engine)
     yield
-
-
-@pytest.fixture
-def db_session(setup_database):
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-    yield session
-    session.close()
-    transaction.rollback()
-    connection.close()
 
 
 def test_default_retention_policy():

@@ -25,6 +25,6 @@ jobs:
           enable-cache: true
           python-version: "3.14"
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --group dev
       - name: Run pre-commit
         run: uv run pre-commit run --all-files

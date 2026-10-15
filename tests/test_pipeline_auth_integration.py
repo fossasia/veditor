@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key, require_event_access
 from app.cli import create_admin
-from app.db import Base, SessionLocal, engine, get_db
+from app.db import Base, engine
 from app.main import app
 from app.security import create_access_token, create_session_token, hash_password
 
@@ -23,58 +23,6 @@ def setup_database():
 @pytest.fixture
 def client():
     return TestClient(app)
-
-
-@pytest.fixture
-def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    created = []
-    orig_add = db.add
-
-    def track_add(instance):
-        created.append(instance)
-        return orig_add(instance)
-
-    db.add = track_add
-    try:
-        yield db
-    finally:
-        try:
-            db.rollback()
-            for obj in reversed(created):
-                try:
-                    db.delete(obj)
-                    db.commit()
-                except Exception:  # noqa: BLE001
-                    db.rollback()
-            try:
-                db.query(models.Review).filter(
-                    models.Review.talk.has(
-                        models.Talk.event.has(models.Event.name.like("%Pipeline%"))
-                    )
-                ).delete(synchronize_session=False)
-                db.query(models.Talk).filter(
-                    models.Talk.event.has(models.Event.name.like("%Pipeline%"))
-                ).delete(synchronize_session=False)
-                db.query(models.Event).filter(
-                    models.Event.name.like("%Pipeline%")
-                ).delete(synchronize_session=False)
-                db.query(models.Client).filter(
-                    models.Client.hashed_key == hash_api_key("scoped-pipeline-api-key")
-                ).delete(synchronize_session=False)
-                db.query(models.User).filter(
-                    models.User.email.like("%@pipeline-test.com")
-                ).delete(synchronize_session=False)
-                db.query(models.User).filter(
-                    models.User.email == "root_admin@test.com"
-                ).delete(synchronize_session=False)
-                db.commit()
-            except Exception:  # noqa: BLE001
-                db.rollback()
-        finally:
-            app.dependency_overrides.pop(get_db, None)
-            db.close()
 
 
 # Mount event endpoint using require_event_access dependency for integration gating

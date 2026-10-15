@@ -21,9 +21,9 @@ def clean_db():
     db_name = os.getenv("POSTGRES_DB", "")
     if not db_name:
         pytest.skip("Smoke test requires POSTGRES_DB to identify a test database.")
-    if not (db_name.endswith("_test") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
+    if not (db_name.startswith("test_") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
         pytest.fail(
-            f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a *_test database."
+            f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a test_* database."
         )
 
     session = SessionLocal()
