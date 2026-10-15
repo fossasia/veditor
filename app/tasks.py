@@ -16,6 +16,7 @@ import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1221,6 +1222,18 @@ class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
 _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 
+def _redact_url(url: str) -> str:
+    """Return *url* without credentials, query string or fragment, for logging."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        if parts.port is not None:
+            host = f"{host}:{parts.port}"
+    except ValueError:
+        return "<invalid url>"
+    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
 def job_deliver_webhook(
     webhook_url: str,
     webhook_secret: str,
@@ -1273,20 +1286,20 @@ def job_deliver_webhook(
                 if resp_status is not None and 200 <= resp_status < 300:
                     logger.info(
                         "Webhook delivered successfully to %s on attempt %d",
-                        webhook_url,
+                        _redact_url(webhook_url),
                         attempt,
                     )
                     return True
                 logger.warning(
                     "Webhook delivery to %s returned HTTP %s on attempt %d",
-                    webhook_url,
+                    _redact_url(webhook_url),
                     resp_status,
                     attempt,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Webhook delivery to %s failed on attempt %d: %s",
-                webhook_url,
+                _redact_url(webhook_url),
                 attempt,
                 exc,
             )
@@ -1296,7 +1309,7 @@ def job_deliver_webhook(
 
     logger.info(
         "Webhook delivery to %s failed after 2 attempts. Abandoning quietly.",
-        webhook_url,
+        _redact_url(webhook_url),
     )
     return False
 
