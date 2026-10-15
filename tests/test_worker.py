@@ -232,6 +232,9 @@ with (
     _run_single_worker(["light"], "redis://localhost:6379/0", None, burst=True)
 
 logging.getLogger("app.email").info("verify link: http://localhost/verify-email")
+# Library loggers keep their defaults; SQLAlchemy at INFO would log bound
+# parameters such as email addresses.
+assert not logging.getLogger("sqlalchemy.engine").isEnabledFor(logging.INFO)
 """
     result = subprocess.run(
         [sys.executable, "-c", code],
