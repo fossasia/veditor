@@ -16,7 +16,13 @@ from app.db import get_db
 from app.main import app
 from app.review_handlers import handle_needs_work
 from app.storage import get_storage_backend
-from app.tasks import job_cut, job_deliver_webhook, job_preview, job_publish
+from app.tasks import (
+    _redact_url,
+    job_cut,
+    job_deliver_webhook,
+    job_preview,
+    job_publish,
+)
 from app.webhook import dispatch_talk_webhook, get_candidate_clients
 from tests.conftest import FakeStorageBackend
 
@@ -287,6 +293,20 @@ def test_job_deliver_webhook_logs_redacted_url(caplog):
     assert "https://example.com:8443/hook" in caplog.text
     for secret_part in ("user", "pass", "token=abc", "frag"):
         assert secret_part not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://[::1]:8443/hook?t=1", "https://[::1]:8443/hook"),
+        ("https://u:p@[2001:db8::1]/hook", "https://[2001:db8::1]/hook"),
+        (None, "<invalid url>"),
+        (b"https://example.com/hook", "<invalid url>"),
+        (123, "<invalid url>"),
+    ],
+)
+def test_redact_url_ipv6_and_non_strings(url, expected):
+    assert _redact_url(url) == expected
 
 
 def test_job_deliver_webhook_failure_log_omits_url(caplog):
