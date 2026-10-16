@@ -168,6 +168,8 @@ def test_validate_system_setting():
     _validate_system_setting("detect_duration_tolerance_seconds", "120.0")
     _validate_system_setting("detect_duration_tolerance_seconds", "1800.0")
     _validate_system_setting("loudness_target_lufs", "-23.0")
+    _validate_system_setting("speaker_magic_link_expire_hours", "168")
+    _validate_system_setting("speaker_magic_link_expire_hours", "24")
     _validate_system_setting("default_preview_preset", "big_video")
     for preset_name in ("480p", "720p", "1080p_default", "1440p"):
         _validate_system_setting("default_transcode_preset", preset_name)
@@ -190,6 +192,12 @@ def test_validate_system_setting():
     for bad_tol in ("-10.0", "0.0", "59.9", "1800.1", "invalid_num"):
         with pytest.raises(HTTPException):
             _validate_system_setting("detect_duration_tolerance_seconds", bad_tol)
+
+    # Invalid speaker_magic_link_expire_hours
+    for bad_hrs in ("0", "-10", "abc", "1.5"):
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_system_setting("speaker_magic_link_expire_hours", bad_hrs)
+        assert exc_info.value.status_code == 400
 
     # Invalid LUFS (outside -70.0 to -5.0)
     for bad_lufs in ("-4.9", "-4.0", "0.0", "5.0", "-70.1", "-80.0"):

@@ -1287,3 +1287,26 @@ def test_update_and_delete_webhook_multi_event_client_isolation(mock_db):
     assert del_res.status_code == 204
     assert shared_client_2.event_ids == [3]
     assert shared_client_2.webhook_url == "https://shared2.example.com/hook"
+
+
+def test_event_create_and_patch_speaker_magic_link_expire_hours(mock_db):
+    """Event create and patch support speaker_magic_link_expire_hours."""
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id=5, role="organizer", source="jwt"
+    )
+
+    mock_event = models.Event(
+        id=99,
+        name="Test Expiry Event",
+        created_by_user_id=5,
+        speaker_magic_link_expire_hours=72,
+    )
+    mock_db.query.return_value.filter.return_value.first.return_value = mock_event
+
+    response = client.patch(
+        "/events/99",
+        json={"speaker_magic_link_expire_hours": 336},
+    )
+    assert response.status_code == 200
+    assert mock_event.speaker_magic_link_expire_hours == 336

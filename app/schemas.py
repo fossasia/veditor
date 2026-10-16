@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PositiveInt,
     computed_field,
     field_validator,
     model_validator,
@@ -22,6 +23,7 @@ class EventBase(BaseModel):
     source: str | None = None
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
+    speaker_magic_link_expire_hours: PositiveInt | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -40,6 +42,7 @@ class EventUpdate(BaseModel):
     source: str | None = None
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
+    speaker_magic_link_expire_hours: PositiveInt | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -411,6 +414,7 @@ class TalkSSOTokenRequest(BaseModel):
     email: str | None = None
     display_name: str | None = None
     event_id: int | str | None = None
+    expires_in_seconds: PositiveInt | None = None
 
 
 class ApiKeyRead(BaseModel):

@@ -239,7 +239,7 @@ def test_talk_sso_token_success(mock_db):
     assert data["scope_type"] == "talk"
     assert data["scope_id"] == 10
     assert data["role"] == "speaker"
-    assert data["expires_in_seconds"] == settings.sso_token_expire_seconds
+    assert data["expires_in_seconds"] == settings.speaker_magic_link_expire_hours * 3600
     assert data["url"] == f"/studio/talks/10?sso_token={data['token']}"
 
     payload = decode_sso_token(data["token"])
@@ -249,6 +249,57 @@ def test_talk_sso_token_success(mock_db):
     assert payload["role"] == "speaker"
     assert "user_id" not in payload
     assert "sub" not in payload
+
+
+def test_talk_sso_token_custom_expires_in_seconds(mock_db):
+    """Valid API client can supply a custom expires_in_seconds for talk SSO token."""
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_talk = models.Talk(
+        id=10,
+        event_id=1,
+        title="Opening Keynote",
+        room="Main",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="waiting_for_files",
+    )
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
+
+    response = client.post(
+        "/talks/10/sso-token",
+        headers={"X-API-Key": "test"},
+        json={"expires_in_seconds": 7200},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expires_in_seconds"] == 7200
+
+    payload = decode_sso_token(data["token"])
+    assert payload is not None
+    assert payload["scope_id"] == 10
+
+
+def test_talk_sso_token_invalid_expires_in_seconds(mock_db):
+    """API client cannot supply a non-positive expires_in_seconds."""
+    mock_client = models.Client(id=1, event_ids=[1])
+    app.dependency_overrides[get_client] = lambda: mock_client
+
+    response = client.post(
+        "/talks/10/sso-token",
+        headers={"X-API-Key": "test"},
+        json={"expires_in_seconds": 0},
+    )
+    assert response.status_code == 422
+
+    response_neg = client.post(
+        "/talks/10/sso-token",
+        headers={"X-API-Key": "test"},
+        json={"expires_in_seconds": -10},
+    )
+    assert response_neg.status_code == 422
 
 
 # ── 3. Identity Resolution (get_current_user) ─────────────────────────────────
@@ -611,8 +662,13 @@ def test_studio_dashboard_landing_with_event_sso_token(mock_db):
 
 
 def test_studio_talk_landing_with_talk_sso_token(mock_db):
-    """Landing on /studio/talks/10?sso_token=... sets cookie and 303 redirects."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    """Landing on /studio/talks/10?sso_token=... sets cookie and 303 redirects with matched max_age."""
+    talk_token = create_sso_token(
+        scope_type="talk",
+        scope_id=10,
+        role="speaker",
+        expires_in_seconds=settings.speaker_magic_link_expire_hours * 3600,
+    )
 
     response = client.get(
         f"/studio/talks/10?sso_token={talk_token}", follow_redirects=False
@@ -621,6 +677,15 @@ def test_studio_talk_landing_with_talk_sso_token(mock_db):
     assert response.headers["location"] == "/studio/talks/10"
     assert "veditor_session" in response.cookies
     assert response.cookies["veditor_session"] == talk_token
+    # Verify cookie Max-Age reflects token's validity window
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "Max-Age=" in set_cookie
+    # Should be well above default 300s
+    import re
+
+    m = re.search(r"Max-Age=(\d+)", set_cookie)
+    assert m is not None
+    assert int(m.group(1)) > 300
 
 
 def test_studio_landing_with_invalid_sso_token():
@@ -962,3 +1027,61 @@ def test_studio_dashboard_displays_sso_email_identity(mock_db):
     response = client.get("/studio", cookies={"veditor_session": event_token})
     assert response.status_code == 200
     assert "organizer@eventyay.com" in response.text
+
+
+def test_talk_sso_token_event_override(mock_db):
+    """Talk SSO token honors per-event speaker_magic_link_expire_hours override."""
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_event = models.Event(
+        id=1, name="Custom Event", speaker_magic_link_expire_hours=48
+    )
+    mock_talk = models.Talk(
+        id=15,
+        event_id=1,
+        title="Event Override Talk",
+        room="Room 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="waiting_for_files",
+    )
+    mock_talk.event = mock_event
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
+
+    response = client.post("/talks/15/sso-token", headers={"X-API-Key": "test"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expires_in_seconds"] == 48 * 3600
+
+
+def test_talk_sso_token_request_override_beats_event_override(mock_db):
+    """Explicit expires_in_seconds in payload beats per-event override."""
+    mock_client = models.Client(id=1, event_ids=[1])
+    mock_event = models.Event(
+        id=1, name="Custom Event", speaker_magic_link_expire_hours=48
+    )
+    mock_talk = models.Talk(
+        id=16,
+        event_id=1,
+        title="Explicit Override Talk",
+        room="Room 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="waiting_for_files",
+    )
+    mock_talk.event = mock_event
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
+
+    response = client.post(
+        "/talks/16/sso-token",
+        headers={"X-API-Key": "test"},
+        json={"expires_in_seconds": 1800},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["expires_in_seconds"] == 1800

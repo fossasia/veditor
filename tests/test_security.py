@@ -597,6 +597,19 @@ def test_settings_sso_token_expire_seconds_validation():
     assert s.sso_token_expire_seconds == 600
 
 
+def test_settings_speaker_magic_link_expire_hours_validation():
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="token expiration values must be positive"):
+        Settings(speaker_magic_link_expire_hours=0)
+
+    with pytest.raises(ValueError, match="token expiration values must be positive"):
+        Settings(speaker_magic_link_expire_hours=-5)
+
+    s = Settings(speaker_magic_link_expire_hours=72)
+    assert s.speaker_magic_link_expire_hours == 72
+
+
 def test_is_valid_email():
     # Valid RFC 5322 emails
     assert is_valid_email("user@example.com") is True

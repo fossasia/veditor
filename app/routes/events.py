@@ -54,6 +54,7 @@ def create_event(
         source=payload.source,
         external_id=payload.external_id,
         retention_overrides=payload.retention_overrides,
+        speaker_magic_link_expire_hours=payload.speaker_magic_link_expire_hours,
         created_by_user_id=created_by,
     )
     db.add(event)
@@ -130,6 +131,9 @@ def update_event(
 
     if payload.retention_overrides is not None:
         event.retention_overrides = payload.retention_overrides
+
+    if payload.speaker_magic_link_expire_hours is not None:
+        event.speaker_magic_link_expire_hours = payload.speaker_magic_link_expire_hours
 
     db.commit()
     db.refresh(event)

@@ -35,6 +35,21 @@
           required
         >
       </div>
+      <div class="event-create-field">
+        <label for="event-review-window" class="event-create-label">Speaker Review Window</label>
+        <select
+          id="event-review-window"
+          name="speaker_magic_link_expire_hours"
+          class="input-field"
+        >
+          <option value="" selected>Default (Platform Setting: {{ global_speaker_magic_link_expire_hours }}h)</option>
+          <option value="24">1 day (24 hours)</option>
+          <option value="72">3 days (72 hours)</option>
+          <option value="168">7 days (168 hours)</option>
+          <option value="336">14 days (336 hours)</option>
+          <option value="720">30 days (720 hours)</option>
+        </select>
+      </div>
       <button type="submit" class="btn btn-primary" id="btn-create-event">
         Create Event
       </button>
@@ -57,6 +72,7 @@
           <th class="col-id">ID</th>
           <th>Event Name</th>
           <th>Created By / Owner</th>
+          <th>Speaker Review Window</th>
           <th class="col-actions-right">Actions</th>
         </tr>
       </thead>
@@ -78,6 +94,13 @@
               <span class="text-muted">—</span>
             {% endif %}
           </td>
+          <td>
+            {% if event.speaker_magic_link_expire_hours %}
+              {{ event.speaker_magic_link_expire_hours }}h
+            {% else %}
+              <span class="text-muted">Default ({{ global_speaker_magic_link_expire_hours }}h)</span>
+            {% endif %}
+          </td>
           <td class="col-actions-right">
             <div class="row-actions-group">
               <a href="/studio?event_id={{ event.id }}" class="btn btn-ghost btn-sm" title="Open Event">
@@ -86,7 +109,7 @@
               <button type="button" class="btn btn-ghost btn-sm btn-api-keys" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Manage API Keys">
                 API Keys
               </button>
-              <button type="button" class="btn btn-ghost btn-sm btn-edit-event" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Edit Event Name">
+              <button type="button" class="btn btn-ghost btn-sm btn-edit-event" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" data-event-expire-hours="{{ event.speaker_magic_link_expire_hours or '' }}" title="Edit Event">
                 Edit
               </button>
               <button type="button" class="btn btn-ghost btn-sm btn-delete-event btn-danger-ghost" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Delete Event">
@@ -120,6 +143,21 @@
       <div class="events-modal-field">
         <label for="edit-event-name" class="event-create-label">Event Name</label>
         <input type="text" id="edit-event-name" name="name" class="input-field" required>
+      </div>
+      <div class="events-modal-field">
+        <label for="edit-event-review-window" class="event-create-label">Speaker Review Window</label>
+        <select
+          id="edit-event-review-window"
+          name="speaker_magic_link_expire_hours"
+          class="input-field"
+        >
+          <option value="">Default (Platform Setting: {{ global_speaker_magic_link_expire_hours }}h)</option>
+          <option value="24">1 day (24 hours)</option>
+          <option value="72">3 days (72 hours)</option>
+          <option value="168">7 days (168 hours)</option>
+          <option value="336">14 days (336 hours)</option>
+          <option value="720">30 days (720 hours)</option>
+        </select>
       </div>
 
       <div class="events-modal-footer">

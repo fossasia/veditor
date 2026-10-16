@@ -1,5 +1,6 @@
 import logging
 import urllib.parse
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.auth import CurrentUser, hash_api_key
-from app.config import settings
+from app.config import get_setting, settings
 from app.db import get_db
 from app.queue import light_queue
 from app.routes.auth import _get_authenticated_user_from_cookie
@@ -333,11 +334,17 @@ def dashboard(
             dest_url = f"/studio/talks/{sso_payload['scope_id']}"
         else:
             dest_url = f"/studio?event_id={sso_payload['scope_id']}"
+        exp_timestamp = sso_payload.get("exp")
+        if isinstance(exp_timestamp, (int, float)):
+            cookie_max_age = max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
+        else:
+            cookie_max_age = settings.sso_token_expire_seconds
+
         resp = RedirectResponse(url=dest_url, status_code=status.HTTP_303_SEE_OTHER)
         resp.set_cookie(
             key="veditor_session",
             value=raw_sso,
-            max_age=settings.sso_token_expire_seconds,
+            max_age=cookie_max_age,
             httponly=True,
             samesite="lax",
             secure=is_secure,
@@ -768,13 +775,19 @@ def studio(
         is_secure = (request.url.scheme == "https") or (
             settings.environment.lower() in ("production", "prod")
         )
+        exp_timestamp = sso_payload.get("exp")
+        if isinstance(exp_timestamp, (int, float)):
+            cookie_max_age = max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
+        else:
+            cookie_max_age = settings.sso_token_expire_seconds
+
         resp = RedirectResponse(
             url=f"/studio/talks/{talk_id}", status_code=status.HTTP_303_SEE_OTHER
         )
         resp.set_cookie(
             key="veditor_session",
             value=raw_sso,
-            max_age=settings.sso_token_expire_seconds,
+            max_age=cookie_max_age,
             httponly=True,
             samesite="lax",
             secure=is_secure,
@@ -951,12 +964,18 @@ def list_studio_events(
         .all()
     )
 
+    global_hours = get_setting(
+        "speaker_magic_link_expire_hours",
+        default=settings.speaker_magic_link_expire_hours,
+        db=db,
+    )
     return templates.TemplateResponse(
         request,
         "events.html.jinja",
         {
             "events": events,
             "error": None,
+            "global_speaker_magic_link_expire_hours": int(global_hours),
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -967,6 +986,7 @@ def create_studio_event(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
 ):
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
@@ -994,19 +1014,60 @@ def create_studio_event(
             .order_by(models.Event.id.asc())
             .all()
         )
+        global_hours = get_setting(
+            "speaker_magic_link_expire_hours",
+            default=settings.speaker_magic_link_expire_hours,
+            db=db,
+        )
         return templates.TemplateResponse(
             request,
             "events.html.jinja",
             {
                 "events": events,
                 "error": "Event name is required.",
+                "global_speaker_magic_link_expire_hours": int(global_hours),
             },
             status_code=status.HTTP_400_BAD_REQUEST,
             headers={"Cache-Control": "no-store"},
         )
 
+    parsed_hours = None
+    if speaker_magic_link_expire_hours and str(speaker_magic_link_expire_hours).strip():
+        raw_val = str(speaker_magic_link_expire_hours).strip()
+        if raw_val.lower() not in ("default", "none"):
+            try:
+                val = int(raw_val)
+                if val <= 0:
+                    raise ValueError
+                parsed_hours = val
+            except ValueError, TypeError:
+                events = (
+                    db.query(models.Event)
+                    .options(selectinload(models.Event.created_by_user))
+                    .filter(models.Event.created_by_user_id == user.id)
+                    .order_by(models.Event.id.asc())
+                    .all()
+                )
+                global_hours = get_setting(
+                    "speaker_magic_link_expire_hours",
+                    default=settings.speaker_magic_link_expire_hours,
+                    db=db,
+                )
+                return templates.TemplateResponse(
+                    request,
+                    "events.html.jinja",
+                    {
+                        "events": events,
+                        "error": "Speaker review window must be a positive integer",
+                        "global_speaker_magic_link_expire_hours": int(global_hours),
+                    },
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    headers={"Cache-Control": "no-store"},
+                )
+
     event = models.Event(
         name=clean_name,
+        speaker_magic_link_expire_hours=parsed_hours,
         created_by_user_id=user.id,
     )
     db.add(event)
@@ -1025,6 +1086,7 @@ def edit_studio_event(
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
 ):
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
@@ -1063,6 +1125,21 @@ def edit_studio_event(
         )
 
     event.name = clean_name
+    if speaker_magic_link_expire_hours is not None:
+        raw_h = str(speaker_magic_link_expire_hours).strip()
+        if not raw_h or raw_h.lower() in ("default", "none"):
+            event.speaker_magic_link_expire_hours = None
+        else:
+            try:
+                val = int(raw_h)
+                if val <= 0:
+                    raise ValueError
+                event.speaker_magic_link_expire_hours = val
+            except ValueError, TypeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Speaker review window must be a positive integer",
+                )
     db.commit()
     return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
 
