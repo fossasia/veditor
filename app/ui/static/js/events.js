@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
         editInput.value = name || '';
       }
       if (editModal) {
-        editModal.classList.add('active');
+        Modal.open(editModal);
         if (editInput) editInput.focus();
       }
     });
@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Close edit modal
   document.querySelectorAll('.btn-close-edit-modal').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (editModal) editModal.classList.remove('active');
+      if (editModal) Modal.close(editModal);
     });
   });
 
@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
         deleteNameDisplay.textContent = `"${name}"`;
       }
       if (deleteModal) {
-        deleteModal.classList.add('active');
+        Modal.open(deleteModal);
       }
     });
   });
@@ -50,19 +50,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Close delete modal
   document.querySelectorAll('.btn-close-delete-modal').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (deleteModal) deleteModal.classList.remove('active');
+      if (deleteModal) Modal.close(deleteModal);
     });
-  });
-
-  // Close modals when clicking backdrop
-  [editModal, deleteModal].forEach(modal => {
-    if (modal) {
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          modal.classList.remove('active');
-        }
-      });
-    }
   });
 
   // ── API Keys Modal Handling ─────────────────────────────────────
@@ -184,7 +173,13 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.btn-revoke-key').forEach(b => {
         b.addEventListener('click', async () => {
           const keyId = b.getAttribute('data-key-id');
-          if (!confirm('Are you sure you want to revoke this API key? External integrations using this key will stop working.')) {
+          const confirmed = await Modal.confirm({
+            title: 'Revoke API Key',
+            message: 'Are you sure you want to revoke this API key? External integrations using this key will stop working.',
+            confirmText: 'Revoke',
+            variant: 'danger'
+          });
+          if (!confirmed) {
             return;
           }
           b.disabled = true;
@@ -196,12 +191,12 @@ document.addEventListener('DOMContentLoaded', () => {
               if (newKeyInput) newKeyInput.value = '';
               await loadApiKeys(eventId);
             } else {
-              alert('Failed to revoke key');
+              await Modal.alert({ title: 'Revoke API Key', message: 'Failed to revoke key', variant: 'danger' });
               b.disabled = false;
               b.textContent = 'Revoke';
             }
           } catch (e) {
-            alert('Error revoking key: ' + e);
+            await Modal.alert({ title: 'Revoke API Key', message: 'Error revoking key: ' + e, variant: 'danger' });
             b.disabled = false;
             b.textContent = 'Revoke';
           }
@@ -294,7 +289,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (newKeyAlert) newKeyAlert.classList.add('api-key-alert-hidden');
 
       if (apiKeysModal) {
-        apiKeysModal.classList.add('active');
+        Modal.open(apiKeysModal);
         loadApiKeys(eventId);
         loadWebhook(eventId);
       }
@@ -302,7 +297,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function closeApiKeysModal() {
-    if (apiKeysModal) apiKeysModal.classList.remove('active');
+    if (apiKeysModal) Modal.close(apiKeysModal);
     if (newKeyAlert) newKeyAlert.classList.add('api-key-alert-hidden');
     if (newKeyInput) newKeyInput.value = '';
     hideWebhookAlert();
@@ -319,20 +314,18 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', closeApiKeysModal);
   });
 
-  if (apiKeysModal) {
-    apiKeysModal.addEventListener('click', (e) => {
-      if (e.target === apiKeysModal) {
-        closeApiKeysModal();
-      }
-    });
-  }
-
   if (btnGenerateKey) {
     btnGenerateKey.addEventListener('click', async () => {
       if (!currentActiveEventId) return;
       const hasKey = btnGenerateKey.getAttribute('data-has-key') === 'true';
       if (hasKey) {
-        if (!confirm('An active API key already exists for this event. Regenerating will revoke the current key immediately. Are you sure you want to proceed?')) {
+        const confirmed = await Modal.confirm({
+          title: 'Regenerate API Key',
+          message: 'An active API key already exists for this event. Regenerating will revoke the current key immediately. Are you sure you want to proceed?',
+          confirmText: 'Regenerate',
+          variant: 'danger'
+        });
+        if (!confirmed) {
           return;
         }
       }
@@ -351,10 +344,10 @@ document.addEventListener('DOMContentLoaded', () => {
           if (newKeyAlert) newKeyAlert.classList.remove('api-key-alert-hidden');
           await loadApiKeys(currentActiveEventId);
         } else {
-          alert('Failed to generate key');
+          await Modal.alert({ title: 'Generate API Key', message: 'Failed to generate key', variant: 'danger' });
         }
       } catch (err) {
-        alert('Error generating key: ' + err);
+        await Modal.alert({ title: 'Generate API Key', message: 'Error generating key: ' + err, variant: 'danger' });
       } finally {
         btnGenerateKey.disabled = false;
         btnGenerateKey.textContent = btnGenerateKey.getAttribute('data-has-key') === 'true' ? '↻ Regenerate Key' : '+ Generate API Key';
@@ -513,7 +506,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnDeleteWebhook) {
     btnDeleteWebhook.addEventListener('click', async () => {
       if (!currentActiveEventId) return;
-      if (!confirm('Are you sure you want to remove the outbound webhook configuration for this event?')) {
+      const confirmed = await Modal.confirm({
+        title: 'Remove Webhook',
+        message: 'Are you sure you want to remove the outbound webhook configuration for this event?',
+        confirmText: 'Remove',
+        variant: 'danger'
+      });
+      if (!confirmed) {
         return;
       }
       hideWebhookAlert();

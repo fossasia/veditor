@@ -5,6 +5,10 @@
 <link rel="stylesheet" href="/static/css/admin.css">
 {% endblock %}
 
+{% block modal_script %}
+<script src="/static/js/modal.js"></script>
+{% endblock %}
+
 {% block breadcrumb %}
   <span class="current">Admin Console</span>
 {% endblock %}
@@ -64,4 +68,8 @@
     </a>
   </nav>
 </aside>
+{% endblock %}
+
+{% block dynamic_modal %}
+<dialog id="v-dynamic-modal" class="v-modal" aria-hidden="true"></dialog>
 {% endblock %}

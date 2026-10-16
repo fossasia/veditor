@@ -109,39 +109,42 @@
 </div>
 
 <!-- ── MODAL: Edit Event ─────────────────────────────────────────── -->
-<div id="modal-edit-event" class="events-modal-backdrop">
-  <div class="events-modal-card">
-    <div class="events-modal-header">
-      <h3 class="events-modal-title">Edit Event Name</h3>
-      <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal">✕</button>
+<dialog id="modal-edit-event" class="v-modal">
+  <div class="v-modal-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Edit Event Name</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
 
     <form id="edit-event-form" method="post" action="">
-      <div class="events-modal-field">
-        <label for="edit-event-name" class="event-create-label">Event Name</label>
-        <input type="text" id="edit-event-name" name="name" class="input-field" required>
+      <div class="v-modal-body">
+        <div class="v-modal-field">
+          <label for="edit-event-name" class="event-create-label">Event Name</label>
+          <input type="text" id="edit-event-name" name="name" class="input-field" required>
+        </div>
       </div>
 
-      <div class="events-modal-footer">
-        <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal">Cancel</button>
+      <div class="v-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm btn-close-edit-modal" data-modal-close>Cancel</button>
         <button type="submit" class="btn btn-primary btn-sm" id="btn-save-event">
           Save Changes
         </button>
       </div>
     </form>
   </div>
-</div>
+</dialog>
 
 <!-- ── MODAL: API Keys ─────────────────────────────────────────── -->
-<div id="modal-api-keys" class="events-modal-backdrop">
-  <div class="events-modal-card events-modal-card-lg">
-    <div class="events-modal-header">
+<dialog id="modal-api-keys" class="v-modal">
+  <div class="v-modal-card v-modal-card-lg">
+    <div class="v-modal-header">
       <div>
-        <h3 class="events-modal-title">API Key & Integrations for <span id="api-keys-event-name-display"></span></h3>
-        <p class="events-modal-desc">Manage API credentials and outbound webhooks to integrate conference schedules and video pipelines with this event.</p>
+        <h3 class="v-modal-title">API Key & Integrations for <span id="api-keys-event-name-display"></span></h3>
+        <p class="v-modal-desc">Manage API credentials and outbound webhooks to integrate conference schedules and video pipelines with this event.</p>
       </div>
-      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal">✕</button>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
+    <div class="v-modal-body">
 
     <!-- Event Credentials Summary Box -->
     <div class="api-key-info-box">
@@ -252,34 +255,38 @@
       </div>
     </div>
 
-    <div class="events-modal-footer api-keys-modal-footer">
-      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal">Close</button>
+    </div>
+
+    <div class="v-modal-footer api-keys-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-api-keys-modal" data-modal-close>Close</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ── MODAL: Delete Event ───────────────────────────────────────── -->
-<div id="modal-delete-event" class="events-modal-backdrop">
-  <div class="events-modal-card">
-    <div class="events-modal-header">
-      <h3 class="events-modal-title">Delete Event</h3>
-      <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal">✕</button>
+<dialog id="modal-delete-event" class="v-modal">
+  <div class="v-modal-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Delete Event</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
 
     <form id="delete-event-form" method="post" action="">
-      <p class="events-modal-desc">
-        Are you sure you want to delete event <strong id="delete-event-name-display"></strong> and all associated talks? This action cannot be undone.
-      </p>
+      <div class="v-modal-body">
+        <p class="v-modal-desc">
+          Are you sure you want to delete event <strong id="delete-event-name-display"></strong> and all associated talks? This action cannot be undone.
+        </p>
+      </div>
 
-      <div class="events-modal-footer">
-        <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal">Cancel</button>
+      <div class="v-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm btn-close-delete-modal" data-modal-close>Cancel</button>
         <button type="submit" class="btn btn-danger btn-sm" id="btn-confirm-delete-event">
           Delete Event
         </button>
       </div>
     </form>
   </div>
-</div>
+</dialog>
 {% endblock %}
 
 {% block extra_scripts %}

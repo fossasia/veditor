@@ -798,13 +798,13 @@
 
   {% if is_other_organizer_talk %}
   <!-- Admin Confirm Edit Modal -->
-  <div class="modal-backdrop" id="admin-confirm-edit-modal" hidden>
-    <div class="modal-dialog" role="dialog" aria-labelledby="confirm-edit-title" aria-modal="true">
-      <div class="modal-header">
-        <h3 class="modal-title" id="confirm-edit-title">Enable Edit Mode</h3>
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-modal-close-x" aria-label="Close modal">&times;</button>
+  <dialog id="admin-confirm-edit-modal" class="v-modal">
+    <div class="v-modal-card">
+      <div class="v-modal-header">
+        <h3 class="v-modal-title" id="confirm-edit-title">Enable Edit Mode</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-modal-close-x" data-modal-close aria-label="Close modal">&times;</button>
       </div>
-      <div class="modal-body">
+      <div class="v-modal-body">
         <p class="modal-warning-intro">
           This talk belongs to another organizer's event: <strong>{{ talk.event.name if talk.event and talk.event.name else ('Event #' ~ talk.event_id) }}</strong>.
         </p>
@@ -815,86 +815,88 @@
           Are you sure you want to enable editing for this talk?
         </p>
       </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-modal-cancel">Cancel</button>
+      <div class="v-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-modal-cancel" data-modal-close>Cancel</button>
         <button type="button" class="btn btn-warning btn-sm" id="btn-modal-confirm">Confirm & Enable Editing</button>
       </div>
     </div>
-  </div>
+  </dialog>
   {% endif %}
 
 </div>
 
 <!-- Abort Confirm Modal -->
-<div id="modal-abort" class="modal-backdrop" hidden>
-  <div class="modal-dialog">
-    <div class="modal-header">
-      <h3 class="modal-title">Abort Talk</h3>
-      <button class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-abort-modal">✕</button>
+<dialog id="modal-abort" class="v-modal">
+  <div class="v-modal-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Abort Talk</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-abort-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
-    <div class="modal-body">
+    <div class="v-modal-body">
       <p class="modal-warning-text">
         Are you sure you want to abort this talk? This will throw away the uploaded recording and clear all progress.
       </p>
     </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="btn-cancel-abort-modal">Cancel</button>
-      <button class="btn btn-danger" id="btn-confirm-abort">Yes, Abort Talk</button>
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-cancel-abort-modal" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-abort">Yes, Abort Talk</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- Reset to Raw Confirm Modal -->
-<div id="modal-reset-raw" class="modal-backdrop" hidden>
-  <div class="modal-dialog">
-    <div class="modal-header">
-      <h3 class="modal-title">Reset to Raw Video</h3>
-      <button class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-reset-raw-modal">✕</button>
+<dialog id="modal-reset-raw" class="v-modal">
+  <div class="v-modal-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Reset to Raw Video</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-reset-raw-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
-    <div class="modal-body">
+    <div class="v-modal-body">
       <p class="modal-warning-text">
         Are you sure you want to reset this talk to the initial raw video? All cut bounds and previews will be cleared, and you can re-trim the raw video from scratch.
       </p>
     </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" id="btn-cancel-reset-raw-modal">Cancel</button>
-      <button class="btn btn-danger" id="btn-confirm-reset-raw">Reset to Raw</button>
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-cancel-reset-raw-modal" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-reset-raw">Reset to Raw</button>
     </div>
   </div>
-</div>
+</dialog>
 
 {% if can_manage %}
 <!-- ── MODAL: Edit Talk ────────────────────────────────────── -->
-<div id="modal-edit-talk-studio" class="dashboard-modal-backdrop">
-  <div class="dashboard-modal-card modal-quick-card">
-    <div class="dashboard-modal-header">
-      <h3 class="dashboard-modal-title">Edit Talk</h3>
-      <button class="btn btn-ghost btn-sm btn-close-edit-talk dashboard-modal-close">✕</button>
+<dialog id="modal-edit-talk-studio" class="v-modal">
+  <div class="v-modal-card modal-quick-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Edit Talk</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-edit-talk" data-modal-close aria-label="Close dialog">✕</button>
     </div>
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-title">Talk Title</label>
-      <input type="text" id="edit-talk-title" class="input-field" required>
-    </div>
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-room">Room</label>
-      <input type="text" id="edit-talk-room" class="input-field">
-    </div>
-    <div class="dashboard-modal-grid-2">
-      <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-start">Start Time</label>
-        <input type="datetime-local" id="edit-talk-start" class="input-field">
+    <div class="v-modal-body">
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight" for="edit-talk-title">Talk Title</label>
+        <input type="text" id="edit-talk-title" class="input-field" required>
       </div>
-      <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight" for="edit-talk-end">End Time</label>
-        <input type="datetime-local" id="edit-talk-end" class="input-field">
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight" for="edit-talk-room">Room</label>
+        <input type="text" id="edit-talk-room" class="input-field">
+      </div>
+      <div class="v-modal-grid-2">
+        <div>
+          <label class="v-modal-label v-modal-label-tight" for="edit-talk-start">Start Time</label>
+          <input type="datetime-local" id="edit-talk-start" class="input-field">
+        </div>
+        <div>
+          <label class="v-modal-label v-modal-label-tight" for="edit-talk-end">End Time</label>
+          <input type="datetime-local" id="edit-talk-end" class="input-field">
+        </div>
       </div>
     </div>
-    <div class="dashboard-modal-footer">
-      <button class="btn btn-ghost btn-sm btn-close-edit-talk">Cancel</button>
-      <button class="btn btn-primary btn-sm" id="btn-submit-edit-talk-studio">Save Changes</button>
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-edit-talk" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-submit-edit-talk-studio">Save Changes</button>
     </div>
   </div>
-</div>
+</dialog>
 {% endif %}
 
 {% if user and user.role == 'user' and not user.is_sso %}
