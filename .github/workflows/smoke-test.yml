@@ -14,6 +14,8 @@ jobs:
   smoke-test-native:
     name: Native Smoke Test
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_DB: veditor_test
 
     steps:
       - uses: actions/checkout@v7
@@ -27,7 +29,7 @@ jobs:
       - name: Set up database (peer auth, like README Linux setup)
         run: |
           sudo -u postgres createuser -s "$USER"
-          createdb veditor
+          createdb "$POSTGRES_DB"
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -49,6 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ALLOW_SMOKE_DB_WIPE: "1"
+      POSTGRES_DB: veditor
     steps:
       - uses: actions/checkout@v7
       - name: Copy env vars
@@ -57,9 +60,6 @@ jobs:
         run: docker compose up -d --build
       - name: Wait for API to be healthy
         run: timeout 60s bash -c 'until curl -s http://localhost:8000/health > /dev/null; do sleep 2; done'
-      - name: Dump compose logs on failure
-        if: failure()
-        run: docker compose logs --tail=100
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:

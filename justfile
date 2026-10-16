@@ -7,3 +7,6 @@ serve:
 # Migrate DB forward
 db-migrate:
     uv run alembic upgrade head
+
+rq-worker:
+    uv run scripts/run_worker.py light heavy

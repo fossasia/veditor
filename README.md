@@ -152,7 +152,19 @@ or
 just serve
 ```
 
-7. Before modifying source code, install `git` hooks to ensure code style compliance:
+7. Run RQ worker in another Terminal tab
+
+```sh
+./scripts/run_worker.py light heavy
+```
+
+or
+
+```sh
+just rq-worker
+```
+
+8. Before modifying source code, install `git` hooks to ensure code style compliance:
 
 ```sh
 pre-commit install
