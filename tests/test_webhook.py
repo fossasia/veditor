@@ -290,16 +290,18 @@ def test_job_deliver_webhook_logs_redacted_url(caplog):
 
     # The request still goes to the full URL; only the log line is redacted.
     assert mock_open.call_args[0][0].get_full_url() == url
-    assert "https://example.com:8443/hook" in caplog.text
-    for secret_part in ("user", "pass", "token=abc", "frag"):
+    assert "https://example.com:8443" in caplog.text
+    for secret_part in ("user", "pass", "/hook", "token=abc", "frag"):
         assert secret_part not in caplog.text
 
 
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://[::1]:8443/hook?t=1", "https://[::1]:8443/hook"),
-        ("https://u:p@[2001:db8::1]/hook", "https://[2001:db8::1]/hook"),
+        ("https://[::1]:8443/hook?t=1", "https://[::1]:8443"),
+        ("https://u:p@[2001:db8::1]/hook", "https://[2001:db8::1]"),
+        # Slack and Discord put the token in the path.
+        ("https://hooks.slack.com/services/T0/B0/secret", "https://hooks.slack.com"),
         (None, "<invalid url>"),
         (b"https://example.com/hook", "<invalid url>"),
         (123, "<invalid url>"),
