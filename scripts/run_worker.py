@@ -37,6 +37,8 @@ def _run_single_worker(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         )
         app_logger.addHandler(handler)
+        # Don't also pass records to a root handler set up elsewhere.
+        app_logger.propagate = False
     app_logger.setLevel(logging.INFO)
 
     if nice_level is not None and hasattr(os, "nice"):
