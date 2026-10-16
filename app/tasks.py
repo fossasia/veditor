@@ -1223,7 +1223,11 @@ _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 
 def _redact_url(url: str) -> str:
-    """Return *url* without credentials, query string or fragment, for logging."""
+    """Return the scheme and host of *url* for logging.
+
+    Credentials, path, query string and fragment are dropped: services such as
+    Slack and Discord put the webhook token in the path.
+    """
     if not isinstance(url, str):
         return "<invalid url>"
     try:
@@ -1236,7 +1240,7 @@ def _redact_url(url: str) -> str:
             host = f"{host}:{parts.port}"
     except ValueError:
         return "<invalid url>"
-    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+    return urllib.parse.urlunsplit((parts.scheme, host, "", "", ""))
 
 
 def _describe_webhook_error(exc: Exception) -> str:
