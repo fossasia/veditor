@@ -41,7 +41,7 @@
   {% elif status == 'needs_work' %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
   {% elif status == 'done' %}
-    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+    <span class="badge badge-done"><span class="badge-dot"></span>Finished</span>
   {% elif status in ['rejected', 'broken'] %}
     <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
   {% else %}
@@ -140,7 +140,7 @@
       <span class="stat-value blue">{{ stats.preview }}</span>
     </div>
     <div class="stat-card">
-      <span class="stat-label">Published</span>
+      <span class="stat-label">Finished</span>
       <span class="stat-value green">{{ stats.done }}</span>
     </div>
   </div>

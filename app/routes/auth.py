@@ -213,13 +213,19 @@ def login_submit(
 def signup_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
+    next: str = "",
 ):
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        return RedirectResponse(url="/studio", status_code=status.HTTP_302_FOUND)
+        target = _get_safe_redirect_target(next, default="/studio")
+        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
     return templates.TemplateResponse(
         request,
         "signup.html.jinja",
-        {"error": None, "email": ""},
+        {
+            "error": None,
+            "email": "",
+            "next": _get_safe_redirect_target(next) if next else "",
+        },
     )
 
 
@@ -230,13 +236,18 @@ def signup_submit(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     password_confirm: Annotated[str, Form()] = "",
+    next: Annotated[str, Form()] = "",
 ):
     clean_email = email.strip().lower()
     if len(clean_email) > 255 or not is_valid_email(clean_email):
         return templates.TemplateResponse(
             request,
             "signup.html.jinja",
-            {"error": "Please enter a valid email address.", "email": clean_email},
+            {
+                "error": "Please enter a valid email address.",
+                "email": clean_email,
+                "next": next,
+            },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -247,6 +258,7 @@ def signup_submit(
             {
                 "error": "Password must be at least 8 characters long.",
                 "email": clean_email,
+                "next": next,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -258,6 +270,7 @@ def signup_submit(
             {
                 "error": "Password must not exceed 256 characters.",
                 "email": clean_email,
+                "next": next,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -266,7 +279,7 @@ def signup_submit(
         return templates.TemplateResponse(
             request,
             "signup.html.jinja",
-            {"error": "Passwords do not match.", "email": clean_email},
+            {"error": "Passwords do not match.", "email": clean_email, "next": next},
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -278,6 +291,7 @@ def signup_submit(
             {
                 "error": "An account with this email already exists.",
                 "email": clean_email,
+                "next": next,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -317,6 +331,7 @@ def signup_submit(
         email=user.email,
         expires_in_hours=settings.email_verification_expire_hours,
     )
+    safe_next = _get_safe_redirect_target(next)
     enqueue_error = False
     try:
         light_queue.enqueue(
@@ -324,6 +339,7 @@ def signup_submit(
             user.id,
             user.email,
             verification_token,
+            safe_next,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to enqueue verification email for %s: %s", user.email, exc)
@@ -331,6 +347,8 @@ def signup_submit(
 
     encoded_email = urllib.parse.quote(clean_email)
     redirect_url = f"/verify-email/pending?email={encoded_email}"
+    if safe_next != "/studio":
+        redirect_url += f"&next={urllib.parse.quote(safe_next, safe='/')}"
     if enqueue_error:
         redirect_url += "&error=delivery_failed"
 
@@ -441,6 +459,7 @@ def verify_email_pending_page(
     request: Request,
     email: str = "",
     error: str = "",
+    next: str = "",
 ):
     error_msg = None
     if error == "delivery_failed":
@@ -451,7 +470,11 @@ def verify_email_pending_page(
     return templates.TemplateResponse(
         request,
         "verify_email_pending.html.jinja",
-        {"email": email.strip(), "error": error_msg},
+        {
+            "email": email.strip(),
+            "error": error_msg,
+            "next": _get_safe_redirect_target(next) if next else "",
+        },
     )
 
 
@@ -460,6 +483,7 @@ def verify_email_confirm_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     token: str = "",
+    next: str = "",
 ):
     """Render confirmation page for email verification without mutating account state.
 
@@ -516,7 +540,11 @@ def verify_email_confirm_page(
     return templates.TemplateResponse(
         request,
         "verify_email_confirm.html.jinja",
-        {"email": user.email, "token": clean_token},
+        {
+            "email": user.email,
+            "token": clean_token,
+            "next": _get_safe_redirect_target(next) if next else "",
+        },
     )
 
 
@@ -525,6 +553,7 @@ def verify_email_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     token: Annotated[str, Form()] = "",
+    next: Annotated[str, Form()] = "",
 ):
     """Perform atomic email verification and establish user session upon explicit user action."""
     clean_token = token.strip() or request.query_params.get("token", "").strip()
@@ -593,9 +622,8 @@ def verify_email_submit(
     session_token = create_session_token(
         user.id, user.role, password_hash=user.hashed_password
     )
-    response = RedirectResponse(
-        url="/studio?verified=1", status_code=status.HTTP_303_SEE_OTHER
-    )
+    target = _get_safe_redirect_target(next, default="/studio?verified=1")
+    response = RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
     is_secure = (request.url.scheme == "https") or settings.is_production
     response.set_cookie(
         key="veditor_session",
@@ -613,11 +641,18 @@ def verify_email_submit(
 def verify_email_resend_page(
     request: Request,
     email: str = "",
+    next: str = "",
 ):
+    safe_next = _get_safe_redirect_target(next) if next else ""
     return templates.TemplateResponse(
         request,
         "verify_email_resend.html.jinja",
-        {"error": None, "message": None, "email": email.strip()},
+        {
+            "error": None,
+            "message": None,
+            "email": email.strip(),
+            "next": safe_next,
+        },
     )
 
 
@@ -626,7 +661,9 @@ def verify_email_resend_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     email: Annotated[str, Form()] = "",
+    next: Annotated[str, Form()] = "",
 ):
+    safe_next = _get_safe_redirect_target(next) if next else ""
     clean_email = email.strip().lower()
     if not clean_email or not is_valid_email(clean_email):
         return templates.TemplateResponse(
@@ -636,6 +673,7 @@ def verify_email_resend_submit(
                 "error": "Please enter a valid email address.",
                 "message": None,
                 "email": clean_email,
+                "next": safe_next,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -654,6 +692,7 @@ def verify_email_resend_submit(
                     "error": f"Please wait {wait_seconds} seconds before requesting another verification email.",
                     "message": None,
                     "email": clean_email,
+                    "next": safe_next,
                 },
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             )
@@ -666,6 +705,7 @@ def verify_email_resend_submit(
                 "error": "The service is temporarily unavailable. Please try again later.",
                 "message": None,
                 "email": clean_email,
+                "next": safe_next,
             },
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
@@ -683,6 +723,7 @@ def verify_email_resend_submit(
                 user.id,
                 user.email,
                 token,
+                safe_next,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(
@@ -706,6 +747,7 @@ def verify_email_resend_submit(
             "error": None,
             "message": "If an unverified account exists with that email address, a new verification link has been sent.",
             "email": clean_email,
+            "next": safe_next,
         },
     )
 

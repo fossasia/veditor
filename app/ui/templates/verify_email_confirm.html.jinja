@@ -32,6 +32,7 @@
 
     <form method="post" action="/verify-email" class="auth-form">
       <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="next" value="{{ next or '' }}">
       <div class="auth-action-row">
         <button type="submit" class="btn btn-primary btn-lg btn-auth-submit">Verify & Sign In</button>
         <a href="/login" class="btn btn-secondary btn-lg btn-auth-submit">Back to Sign In</a>

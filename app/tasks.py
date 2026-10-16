@@ -1528,7 +1528,9 @@ def job_deliver_webhook(
     return False
 
 
-def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
+def job_send_verification_email(
+    user_id: int, email: str, token: str, next: str = ""
+) -> bool:
     """Send an account verification email via RQ background worker.
 
     Checks user state in DB, generates the verification URL, dispatches via
@@ -1555,6 +1557,8 @@ def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
         settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
     )
     verify_url = f"{base}/verify-email?token={token}"
+    if next:
+        verify_url += f"&next={urllib.parse.quote(next, safe='/')}"
     success = send_verification_email(
         recipient=email,
         verify_url=verify_url,
@@ -1562,6 +1566,54 @@ def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
     )
     if not success:
         raise RuntimeError(f"Failed to deliver verification email to {email}")
+    return True
+
+
+def job_send_speaker_handoff_email(talk_id: int) -> bool:
+    """Send the review link for a handed-off talk."""
+    from app.email import send_speaker_handoff_email
+    from app.models import Event
+
+    with SessionLocal() as db:
+        talk = db.query(Talk).filter(Talk.id == talk_id).first()
+        if not talk or not talk.speaker_email:
+            logger.info(
+                "Skipping handoff email: talk %s has no assigned speaker", talk_id
+            )
+            return True
+        event = db.query(Event).filter(Event.id == talk.event_id).first()
+        event_synced = False
+        if event is not None and isinstance(event, Event):
+            event_synced = event.is_eventyay_synced
+        elif event is not None:
+            src = getattr(event, "source", None)
+            if isinstance(src, str) and src.strip():
+                event_synced = src.strip().lower() in ("eventyay", "platform")
+
+        if event_synced:
+            logger.info(
+                "Skipping handoff email: talk %s is synced from Eventyay/SSO", talk_id
+            )
+            return True
+        event_name = event.name if event else "VEditor"
+        recipient = talk.speaker_email
+        title = talk.title
+
+    if settings.smtp_host and not settings.base_url:
+        raise RuntimeError(
+            "BASE_URL must be configured when SMTP is enabled for email delivery"
+        )
+    base = (
+        settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
+    )
+    success = send_speaker_handoff_email(
+        recipient=recipient,
+        talk_title=title,
+        event_name=event_name,
+        studio_url=f"{base}/studio/talks/{talk_id}",
+    )
+    if not success:
+        raise RuntimeError(f"Failed to deliver handoff email to {recipient}")
     return True
 
 

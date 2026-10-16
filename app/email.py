@@ -17,6 +17,92 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def send_speaker_handoff_email(
+    recipient: str,
+    talk_title: str,
+    event_name: str,
+    studio_url: str,
+    speaker_name: str | None = None,
+) -> bool:
+    """Notify an assigned speaker that a talk is ready for bounds review."""
+    clean_email = recipient.strip().lower()
+    greeting = f"Hello {html.escape(speaker_name)}," if speaker_name else "Hello,"
+    if not settings.smtp_host:
+        if settings.is_production:
+            logger.error(
+                "SMTP host is unconfigured in production; refusing handoff email to %s",
+                clean_email,
+            )
+            return False
+        logger.info(
+            "SMTP host is unconfigured. Speaker handoff email for %s: %s",
+            clean_email,
+            studio_url,
+        )
+        return True
+
+    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
+        logger.error(
+            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+        )
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Review your talk in VEditor - {talk_title}"
+    msg["From"] = settings.smtp_from
+    msg["To"] = clean_email
+    msg.set_content(
+        f"{'Hello ' + speaker_name + ',' if speaker_name else 'Hello,'}\n\n"
+        f"Your talk, {talk_title}, at {event_name}, is ready for review.\n"
+        f"Click here to review and adjust the cut bounds in Studio:\n{studio_url}\n"
+    )
+    escaped_url = html.escape(studio_url, quote=True)
+    escaped_title = html.escape(talk_title)
+    escaped_event = html.escape(event_name)
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; line-height: 1.6; color: #1e293b; background: #f8fafc; padding: 32px 16px;">
+  <div style="max-width: 540px; margin: 0 auto; padding: 36px 32px; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;">
+    <p>{greeting}</p>
+    <h2>Review your talk in VEditor</h2>
+    <p>Your talk <strong>{escaped_title}</strong> from <strong>{escaped_event}</strong> is ready for review.</p>
+    <p style="text-align: center; margin: 32px 0;">
+      <a href="{escaped_url}" style="background: #2563eb; color: #fff; text-decoration: none; padding: 13px 32px; border-radius: 8px; font-weight: 600;">Review Talk in Studio</a>
+    </p>
+    <p>If the button does not work, <a href="{escaped_url}">click here to review your talk</a>.</p>
+  </div>
+</body></html>"""
+    msg.add_alternative(html_body, subtype="html")
+    ssl_context = ssl.create_default_context()
+    try:
+        if settings.smtp_ssl:
+            with smtplib.SMTP_SSL(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+                context=ssl_context,
+            ) as server:
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+            ) as server:
+                if settings.smtp_tls:
+                    server.starttls(context=ssl_context)
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+        logger.info("Speaker handoff email sent successfully to %s", clean_email)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to send speaker handoff email to %s: %s", clean_email, exc)
+        return False
+
+
 def send_verification_email(
     recipient: str,
     verify_url: str,
@@ -42,6 +128,12 @@ def send_verification_email(
             verify_url,
         )
         return True
+
+    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
+        logger.error(
+            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+        )
+        return False
 
     msg = EmailMessage()
     msg["Subject"] = "Verify your email address - VEditor"
@@ -134,6 +226,12 @@ def send_password_reset_email(
             reset_url,
         )
         return True
+
+    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
+        logger.error(
+            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+        )
+        return False
 
     msg = EmailMessage()
     msg["Subject"] = "Reset your password - VEditor"

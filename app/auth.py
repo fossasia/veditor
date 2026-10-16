@@ -570,11 +570,23 @@ def check_talk_access(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="SSO session is not authorized for this event",
                 )
-            if user.role == "speaker" and not (
+            if (
                 user.email
                 and target_talk.speaker_email
                 and target_talk.speaker_email.lower() == user.email.lower()
             ):
+                if user.role == "user":
+                    user.role = "speaker"
+                    if user.user_id:
+                        db_u = (
+                            db.query(models.User)
+                            .filter(models.User.id == user.user_id)
+                            .first()
+                        )
+                        if db_u and db_u.role == "user":
+                            db_u.role = "speaker"
+                    db.commit()
+            elif user.role == "speaker":
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="SSO speaker session is not authorized for this talk",
@@ -597,11 +609,19 @@ def check_talk_access(
         return target_talk
 
     if (
-        user.role == "speaker"
-        and target_talk.speaker_email
+        target_talk.speaker_email
         and user.email
         and target_talk.speaker_email.lower() == user.email.lower()
     ):
+        if user.role == "user":
+            user.role = "speaker"
+            if user.user_id:
+                db_u = (
+                    db.query(models.User).filter(models.User.id == user.user_id).first()
+                )
+                if db_u and db_u.role == "user":
+                    db_u.role = "speaker"
+            db.commit()
         return target_talk
 
     event = (
