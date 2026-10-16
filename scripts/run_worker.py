@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """RQ Worker entrypoint for VEditor.
 
 Starts an RQ worker process listening on the specified queue(s), reading

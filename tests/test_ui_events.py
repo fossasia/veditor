@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from app import models
-from app.db import Base, engine, get_db
+from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import get_storage_backend
@@ -23,38 +23,6 @@ def setup_database():
 @pytest.fixture
 def client():
     return TestClient(app)
-
-
-@pytest.fixture
-def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(
-        bind=connection, join_transaction_mode="create_savepoint"
-    )
-    app.dependency_overrides[get_db] = lambda: session
-
-    try:
-        yield session
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        try:
-            session.rollback()
-            session.query(models.Talk).filter(
-                models.Talk.event.has(models.Event.name.like("%Test Event%"))
-            ).delete(synchronize_session=False)
-            session.query(models.Event).filter(
-                models.Event.name.like("%Test Event%")
-            ).delete(synchronize_session=False)
-            session.query(models.User).filter(
-                models.User.email.like("%@example.com")
-            ).delete(synchronize_session=False)
-            session.commit()
-        except Exception:  # noqa: BLE001
-            session.rollback()
-        session.close()
-        transaction.rollback()
-        connection.close()
 
 
 def create_user(db_session, email: str, role: str) -> models.User:

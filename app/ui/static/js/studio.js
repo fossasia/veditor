@@ -1579,7 +1579,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isNaN(d.getTime())) return '';
         return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
       };
-      
+
       document.getElementById('edit-talk-start').value = toLocalInputFormat(shell.dataset.talkStart);
       document.getElementById('edit-talk-end').value = toLocalInputFormat(shell.dataset.talkEnd);
       editModal.style.display = 'flex';

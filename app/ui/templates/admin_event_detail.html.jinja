@@ -43,7 +43,7 @@
         <span>Event ID: <strong>#{{ event.id }}</strong></span>
         <span>&bull;</span>
         <span>
-          Organizer: 
+          Organizer:
           {% if event.created_by_user %}
             <strong>{{ event.created_by_user.email }}</strong>
           {% elif event.created_by_user_id %}

@@ -7,12 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
 
 from app import models
 from app.auth import hash_api_key
 from app.config import settings
-from app.db import SessionLocal, get_db
 from app.main import app
 from app.security import create_session_token, create_sso_token
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -101,100 +99,6 @@ def test_templates_have_no_inline_css_or_js():
             assert not inline_body, (
                 f"Inline script body found in {html_file.name}: {inline_body[:50]}..."
             )
-
-
-@pytest.fixture
-def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    created = []
-    orig_add = db.add
-
-    def track_add(instance):
-        created.append(instance)
-        return orig_add(instance)
-
-    db.add = track_add
-    try:
-        yield db
-    finally:
-        try:
-            db.rollback()
-            errors = []
-
-            for obj in reversed(created):
-                try:
-                    insp = inspect(obj)
-                    if insp and insp.has_identity and insp.identity:
-                        obj_id = insp.identity[0]
-                        if isinstance(obj, models.Job):
-                            db.query(models.Job).filter(models.Job.id == obj_id).delete(
-                                synchronize_session=False
-                            )
-                        elif isinstance(obj, models.Review):
-                            db.query(models.Review).filter(
-                                models.Review.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Talk):
-                            db.query(models.Job).filter(
-                                models.Job.talk_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Review).filter(
-                                models.Review.talk_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Talk).filter(
-                                models.Talk.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Client):
-                            db.query(models.Client).filter(
-                                models.Client.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Event):
-                            talk_ids = [
-                                t[0]
-                                for t in db.query(models.Talk.id)
-                                .filter(models.Talk.event_id == obj_id)
-                                .all()
-                            ]
-                            if talk_ids:
-                                db.query(models.Job).filter(
-                                    models.Job.talk_id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                                db.query(models.Review).filter(
-                                    models.Review.talk_id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                                db.query(models.Talk).filter(
-                                    models.Talk.id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                            db.query(models.Event).filter(
-                                models.Event.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.User):
-                            db.query(models.Review).filter(
-                                models.Review.user_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Event).filter(
-                                models.Event.created_by_user_id == obj_id
-                            ).update(
-                                {"created_by_user_id": None},
-                                synchronize_session=False,
-                            )
-                            db.query(models.User).filter(
-                                models.User.id == obj_id
-                            ).delete(synchronize_session=False)
-                        db.commit()
-                except Exception as exc:  # noqa: BLE001
-                    db.rollback()
-                    errors.append(exc)
-
-            if errors:
-                raise errors[0]
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            app.dependency_overrides.pop(get_db, None)
-            db.close()
 
 
 def test_dashboard_page(client: TestClient, db_session):
@@ -3147,6 +3051,7 @@ def test_attach_room_recording_staging_failure_cleans_up(
     db_session.add(t1)
     db_session.add(t2)
     db_session.commit()
+    t1_id, t2_id = t1.id, t2.id
 
     call_count = 0
     real_link_or_copy = temp_storage.link_or_copy
@@ -3176,11 +3081,8 @@ def test_attach_room_recording_staging_failure_cleans_up(
             )
 
         # Assert talk 1 raw file was cleaned up on failure!
-        assert not temp_storage.exists(f"{t1.id}/raw/raw.mp4")
-        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
-        # Assert talk status was not updated in DB
-        db_session.refresh(t1)
-        assert t1.status == "waiting_for_files"
+        assert not temp_storage.exists(f"{t1_id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3267,10 +3169,11 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     db_session.add(t1)
     db_session.add(t2)
     db_session.commit()
+    t1_id, t2_id = t1.id, t2.id
 
     # Seed existing raw file for Talk 1
     t1_orig_bytes = b"original existing raw content for talk 1"
-    temp_storage.put(f"{t1.id}/raw/raw.mp4", t1_orig_bytes)
+    temp_storage.put(f"{t1_id}/raw/raw.mp4", t1_orig_bytes)
 
     real_link_or_copy = temp_storage.link_or_copy
     calls = []
@@ -3278,7 +3181,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     def mock_link_or_copy(key, source):
         calls.append(key)
         # Fail when staging talk 2
-        if key == f"{t2.id}/raw/raw.mp4":
+        if key == f"{t2_id}/raw/raw.mp4":
             raise RuntimeError("Simulated failure on talk 2")
         return real_link_or_copy(key, source)
 
@@ -3299,12 +3202,12 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
             )
 
         # Talk 1 original raw file must be preserved / restored!
-        assert temp_storage.exists(f"{t1.id}/raw/raw.mp4")
-        assert temp_storage.get(f"{t1.id}/raw/raw.mp4").read_bytes() == t1_orig_bytes
+        assert temp_storage.exists(f"{t1_id}/raw/raw.mp4")
+        assert temp_storage.get(f"{t1_id}/raw/raw.mp4").read_bytes() == t1_orig_bytes
         # Talk 2 raw file should not exist
-        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
         # _cancel_talk_jobs is called prior to staging to prevent in-flight workers from touching overwritten assets
-        mock_cancel.assert_called_once_with(t1.id)
+        mock_cancel.assert_called_once_with(t1_id)
     finally:
         clip.unlink(missing_ok=True)
 

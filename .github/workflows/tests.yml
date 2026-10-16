@@ -26,7 +26,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: password
-          POSTGRES_DB: veditor_test
+          POSTGRES_DB: veditor
         ports:
           - 5432:5432
         options: >-
@@ -49,7 +49,7 @@ jobs:
       POSTGRES_PASSWORD: password
       POSTGRES_HOST: localhost
       POSTGRES_PORT: 5432
-      POSTGRES_DB: veditor_test
+      POSTGRES_DB: veditor
       REDIS_URL: redis://localhost:6379/0
 
     steps:
@@ -60,7 +60,11 @@ jobs:
           enable-cache: true
           python-version: "3.14"
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --group test
+      # The test suite uses the "test_" prefixed database derived from POSTGRES_DB
+      # (app/config.py: Settings.testing_db_name), so create it explicitly.
+      - name: Create test database
+        run: PGPASSWORD=password createdb -h localhost -U postgres test_veditor
       - name: Run migrations
         run: uv run alembic upgrade head
       - name: Run tests

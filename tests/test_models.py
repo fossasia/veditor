@@ -10,7 +10,7 @@ from app.db import Base
 from app.models import Client, Event, Job, Review, Talk, User
 
 # Use the postgres instance from docker-compose, but we will wrap tests in a transaction
-engine = create_engine(settings.database_url)
+engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -18,17 +18,6 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 def setup_database():
     Base.metadata.create_all(bind=engine)
     yield
-
-
-@pytest.fixture
-def db_session(setup_database):
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-    yield session
-    session.close()
-    transaction.rollback()
-    connection.close()
 
 
 def test_create_event_and_talk_relationships(db_session):
