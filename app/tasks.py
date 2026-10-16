@@ -1281,6 +1281,7 @@ def job_deliver_webhook(
         logger.error("Failed to prepare webhook payload/signature: %s", exc)
         return False
 
+    redacted_url = _redact_url(webhook_url)
     headers = {
         "Content-Type": "application/json",
         "X-VEditor-Signature": f"sha256={signature}",
@@ -1305,20 +1306,20 @@ def job_deliver_webhook(
                 if resp_status is not None and 200 <= resp_status < 300:
                     logger.info(
                         "Webhook delivered successfully to %s on attempt %d",
-                        _redact_url(webhook_url),
+                        redacted_url,
                         attempt,
                     )
                     return True
                 logger.warning(
                     "Webhook delivery to %s returned HTTP %s on attempt %d",
-                    _redact_url(webhook_url),
+                    redacted_url,
                     resp_status,
                     attempt,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Webhook delivery to %s failed on attempt %d: %s",
-                _redact_url(webhook_url),
+                redacted_url,
                 attempt,
                 _describe_webhook_error(exc),
             )
@@ -1328,7 +1329,7 @@ def job_deliver_webhook(
 
     logger.info(
         "Webhook delivery to %s failed after 2 attempts. Abandoning quietly.",
-        _redact_url(webhook_url),
+        redacted_url,
     )
     return False
 
