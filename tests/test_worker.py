@@ -246,3 +246,35 @@ assert not logging.getLogger("sqlalchemy.engine").isEnabledFor(logging.INFO)
     )
     assert result.returncode == 0, result.stderr
     assert "verify link: http://localhost/verify-email" in result.stderr
+
+
+def test_run_single_worker_does_not_duplicate_app_logs():
+    """With a root handler already installed (e.g. by a log forwarder), app
+    records must be written once, not once per handler."""
+    code = """
+import logging
+from unittest.mock import MagicMock, patch
+
+logging.basicConfig(format="ROOT %(message)s")
+
+with (
+    patch("scripts.run_worker.redis.from_url"),
+    patch("scripts.run_worker.Worker", return_value=MagicMock()),
+    patch("app.db.engine.dispose"),
+):
+    from scripts.run_worker import _run_single_worker
+
+    _run_single_worker(["light"], "redis://localhost:6379/0", None, burst=True)
+
+logging.getLogger("app.email").info("verify link once")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent.parent,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("verify link once") == 1
