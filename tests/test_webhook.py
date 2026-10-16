@@ -325,6 +325,35 @@ def test_job_deliver_webhook_failure_log_omits_url(caplog):
     assert "token=abc" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            urllib.error.HTTPError(
+                "https://example.com/hook?token=abc", 503, "busy", {}, None
+            ),
+            "HTTPError (HTTP 503)",
+        ),
+        (
+            urllib.error.URLError(ConnectionRefusedError("refused")),
+            "URLError (ConnectionRefusedError)",
+        ),
+    ],
+)
+def test_job_deliver_webhook_failure_log_includes_safe_details(caplog, error, expected):
+    with (
+        caplog.at_level("INFO", logger="app.tasks"),
+        patch("app.tasks._webhook_opener.open", side_effect=error),
+        patch("time.sleep"),
+    ):
+        assert (
+            job_deliver_webhook("https://example.com/hook?token=abc", "s", {}) is False
+        )
+
+    assert expected in caplog.text
+    assert "token=abc" not in caplog.text
+
+
 def test_job_deliver_webhook_retry_success_on_second_attempt():
     payload = {"talk_id": 1, "event_id": 1, "timestamp": "2026-09-13T03:00:00Z"}
     secret = "retry-secret"
