@@ -1233,6 +1233,9 @@ def _redact_url(url: str) -> str:
     try:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname or ""
+        if "\\" in host:
+            # urlsplit keeps everything after a backslash in the hostname.
+            return "<invalid url>"
         if ":" in host:
             # hostname drops the brackets around IPv6 literals.
             host = f"[{host}]"
