@@ -1239,6 +1239,20 @@ def _redact_url(url: str) -> str:
     return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
 
 
+def _describe_webhook_error(exc: Exception) -> str:
+    """Summarize a delivery error for logging without its message text.
+
+    Some error messages repeat the full request URL, so only the exception type
+    and a few safe attributes are reported.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{name} (HTTP {exc.code})"
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
+        return f"{name} ({type(exc.reason).__name__})"
+    return name
+
+
 def job_deliver_webhook(
     webhook_url: str,
     webhook_secret: str,
@@ -1306,8 +1320,7 @@ def job_deliver_webhook(
                 "Webhook delivery to %s failed on attempt %d: %s",
                 _redact_url(webhook_url),
                 attempt,
-                # Only the type: some error messages repeat the full URL.
-                type(exc).__name__,
+                _describe_webhook_error(exc),
             )
 
         if attempt == 1:
