@@ -148,7 +148,7 @@ class Settings(BaseSettings):
         return self.environment.lower() in ("production", "prod")
 
     @property
-    def testing_db_name(self):
+    def testing_db_name(self) -> str:
         """
         Deduce database name to use in test.
 

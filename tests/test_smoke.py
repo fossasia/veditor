@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app import models
+from app.config import settings
 from app.db import SessionLocal
 from app.states import advance
 
@@ -18,9 +19,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 @pytest.fixture(scope="module")
 def clean_db():
     """Starts from a clean DB by deleting existing records."""
-    db_name = os.getenv("POSTGRES_DB", "")
-    if not db_name:
-        pytest.skip("Smoke test requires POSTGRES_DB to identify a test database.")
+    db_name = settings.testing_db_name
     if not (db_name.startswith("test_") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
         pytest.fail(
             f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a test_* database."

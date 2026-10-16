@@ -20,9 +20,15 @@ from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 import app.models  # noqa: E402, F401
 
-config.set_main_option(
-    "sqlalchemy.url", settings.database_url.render_as_string(hide_password=False)
-)
+# Under pytest, migrations run against the derived test database
+# ("test_" prefix convention, see README "Database Naming Convention")
+# instead of the main one.
+if os.getenv("PYTEST_VERSION"):
+    url = settings.testing_database_url
+else:
+    url = settings.database_url
+
+config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
 
 # add your model's MetaData object here
 # for 'autogenerate' support
