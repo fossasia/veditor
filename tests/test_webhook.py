@@ -302,6 +302,7 @@ def test_job_deliver_webhook_logs_redacted_url(caplog):
         ("https://u:p@[2001:db8::1]/hook", "https://[2001:db8::1]"),
         # Slack and Discord put the token in the path.
         ("https://hooks.slack.com/services/T0/B0/secret", "https://hooks.slack.com"),
+        ("https://example.com\\secret/hook", "<invalid url>"),
         (None, "<invalid url>"),
         (b"https://example.com/hook", "<invalid url>"),
         (123, "<invalid url>"),
