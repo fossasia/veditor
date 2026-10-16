@@ -1301,7 +1301,8 @@ def job_deliver_webhook(
                 "Webhook delivery to %s failed on attempt %d: %s",
                 _redact_url(webhook_url),
                 attempt,
-                exc,
+                # Only the type: some error messages repeat the full URL.
+                type(exc).__name__,
             )
 
         if attempt == 1:
