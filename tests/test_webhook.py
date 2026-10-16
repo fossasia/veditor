@@ -303,6 +303,11 @@ def test_job_deliver_webhook_logs_redacted_url(caplog):
         # Slack and Discord put the token in the path.
         ("https://hooks.slack.com/services/T0/B0/secret", "https://hooks.slack.com"),
         ("https://example.com\\secret/hook", "<invalid url>"),
+        # Characters that cannot appear in a host would let the log line be
+        # forged or carry other data.
+        ("https://example.com%0asecret/hook", "<invalid url>"),
+        ("https://exa mple.com/hook", "<invalid url>"),
+        ("https://example.com\nINFO forged/hook", "<invalid url>"),
         (None, "<invalid url>"),
         (b"https://example.com/hook", "<invalid url>"),
         (123, "<invalid url>"),
