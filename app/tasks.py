@@ -1224,9 +1224,14 @@ _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 def _redact_url(url: str) -> str:
     """Return *url* without credentials, query string or fragment, for logging."""
+    if not isinstance(url, str):
+        return "<invalid url>"
     try:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname or ""
+        if ":" in host:
+            # hostname drops the brackets around IPv6 literals.
+            host = f"[{host}]"
         if parts.port is not None:
             host = f"{host}:{parts.port}"
     except ValueError:
