@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1222,6 +1223,11 @@ class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
 _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 
+# A host name (letters, digits, "-", "_", ".") or an IPv6 literal with an
+# optional zone ID.
+_LOG_SAFE_HOST = re.compile(r"[\w.-]+|[0-9a-fA-F:.]+(%[\w.-]+)?")
+
+
 def _redact_url(url: str) -> str:
     """Return the scheme and host of *url* for logging.
 
@@ -1233,8 +1239,9 @@ def _redact_url(url: str) -> str:
     try:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname or ""
-        if "\\" in host:
-            # urlsplit keeps everything after a backslash in the hostname.
+        if not _LOG_SAFE_HOST.fullmatch(host):
+            # urlsplit does not validate the host, which can then hold a
+            # backslash, whitespace or percent-encoded data.
             return "<invalid url>"
         if ":" in host:
             # hostname drops the brackets around IPv6 literals.
