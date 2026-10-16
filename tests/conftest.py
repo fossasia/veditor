@@ -29,7 +29,11 @@ from app.storage import StorageBackend, StorageKeyNotFoundError
 logger = logging.getLogger(__name__)
 
 _test_engine = create_engine(settings.testing_database_url)
-TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
+TestSessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    join_transaction_mode="create_savepoint",
+)
 
 
 @pytest.fixture(scope="session")
