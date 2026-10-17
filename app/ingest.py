@@ -1,5 +1,13 @@
+import http.cookiejar
+import logging
+import re
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from decimal import ROUND_CEILING, Decimal
+from html.parser import HTMLParser
 from pathlib import Path
 
 import av
@@ -7,6 +15,8 @@ import av
 from app.config import settings
 from app.schemas import RecordingIngestRequest
 from app.storage import StorageBackend
+
+logger = logging.getLogger(__name__)
 
 
 class IngestPathRejectedError(ValueError):
@@ -165,3 +175,192 @@ def stage_custom_clip(
     key = f"{talk_id}/{stage}/{stage}.mp4"
     backend.put(key=key, source=resolved_path)
     return key
+
+
+def resolve_direct_media_url(url: str) -> str:
+    """Normalize common cloud storage share URLs (Dropbox, Google Drive, Nextcloud)
+
+    to direct download streams. Direct media links are returned unchanged.
+    """
+    clean_url = url.strip()
+    parsed = urllib.parse.urlsplit(clean_url)
+    host = parsed.netloc.lower()
+
+    # Dropbox share links: ensure dl=1
+    if "dropbox.com" in host:
+        qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        qs["dl"] = ["1"]
+        new_query = urllib.parse.urlencode(qs, doseq=True)
+        return urllib.parse.urlunsplit(parsed._replace(query=new_query))
+
+    # Google Drive share links: convert to export/download endpoint
+    if "drive.google.com" in host:
+        file_id = None
+        match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", parsed.path)
+        if match:
+            file_id = match.group(1)
+        elif "id" in urllib.parse.parse_qs(parsed.query):
+            file_id = urllib.parse.parse_qs(parsed.query)["id"][0]
+
+        if file_id:
+            return f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+
+    # Nextcloud / ownCloud share links (e.g. /s/<token> -> /s/<token>/download)
+    if re.search(r"/s/[a-zA-Z0-9_-]+/?$", parsed.path):
+        clean_path = parsed.path.rstrip("/") + "/download"
+        return urllib.parse.urlunsplit(parsed._replace(path=clean_path))
+
+    return clean_url
+
+
+class _DriveFormParser(HTMLParser):
+    """Extract confirmation form action and hidden parameters from Google Drive virus scan warning pages."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.action: str | None = None
+        self.inputs: dict[str, str] = {}
+        self.in_form = False
+        self.download_link: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_dict = {k: v or "" for k, v in attrs}
+        if tag == "form":
+            action = attr_dict.get("action", "")
+            form_id = attr_dict.get("id", "")
+            if "download" in action or form_id == "download-form":
+                self.action = action
+                self.in_form = True
+        elif tag == "input" and self.in_form:
+            name = attr_dict.get("name")
+            val = attr_dict.get("value", "")
+            if name:
+                self.inputs[name] = val
+        elif tag == "a":
+            href = attr_dict.get("href", "")
+            if "export=download" in href or "confirm=" in href:
+                self.download_link = href
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form":
+            self.in_form = False
+
+
+def download_media_url(url: str, output_path: Path) -> Path:
+    """Download a video file directly from an HTTP/HTTPS URL into output_path.
+
+    Streams the file chunk-by-chunk using the Python standard library with zero
+    external dependencies. Automatically resolves common cloud storage share URLs
+    (Dropbox, Google Drive, Nextcloud) to direct streams and enforces timeout,
+    content validation, and maximum file size boundaries.
+
+    Returns the path to the downloaded file.
+    """
+    resolved_url = resolve_direct_media_url(url)
+    # storage-boundary-exempt: upload staging directory
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_target = output_path.with_suffix(
+        output_path.suffix + f".part_{uuid.uuid4().hex[:8]}"
+    )
+    max_bytes = getattr(settings, "max_url_download_bytes", 20 * 1024 * 1024 * 1024)
+
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    req = urllib.request.Request(resolved_url, headers=headers)
+
+    try:
+        resp = opener.open(req, timeout=120)
+
+        # Handle Google Drive large-file virus scan confirmation page
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type:
+            resp_url = resp.geturl().lower()
+            if (
+                "drive.google.com" in resolved_url
+                or "drive.google.com" in resp_url
+                or "drive.usercontent.google.com" in resp_url
+            ):
+                body = resp.read().decode("utf-8", errors="ignore")
+                parser = _DriveFormParser()
+                parser.feed(body)
+                confirm_url = None
+                if parser.action:
+                    query = urllib.parse.urlencode(parser.inputs)
+                    confirm_url = f"{parser.action}?{query}" if query else parser.action
+                elif parser.download_link:
+                    confirm_url = urllib.parse.urljoin(
+                        "https://drive.google.com", parser.download_link
+                    )
+
+                if confirm_url:
+                    req_confirm = urllib.request.Request(confirm_url, headers=headers)
+                    resp = opener.open(req_confirm, timeout=120)
+                else:
+                    raise ValueError(
+                        "Google Drive returned an HTML page without a valid download confirmation action."
+                    )
+            else:
+                parsed_netloc = urllib.parse.urlsplit(url).netloc.lower()
+                if "youtube.com" in parsed_netloc or "youtu.be" in parsed_netloc:
+                    raise ValueError(
+                        "YouTube watch/stream links are web pages, not direct video files. "
+                        "Please provide a direct video URL (.mp4), Google Drive, or Dropbox link."
+                    )
+                raise ValueError(
+                    f"The provided URL returned a web page ({content_type}) instead of a direct video stream. "
+                    "Please ensure the link points directly to a video file, Google Drive, or Dropbox."
+                )
+
+        downloaded_bytes = 0
+        chunk_size = 64 * 1024  # 64 KB chunk
+
+        # storage-boundary-exempt: write downloaded media stream to staging file
+        with open(temp_target, "wb") as f_out:
+            first_chunk = True
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                if first_chunk:
+                    first_chunk = False
+                    stripped = chunk.lstrip()
+                    if stripped.startswith(
+                        (b"<!DOCTYPE", b"<html", b"<HTML", b"<?xml")
+                    ):
+                        raise ValueError(
+                            "URL response contains HTML web markup rather than a video file. "
+                            "Please provide a direct media file URL, Google Drive, or Dropbox link."
+                        )
+                f_out.write(chunk)
+                downloaded_bytes += len(chunk)
+                if downloaded_bytes > max_bytes:
+                    raise ValueError(
+                        f"Download exceeded maximum allowed size of {max_bytes} bytes"
+                    )
+
+        if downloaded_bytes == 0:
+            raise ValueError(f"Downloaded media from '{url}' is empty (0 bytes)")
+
+        # Atomically replace destination path
+        temp_target.replace(output_path)
+        return output_path
+
+    except Exception:
+        # Clean up partial download files
+        # storage-boundary-exempt: cleanup partial download on failure
+        temp_target.unlink(missing_ok=True)
+        # storage-boundary-exempt: cleanup target output on failure
+        output_path.unlink(missing_ok=True)
+        raise
