@@ -1501,6 +1501,271 @@ def test_unified_transcode_resolves_staged_slates_and_bypasses_concat_reencode(
     assert captured_transcode_kwargs["target_lufs"] is None
 
 
+def test_job_ingest_room_url_success(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock, patch
+
+    from app.models import Job, Talk
+    from app.tasks import job_ingest_room_url
+    from tests.conftest import generate_clip
+
+    clip = generate_clip(1.0, output_dir=tmp_path)
+    now = datetime(2026, 9, 25, 10, 0, 0, tzinfo=UTC)
+
+    talk1 = Talk(
+        id=201,
+        event_id=10,
+        title="Talk 1",
+        room="Room URL",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talk2 = Talk(
+        id=202,
+        event_id=10,
+        title="Talk 2",
+        room="Room URL",
+        start=now + timedelta(minutes=30),
+        end=now + timedelta(minutes=60),
+        status="waiting_for_files",
+    )
+
+    talks_dict = {201: talk1, 202: talk2}
+    jobs_dict = {}
+
+    class RoomMockDBSession:
+        def __enter__(self):
+            s = MagicMock()
+
+            def query_mock(model):
+                q = MagicMock()
+                if model == Talk:
+
+                    def filter_mock(*args):
+                        sub = MagicMock()
+                        sub.filter.return_value = sub
+                        sub.order_by.return_value = sub
+                        sub.all.return_value = list(talks_dict.values())
+                        return sub
+
+                    q.filter.side_effect = filter_mock
+                return q
+
+            s.query.side_effect = query_mock
+            s.get.side_effect = lambda m, pk: (
+                talks_dict.get(pk) if m == Talk else jobs_dict.get(pk)
+            )
+
+            def add_mock(obj):
+                if isinstance(obj, Job):
+                    obj.id = len(jobs_dict) + 1
+                    jobs_dict[obj.id] = obj
+
+            s.add.side_effect = add_mock
+            return s
+
+        def __exit__(self, *args):
+            pass
+
+    mock_storage = MagicMock()
+    mock_storage.free_bytes.return_value = 10**10
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=RoomMockDBSession),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.download_media_url", return_value=clip),
+        patch("app.tasks.container_duration_seconds", return_value=3600.0),
+        patch("app.tasks.light_queue.enqueue") as mock_light_q,
+    ):
+        job_ingest_room_url(
+            event_id=10,
+            room="Room URL",
+            video_url="https://example.com/recordings/sample.mp4",
+            recording_start_iso=now.isoformat(),
+            talk_ids=[201, 202],
+        )
+
+    assert talk1.status == "detecting"
+    assert talk2.status == "detecting"
+    assert talk1.cut_start == 0.0
+    assert talk1.cut_end == 1800.0
+    assert talk2.cut_start == 1800.0
+    assert talk2.cut_end == 3600.0
+    assert mock_storage.link_or_copy.call_count == 2
+    assert mock_light_q.call_count == 2
+
+
+def test_job_ingest_room_url_download_failure_handles_cleanup(tmp_path):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock, patch
+
+    from app.models import Job, Talk
+    from app.tasks import job_ingest_room_url
+
+    now = datetime(2026, 9, 25, 10, 0, 0, tzinfo=UTC)
+    talk = Talk(
+        id=205,
+        event_id=10,
+        title="Talk Fail",
+        room="Room URL",
+        start=now,
+        end=now + timedelta(minutes=30),
+        status="waiting_for_files",
+    )
+    talks_dict = {205: talk}
+    jobs_dict = {}
+
+    class RoomMockDBSession:
+        def __enter__(self):
+            s = MagicMock()
+
+            def query_mock(model):
+                q = MagicMock()
+                if model == Talk:
+
+                    def filter_mock(*args):
+                        sub = MagicMock()
+                        sub.filter.return_value = sub
+                        sub.order_by.return_value = sub
+                        sub.all.return_value = list(talks_dict.values())
+                        return sub
+
+                    q.filter.side_effect = filter_mock
+                return q
+
+            s.query.side_effect = query_mock
+
+            def add_mock(instance):
+                if isinstance(instance, Job):
+                    jid = len(jobs_dict) + 1
+                    instance.id = jid
+                    jobs_dict[jid] = instance
+
+            s.add.side_effect = add_mock
+            s.get.side_effect = lambda model, obj_id: (
+                jobs_dict.get(obj_id) if model == Job else talks_dict.get(obj_id)
+            )
+            return s
+
+        def __exit__(self, *args):
+            pass
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=RoomMockDBSession),
+        patch(
+            "app.tasks.download_media_url",
+            side_effect=RuntimeError("Network download error"),
+        ),
+        pytest.raises(RuntimeError, match="Network download error"),
+    ):
+        job_ingest_room_url(
+            event_id=10,
+            room="Room URL",
+            video_url="https://example.com/recordings/broken.mp4",
+            recording_start_iso=now.isoformat(),
+            talk_ids=[205],
+        )
+
+    assert talk.status == "broken"
+    assert len(jobs_dict) == 1
+    assert jobs_dict[1].status == "failed"
+
+
+def test_resolve_direct_media_url():
+    from app.ingest import resolve_direct_media_url
+
+    # Direct URL passes through
+    assert (
+        resolve_direct_media_url("https://example.com/recordings/room1.mp4")
+        == "https://example.com/recordings/room1.mp4"
+    )
+
+    # Dropbox URL normalizes dl=1
+    db_res = resolve_direct_media_url(
+        "https://www.dropbox.com/s/abcdef123/video.mp4?dl=0"
+    )
+    assert "dl=1" in db_res
+
+    # Google Drive share link normalizes to export endpoint
+    gd_res = resolve_direct_media_url(
+        "https://drive.google.com/file/d/1AbC-xYz_123/view?usp=sharing"
+    )
+    assert (
+        gd_res
+        == "https://drive.google.com/uc?export=download&id=1AbC-xYz_123&confirm=t"
+    )
+
+    # Nextcloud share link normalizes to /download
+    nc_res = resolve_direct_media_url("https://cloud.example.org/s/abc123XYZ")
+    assert nc_res == "https://cloud.example.org/s/abc123XYZ/download"
+
+
+def test_download_media_url_streaming_success(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from app.ingest import download_media_url
+
+    dummy_content = b"x" * 50000
+    mock_resp = MagicMock()
+    mock_resp.headers = {"Content-Type": "video/mp4"}
+    mock_resp.read.side_effect = [dummy_content[:25000], dummy_content[25000:], b""]
+
+    mock_opener = MagicMock()
+    mock_opener.open.return_value = mock_resp
+
+    target = tmp_path / "staged_download.mp4"
+    with patch("urllib.request.build_opener", return_value=mock_opener):
+        res = download_media_url("https://example.com/stream.mp4", target)
+
+    assert res == target
+    assert target.exists()
+    assert target.read_bytes() == dummy_content
+
+
+def test_download_media_url_exceeds_max_bytes(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from app.ingest import download_media_url
+
+    mock_resp = MagicMock()
+    mock_resp.headers = {"Content-Type": "video/mp4"}
+    # Return 2MB of data when limit is patched to 1MB
+    mock_resp.read.side_effect = [b"A" * 1024 * 1024, b"B" * 1024 * 1024, b""]
+
+    mock_opener = MagicMock()
+    mock_opener.open.return_value = mock_resp
+
+    target = tmp_path / "too_large.mp4"
+    with (
+        patch("urllib.request.build_opener", return_value=mock_opener),
+        patch("app.config.settings.max_url_download_bytes", 1024 * 1024),
+        pytest.raises(ValueError, match="Download exceeded maximum allowed size"),
+    ):
+        download_media_url("https://example.com/too_large.mp4", target)
+
+    assert not target.exists()
+
+
+def test_download_media_url_rejects_html_page(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from app.ingest import download_media_url
+
+    mock_resp = MagicMock()
+    mock_resp.headers = {"Content-Type": "text/html; charset=utf-8"}
+
+    mock_opener = MagicMock()
+    mock_opener.open.return_value = mock_resp
+
+    target = tmp_path / "out.mp4"
+    with (
+        patch("urllib.request.build_opener", return_value=mock_opener),
+        pytest.raises(ValueError, match="YouTube watch/stream links are web pages"),
+    ):
+        download_media_url("https://youtu.be/WVR7ZfuhoU8", target)
+
+
 # ── Cut-Bounds Pre-Seeding Tests ────────────────────────────────────────────
 
 

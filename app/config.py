@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     disk_guard_multiplier: float = 3.0
     retention_sweep_interval_seconds: int = 3600
     max_bumper_upload_size_bytes: PositiveInt = 100 * 1024 * 1024
+    max_url_download_bytes: PositiveInt = 20 * 1024 * 1024 * 1024
     encoder_threads: PositiveInt | None = None
 
     environment: str = "development"
