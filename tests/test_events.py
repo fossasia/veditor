@@ -1310,3 +1310,16 @@ def test_event_create_and_patch_speaker_magic_link_expire_hours(mock_db):
     )
     assert response.status_code == 200
     assert mock_event.speaker_magic_link_expire_hours == 336
+
+    # Boolean values must be rejected (StrictPositiveInt)
+    res_bool_patch = client.patch(
+        "/events/99",
+        json={"speaker_magic_link_expire_hours": True},
+    )
+    assert res_bool_patch.status_code == 422
+
+    res_bool_post = client.post(
+        "/events",
+        json={"name": "Strict Int Event", "speaker_magic_link_expire_hours": True},
+    )
+    assert res_bool_post.status_code == 422

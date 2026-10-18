@@ -2,14 +2,13 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    PositiveInt,
     computed_field,
     field_validator,
     model_validator,
@@ -17,13 +16,15 @@ from pydantic import (
 
 from app.retention import validate_retention_overrides
 
+StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
+
 
 class EventBase(BaseModel):
     name: str
     source: str | None = None
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
-    speaker_magic_link_expire_hours: PositiveInt | None = None
+    speaker_magic_link_expire_hours: StrictPositiveInt | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -42,7 +43,7 @@ class EventUpdate(BaseModel):
     source: str | None = None
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
-    speaker_magic_link_expire_hours: PositiveInt | None = None
+    speaker_magic_link_expire_hours: StrictPositiveInt | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -414,7 +415,7 @@ class TalkSSOTokenRequest(BaseModel):
     email: str | None = None
     display_name: str | None = None
     event_id: int | str | None = None
-    expires_in_seconds: PositiveInt | None = None
+    expires_in_seconds: StrictPositiveInt | None = None
 
 
 class ApiKeyRead(BaseModel):

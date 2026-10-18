@@ -301,6 +301,13 @@ def test_talk_sso_token_invalid_expires_in_seconds(mock_db):
     )
     assert response_neg.status_code == 422
 
+    response_bool = client.post(
+        "/talks/10/sso-token",
+        headers={"X-API-Key": "test"},
+        json={"expires_in_seconds": True},
+    )
+    assert response_bool.status_code == 422
+
 
 # ── 3. Identity Resolution (get_current_user) ─────────────────────────────────
 
