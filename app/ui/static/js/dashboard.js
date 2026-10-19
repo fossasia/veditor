@@ -138,22 +138,22 @@ document.addEventListener('DOMContentLoaded', startPolling);
 // ── Schedule Import & Quick Talk & Room Attach Modals ──────────
 window.openImportModal = function() {
   const m = document.getElementById('modal-import');
-  if (m) m.style.display = 'flex';
+  if (m) Modal.open(m);
 };
 
 window.closeImportModal = function() {
   const m = document.getElementById('modal-import');
-  if (m) m.style.display = 'none';
+  if (m) Modal.close(m);
 };
 
 window.openAttachRoomModal = function() {
   const m = document.getElementById('modal-attach-room');
-  if (m) m.style.display = 'flex';
+  if (m) Modal.open(m);
 };
 
 window.closeAttachRoomModal = function() {
   const m = document.getElementById('modal-attach-room');
-  if (m) m.style.display = 'none';
+  if (m) Modal.close(m);
 };
 
 window.submitAttachRoomRecording = async function() {
@@ -163,18 +163,18 @@ window.submitAttachRoomRecording = async function() {
   const btn = document.getElementById('btn-submit-attach-room');
 
   if (!roomInput.trim()) {
-    alert('Please enter or select a room name.');
+    await Modal.alert({ title: 'Validation Error', message: 'Please enter or select a room name.' });
     return;
   }
   const hasFile = fileInput && fileInput.files && fileInput.files[0];
   const hasUrl = urlInput.trim().length > 0;
 
   if (!hasFile && !hasUrl) {
-    alert('Please provide a video URL or select a video recording file.');
+    await Modal.alert({ title: 'Validation Error', message: 'Please provide a video URL or select a video recording file.' });
     return;
   }
   if (hasFile && hasUrl) {
-    alert('Please provide either a video URL or a file upload, not both.');
+    await Modal.alert({ title: 'Validation Error', message: 'Please provide either a video URL or a file upload, not both.' });
     return;
   }
 
@@ -206,10 +206,10 @@ window.submitAttachRoomRecording = async function() {
     }
 
     const data = await res.json();
-    alert(`Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!`);
+    await Modal.alert({ title: 'Attachment Successful', message: `Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!` });
     location.reload();
   } catch (err) {
-    alert(`Attachment failed: ${err.message}`);
+    await Modal.alert({ title: 'Attachment Failed', message: `Attachment failed: ${err.message}`, variant: 'danger' });
   } finally {
     setBtnBusy(btn, false);
   }
@@ -221,7 +221,7 @@ window.openQuickTalkModal = function() {
     m.dataset.editId = '';
     m.dataset.origStart = '';
     m.dataset.origEnd = '';
-    const title = m.querySelector('.dashboard-modal-title');
+    const title = m.querySelector('.v-modal-title, .dashboard-modal-title');
     const btn = document.getElementById('btn-submit-quick-talk');
     const eventSel = document.getElementById('quick-event-name');
     if (title) title.textContent = 'Register New Talk';
@@ -234,13 +234,13 @@ window.openQuickTalkModal = function() {
       const el = document.getElementById(`quick-talk-${k}`);
       if (el) el.value = '';
     });
-    m.style.display = 'flex';
+    Modal.open(m);
   }
 };
 
 window.closeQuickTalkModal = function() {
   const m = document.getElementById('modal-quick-talk');
-  if (m) m.style.display = 'none';
+  if (m) Modal.close(m);
 };
 
 window.openEditTalkModal = function(row) {
@@ -249,7 +249,7 @@ window.openEditTalkModal = function(row) {
   m.dataset.editId = row.dataset.talkId;
   m.dataset.origStart = row.dataset.start || '';
   m.dataset.origEnd = row.dataset.end || '';
-  const title = m.querySelector('.dashboard-modal-title');
+  const title = m.querySelector('.v-modal-title, .dashboard-modal-title');
   const btn = document.getElementById('btn-submit-quick-talk');
   const eventSel = document.getElementById('quick-event-name');
   if (title) title.textContent = 'Edit Talk';
@@ -277,7 +277,7 @@ window.openEditTalkModal = function(row) {
   const e = document.getElementById('quick-talk-end');
   if (e) e.value = toLocalInputFormat(row.dataset.end);
 
-  m.style.display = 'flex';
+  Modal.open(m);
 };
 
 function setBtnBusy(btn, isBusy, busyText) {
@@ -326,14 +326,14 @@ window.submitScheduleImport = async function() {
     }
 
     const data = await res.json();
-    alert(`Successfully imported ${data.imported_count} session(s) into "${data.event_name}"!`);
+    await Modal.alert({ title: 'Import Successful', message: `Successfully imported ${data.imported_count} session(s) into "${data.event_name}"!` });
     if (data && data.event_id) {
       window.location.href = `/studio?event_id=${data.event_id}`;
     } else {
       location.reload();
     }
   } catch (err) {
-    alert(`Import failed: ${err.message}`);
+    await Modal.alert({ title: 'Import Failed', message: `Import failed: ${err.message}`, variant: 'danger' });
   } finally {
     setBtnBusy(btn, false);
   }
@@ -367,7 +367,7 @@ window.submitQuickTalk = async function() {
     if (titleInput) {
       titleInput.focus();
     }
-    alert('Please enter a talk title.');
+    await Modal.alert({ title: 'Validation Error', message: 'Please enter a talk title.' });
     return;
   }
 
@@ -375,13 +375,13 @@ window.submitQuickTalk = async function() {
     const origStart = m ? m.dataset.origStart : '';
     const origEnd = m ? m.dataset.origEnd : '';
     if ((origStart && !startVal) || (origEnd && !endVal)) {
-      alert('Cannot clear scheduled talk times.');
+      await Modal.alert({ title: 'Validation Error', message: 'Cannot clear scheduled talk times.' });
       return;
     }
   }
 
   if (startVal && endVal && new Date(endVal) <= new Date(startVal)) {
-    alert('End time must be after start time.');
+    await Modal.alert({ title: 'Validation Error', message: 'End time must be after start time.' });
     return;
   }
 
@@ -438,7 +438,7 @@ window.submitQuickTalk = async function() {
       window.location.href = targetUrl;
     }
   } catch (err) {
-    alert(`Failed to ${editId ? 'edit' : 'create'} talk: ${err.message}`);
+    await Modal.alert({ title: 'Operation Failed', message: `Failed to ${editId ? 'edit' : 'create'} talk: ${err.message}`, variant: 'danger' });
     setBtnBusy(btn, false);
   }
 };
@@ -452,7 +452,13 @@ window.deleteSingleTalkFromButton = function(btn) {
 };
 
 window.deleteSingleTalk = async function(id, title) {
-  if (!confirm(`Are you sure you want to delete talk #${id}: "${title}"?\nThis will permanently delete all associated recording and media files.`)) {
+  const confirmed = await Modal.confirm({
+    title: 'Delete Talk',
+    message: `Are you sure you want to delete talk #${id}: "${title}"?\nThis will permanently delete all associated recording and media files.`,
+    confirmText: 'Delete',
+    variant: 'danger'
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -464,7 +470,7 @@ window.deleteSingleTalk = async function(id, title) {
     }
     location.reload();
   } catch (err) {
-    alert(`Delete failed: ${err.message}`);
+    await Modal.alert({ title: 'Delete Failed', message: `Delete failed: ${err.message}`, variant: 'danger' });
   }
 };
 
@@ -513,7 +519,13 @@ window.submitBulkDelete = async function() {
   const selected = [...document.querySelectorAll('.talk-checkbox:checked')].map(cb => parseInt(cb.value, 10));
   if (selected.length === 0) return;
 
-  if (!confirm(`Are you sure you want to delete ${selected.length} selected talk(s)?\nThis will permanently delete all associated video and audio artifacts.`)) {
+  const confirmed = await Modal.confirm({
+    title: 'Delete Talks',
+    message: `Are you sure you want to delete ${selected.length} selected talk(s)?\nThis will permanently delete all associated video and audio artifacts.`,
+    confirmText: 'Delete All',
+    variant: 'danger'
+  });
+  if (!confirmed) {
     return;
   }
 
@@ -521,7 +533,7 @@ window.submitBulkDelete = async function() {
   setBtnBusy(btn, true, 'Deleting...');
 
   try {
-    const res = await (window.authFetch || fetch)('/talks/bulk-delete', {
+    const res = await (window.authFetch || fetch)(`/talks/bulk-delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ talk_ids: selected }),
@@ -533,10 +545,10 @@ window.submitBulkDelete = async function() {
     }
 
     const data = await res.json();
-    alert(`Successfully deleted ${data.deleted_count} talk(s).`);
+    await Modal.alert({ title: 'Delete Successful', message: `Successfully deleted ${data.deleted_count} talk(s).` });
     window.location.reload();
   } catch (err) {
-    alert(`Bulk delete failed: ${err.message}`);
+    await Modal.alert({ title: 'Bulk Delete Failed', message: `Bulk delete failed: ${err.message}`, variant: 'danger' });
     setBtnBusy(btn, false);
   }
 };
@@ -640,16 +652,6 @@ document.addEventListener('DOMContentLoaded', () => {
       el.style.width = `${Math.min(100, Math.max(0, val))}%`;
     }
   });
-
-  // Close modals on backdrop click
-  ['modal-import', 'modal-attach-room', 'modal-quick-talk'].forEach((id) => {
-    const m = document.getElementById(id);
-    if (m) {
-      m.addEventListener('click', (e) => {
-        if (e.target === m) m.style.display = 'none';
-      });
-    }
-  });
 });
 
 
@@ -673,54 +675,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (noteInput) noteInput.value = '';
     if (noteChars) noteChars.textContent = '0 / 500';
     if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
-    modal.classList.remove('hidden');
+    Modal.open(modal);
     if (noteInput) noteInput.focus();
   }
 
   function closeModal() {
-    modal.classList.add('hidden');
-    if (btnRequest) btnRequest.focus();
+    Modal.close(modal);
   }
 
   btnRequest.addEventListener('click', openModal);
   if (btnClose) btnClose.addEventListener('click', closeModal);
   if (btnCancel) btnCancel.addEventListener('click', closeModal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-
-  modal.addEventListener('keydown', (e) => {
-    if (modal.classList.contains('hidden')) return;
-
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeModal();
-      return;
-    }
-
-    if (e.key === 'Tab') {
-      const focusable = modal.querySelectorAll(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-      const focusableEls = Array.from(focusable).filter(
-        (el) => !el.disabled && el.offsetParent !== null
-      );
-      if (!focusableEls.length) return;
-
-      const firstEl = focusableEls[0];
-      const lastEl = focusableEls[focusableEls.length - 1];
-
-      if (e.shiftKey) {
-        if (document.activeElement === firstEl) {
-          e.preventDefault();
-          lastEl.focus();
-        }
-      } else {
-        if (document.activeElement === lastEl) {
-          e.preventDefault();
-          firstEl.focus();
-        }
-      }
-    }
-  });
 
   if (noteInput && noteChars) {
     noteInput.addEventListener('input', () => {

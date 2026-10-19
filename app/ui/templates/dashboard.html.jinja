@@ -101,25 +101,25 @@
   {% endif %}
 
   <!-- Request Organizer Modal -->
-  <div class="modal-overlay hidden" id="modal-request-organizer" role="dialog" aria-modal="true" aria-labelledby="modal-request-organizer-title">
-    <div class="modal-box">
-      <div class="modal-header">
-        <h2 class="modal-title" id="modal-request-organizer-title">Request Organizer Access</h2>
-        <button class="modal-close" id="btn-close-request-organizer" aria-label="Close">&times;</button>
+  <dialog id="modal-request-organizer" class="v-modal" aria-labelledby="modal-request-organizer-title">
+    <div class="v-modal-card">
+      <div class="v-modal-header">
+        <h3 class="v-modal-title" id="modal-request-organizer-title">Request Organizer Access</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-close-request-organizer" data-modal-close aria-label="Close dialog">&times;</button>
       </div>
-      <div class="modal-body">
-        <p class="modal-description">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
-        <label for="organizer-request-note" class="form-label">Note <span class="text-muted">(optional)</span></label>
+      <div class="v-modal-body">
+        <p class="v-modal-desc modal-description">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
+        <label for="organizer-request-note" class="v-modal-label form-label">Note <span class="text-muted">(optional)</span></label>
         <textarea id="organizer-request-note" class="form-input" rows="3" maxlength="500" placeholder="e.g. I am organizing FOSSASIA Summit 2027 and need to upload recordings..."></textarea>
         <p class="form-hint" id="organizer-request-note-chars">0 / 500</p>
         <p class="form-error hidden" id="organizer-request-error"></p>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="btn-cancel-request-organizer" type="button">Cancel</button>
+      <div class="v-modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-request-organizer" type="button" data-modal-close>Cancel</button>
         <button class="btn btn-primary" id="btn-submit-request-organizer" type="button">Submit Request</button>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- Stats Summary Row -->
   <div class="stats-grid">
@@ -337,136 +337,142 @@
 
 {% if can_manage %}
 <!-- ── MODAL: Import Schedule ────────────────────────────────────── -->
-<div id="modal-import" class="dashboard-modal-backdrop">
-  <div class="dashboard-modal-card modal-import-card">
-    <div class="dashboard-modal-header">
-      <h3 class="dashboard-modal-title">Import Schedule (JSON)</h3>
-      <button class="btn btn-ghost btn-sm btn-close-import dashboard-modal-close">✕</button>
+<dialog id="modal-import" class="v-modal">
+  <div class="v-modal-card modal-import-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Import Schedule (JSON)</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-import" data-modal-close aria-label="Close dialog">✕</button>
     </div>
 
-    <p class="dashboard-modal-desc">
-      Upload a standard Pretalx/Frab schedule file, or paste a JSON array of sessions.
-    </p>
+    <div class="v-modal-body">
+      <p class="v-modal-desc">
+        Upload a standard Pretalx/Frab schedule file, or paste a JSON array of sessions.
+      </p>
 
-    <div class="dashboard-modal-field">
-      <label class="dashboard-modal-label">Schedule JSON File</label>
-      <input type="file" id="import-file-input" accept=".json,application/json" class="input-field dashboard-modal-file-input">
+      <div class="v-modal-field">
+        <label class="v-modal-label">Schedule JSON File</label>
+        <input type="file" id="import-file-input" accept=".json,application/json" class="input-field v-modal-file-input">
+      </div>
+
+      <div class="v-modal-field-lg">
+        <label class="v-modal-label">Or Paste JSON</label>
+        <textarea id="import-json-textarea" class="input-field v-modal-textarea" rows="4" placeholder='[{"title": "Keynote Speech", "room": "Main Stage"}]'></textarea>
+      </div>
     </div>
 
-    <div class="dashboard-modal-field-lg">
-      <label class="dashboard-modal-label">Or Paste JSON</label>
-      <textarea id="import-json-textarea" class="input-field dashboard-modal-textarea" rows="4" placeholder='[{"title": "Keynote Speech", "room": "Main Stage"}]'></textarea>
-    </div>
-
-    <div class="dashboard-modal-footer">
-      <button class="btn btn-ghost btn-sm btn-close-import">Cancel</button>
-      <button class="btn btn-primary btn-sm" id="btn-submit-import">
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-import" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-submit-import">
         Import Schedule
       </button>
     </div>
   </div>
-</div>
+</dialog>
 {% endif %}
 
 {% if can_attach_room %}
 <!-- ── MODAL: Attach Room Video ─────────────────────────────────── -->
-<div id="modal-attach-room" class="dashboard-modal-backdrop">
-  <div class="dashboard-modal-card modal-attach-card">
-    <div class="dashboard-modal-header">
-      <h3 class="dashboard-modal-title">Attach Room Recording</h3>
-      <button class="btn btn-ghost btn-sm btn-close-attach-room dashboard-modal-close">✕</button>
+<dialog id="modal-attach-room" class="v-modal">
+  <div class="v-modal-card modal-attach-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Attach Room Recording</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-attach-room" data-modal-close aria-label="Close dialog">✕</button>
     </div>
 
-    <p class="dashboard-modal-desc">
-      Attach a continuous room recording from a video/livestream URL or file upload to all scheduled sessions in that room.
-    </p>
+    <div class="v-modal-body">
+      <p class="v-modal-desc">
+        Attach a continuous room recording from a video/livestream URL or file upload to all scheduled sessions in that room.
+      </p>
 
-    <div class="dashboard-modal-field">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Select Room</label>
-      <input type="text" id="attach-room-input" list="room-options" class="input-field" placeholder="e.g. Auditorium A" value="{% if all_rooms %}{{ all_rooms[0] }}{% endif %}">
-      <datalist id="room-options">
-        {% for r in all_rooms %}
-          <option value="{{ r }}">
-        {% endfor %}
-      </datalist>
+      <div class="v-modal-field">
+        <label class="v-modal-label v-modal-label-tight">Select Room</label>
+        <input type="text" id="attach-room-input" list="room-options" class="input-field" placeholder="e.g. Auditorium A" value="{% if all_rooms %}{{ all_rooms[0] }}{% endif %}">
+        <datalist id="room-options">
+          {% for r in all_rooms %}
+            <option value="{{ r }}">
+          {% endfor %}
+        </datalist>
+      </div>
+
+      <div class="v-modal-field">
+        <label class="v-modal-label v-modal-label-tight">Recording Video URL (Direct HTTP/HTTPS, Google Drive, Dropbox)</label>
+        <input type="url" id="attach-room-url" class="input-field" placeholder="https://example.com/recording.mp4 or cloud storage link">
+      </div>
+
+      <div class="v-modal-field-lg">
+        <label class="v-modal-label v-modal-label-tight">OR Upload Video File</label>
+        <input type="file" id="attach-room-file" accept="video/*" class="input-field v-modal-file-input">
+      </div>
     </div>
 
-    <div class="dashboard-modal-field">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Recording Video URL (Direct HTTP/HTTPS, Google Drive, Dropbox)</label>
-      <input type="url" id="attach-room-url" class="input-field" placeholder="https://example.com/recording.mp4 or cloud storage link">
-    </div>
-
-    <div class="dashboard-modal-field-lg">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">OR Upload Video File</label>
-      <input type="file" id="attach-room-file" accept="video/*" class="input-field dashboard-modal-file-input">
-    </div>
-
-    <div class="dashboard-modal-footer">
-      <button class="btn btn-ghost btn-sm btn-close-attach-room">Cancel</button>
-      <button class="btn btn-primary btn-sm" id="btn-submit-attach-room">
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-attach-room" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-submit-attach-room">
         Attach to All Sessions in Room
       </button>
     </div>
   </div>
-</div>
+</dialog>
 {% endif %}
 
 {% if can_manage %}
 <!-- ── MODAL: Quick Add Talk ────────────────────────────────────── -->
-<div id="modal-quick-talk" class="dashboard-modal-backdrop">
-  <div class="dashboard-modal-card modal-quick-card">
-    <div class="dashboard-modal-header">
-      <h3 class="dashboard-modal-title">Register New Talk</h3>
-      <button class="btn btn-ghost btn-sm btn-close-quick-talk dashboard-modal-close">✕</button>
+<dialog id="modal-quick-talk" class="v-modal">
+  <div class="v-modal-card modal-quick-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Register New Talk</h3>
+      <button type="button" class="btn btn-ghost btn-sm btn-close-quick-talk" data-modal-close aria-label="Close dialog">✕</button>
     </div>
 
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Event Name</label>
-      {% if user_events %}
-      <select id="quick-event-name" class="input-field">
-        {% for ev in user_events %}
-          <option value="{{ ev.name }}" data-event-id="{{ ev.id }}" {% if event_id == ev.id %}selected{% endif %}>{{ ev.name }}</option>
-        {% endfor %}
-      </select>
-      {% else %}
-      <input type="text" id="quick-event-name" class="input-field" value="FOSSASIA Summit 2026">
-      {% endif %}
-    </div>
-
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-title">Talk Title</label>
-      <input type="text" id="quick-talk-title" class="input-field" placeholder="e.g. Building Open Video Systems" required>
-    </div>
-
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-room">Room</label>
-      <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
-    </div>
-
-    <div class="dashboard-modal-field-sm">
-      <label class="dashboard-modal-label dashboard-modal-label-tight">Attach Speaker (Email)</label>
-      <input type="email" id="quick-talk-speaker-email" class="input-field" placeholder="speaker@example.com">
-    </div>
-
-    <div class="dashboard-modal-grid-2">
-      <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-start">Start Time (Optional)</label>
-        <input type="datetime-local" id="quick-talk-start" class="input-field">
+    <div class="v-modal-body">
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight">Event Name</label>
+        {% if user_events %}
+        <select id="quick-event-name" class="input-field">
+          {% for ev in user_events %}
+            <option value="{{ ev.name }}" data-event-id="{{ ev.id }}" {% if event_id == ev.id %}selected{% endif %}>{{ ev.name }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="text" id="quick-event-name" class="input-field" value="FOSSASIA Summit 2026">
+        {% endif %}
       </div>
-      <div>
-        <label class="dashboard-modal-label dashboard-modal-label-tight" for="quick-talk-end">End Time (Optional)</label>
-        <input type="datetime-local" id="quick-talk-end" class="input-field">
+
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight" for="quick-talk-title">Talk Title</label>
+        <input type="text" id="quick-talk-title" class="input-field" placeholder="e.g. Building Open Video Systems" required>
+      </div>
+
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight" for="quick-talk-room">Room</label>
+        <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
+      </div>
+
+      <div class="v-modal-field-sm">
+        <label class="v-modal-label v-modal-label-tight">Attach Speaker (Email)</label>
+        <input type="email" id="quick-talk-speaker-email" class="input-field" placeholder="speaker@example.com">
+      </div>
+
+      <div class="v-modal-grid-2">
+        <div>
+          <label class="v-modal-label v-modal-label-tight" for="quick-talk-start">Start Time (Optional)</label>
+          <input type="datetime-local" id="quick-talk-start" class="input-field">
+        </div>
+        <div>
+          <label class="v-modal-label v-modal-label-tight" for="quick-talk-end">End Time (Optional)</label>
+          <input type="datetime-local" id="quick-talk-end" class="input-field">
+        </div>
       </div>
     </div>
 
-    <div class="dashboard-modal-footer">
-      <button class="btn btn-ghost btn-sm btn-close-quick-talk">Cancel</button>
-      <button class="btn btn-primary btn-sm" id="btn-submit-quick-talk">
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm btn-close-quick-talk" data-modal-close>Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" id="btn-submit-quick-talk">
         Create Talk
       </button>
     </div>
   </div>
-</div>
+</dialog>
 {% endif %}
 {% endblock %}
 

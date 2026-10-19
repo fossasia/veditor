@@ -261,24 +261,26 @@
   </div>
 
   <!-- ── Approve Organizer Request Confirmation Modal ── -->
-  <dialog id="approve-organizer-modal" class="admin-modal" aria-labelledby="approve-modal-title">
-    <div class="modal-card">
-      <div class="modal-icon-box primary">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <polyline points="16 11 18 13 22 9"/>
-        </svg>
-      </div>
-      <div class="modal-content-area">
-        <h3 class="modal-title" id="approve-modal-title">Approve Organizer Request?</h3>
-        <p class="modal-desc" id="approve-modal-desc">
-          Are you sure you want to promote <strong id="approve-modal-user-email">this user</strong> to Organizer? They will be granted permissions to create and manage events.
-        </p>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-modal-cancel" id="btn-cancel-approve-modal">Cancel</button>
-        <button type="button" class="btn btn-modal-primary" id="btn-confirm-approve-modal">Approve</button>
+  <dialog id="approve-organizer-modal" class="v-modal" aria-labelledby="approve-modal-title">
+    <div class="v-modal-card v-modal-card-sm">
+      <div class="modal-card">
+        <div class="modal-icon-box primary">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <polyline points="16 11 18 13 22 9"/>
+          </svg>
+        </div>
+        <div class="modal-content-area">
+          <h3 class="modal-title" id="approve-modal-title">Approve Organizer Request?</h3>
+          <p class="modal-desc" id="approve-modal-desc">
+            Are you sure you want to promote <strong id="approve-modal-user-email">this user</strong> to Organizer? They will be granted permissions to create and manage events.
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-modal-cancel" id="btn-cancel-approve-modal" data-modal-close>Cancel</button>
+          <button type="button" class="btn btn-modal-primary" id="btn-confirm-approve-modal">Approve</button>
+        </div>
       </div>
     </div>
   </dialog>

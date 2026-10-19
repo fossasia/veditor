@@ -297,69 +297,132 @@ html[data-sidebar="collapsed"] .main-content {
 }
 
 
-/* ── Global Modals ────────────────────────────────────────────── */
-.modal-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 1000;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  display: none;
+/* ── Unified Website Modals (Zero Animation Transitions) ──────────── */
+.v-modal {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  margin: auto;
+  max-width: 100vw;
+  max-height: 100vh;
+  outline: none;
+  overflow: visible;
+  transition: none;
+  animation: none;
 }
 
-.modal-backdrop.active,
-.modal-backdrop:not([hidden]) {
-  display: flex;
+.v-modal::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+  transition: none;
+  animation: none;
 }
 
-.modal-dialog {
+.v-modal-card {
   background: var(--v-bg-surface);
-  border: 1px solid var(--v-border-default);
+  border: 1px solid var(--v-border, var(--v-border-default));
   border-radius: var(--v-radius-lg, 12px);
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.15);
-  width: 100%;
-  max-width: 460px;
-  overflow: hidden;
+  box-shadow: 0 20px 30px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+  width: 90vw;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  transition: none;
+  animation: none;
 }
 
-.modal-header {
+.v-modal-card-sm {
+  max-width: 400px;
+}
+
+.v-modal-card-lg {
+  max-width: 620px;
+}
+
+.v-modal-header {
   padding: 16px 20px;
-  border-bottom: 1px solid var(--v-border-subtle);
+  border-bottom: 1px solid var(--v-border-subtle, var(--v-border));
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.modal-title {
+.v-modal-title {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
   color: var(--v-text-primary);
 }
 
-.modal-body {
+.v-modal-desc {
+  font-size: 0.85rem;
+  color: var(--v-text-secondary);
+  line-height: 1.5;
+  margin: 0 0 14px 0;
+}
+
+.v-modal-body {
   padding: 20px;
 }
 
-.modal-warning-text {
+.v-modal-message {
   margin: 0;
   color: var(--v-text-secondary);
   font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-line;
 }
 
-.modal-footer {
+.v-modal-footer {
   padding: 14px 20px;
-  background: var(--v-bg-subtle);
-  border-top: 1px solid var(--v-border-subtle);
+  background: var(--v-bg-subtle, rgba(255, 255, 255, 0.02));
+  border-top: 1px solid var(--v-border-subtle, var(--v-border));
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.v-modal-field {
+  margin-bottom: 14px;
+}
+
+.v-modal-field-sm {
+  margin-bottom: 10px;
+}
+
+.v-modal-field-lg {
+  margin-bottom: 16px;
+}
+
+.v-modal-label {
+  font-size: 0.75rem;
+  color: var(--v-text-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.v-modal-label-tight {
+  margin-bottom: 3px;
+}
+
+.v-modal-file-input {
+  padding: 6px;
+}
+
+.v-modal-textarea {
+  font-family: var(--v-font-mono);
+  font-size: 0.75rem;
+}
+
+.v-modal-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 
 .page-body { padding: 24px 28px; flex: 1; }
@@ -1277,31 +1340,6 @@ details[open] > summary.user-bubble-btn {
   background: var(--v-status-danger-bg);
 }
 
-/* Modals */
-.dashboard-modal-backdrop {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 100;
-  align-items: center;
-  justify-content: center;
-}
-
-.dashboard-modal-card {
-  background: var(--v-bg-surface);
-  border: 1px solid var(--v-border);
-  border-radius: var(--v-radius-md);
-  width: 90%;
-  padding: 24px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-  max-height: 90vh;
-  overflow-y: auto;
-}
-
 .modal-import-card {
   max-width: 520px;
 }
@@ -1312,75 +1350,6 @@ details[open] > summary.user-bubble-btn {
 
 .modal-quick-card {
   max-width: 440px;
-}
-
-.dashboard-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.dashboard-modal-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--v-text-primary);
-  margin: 0;
-}
-
-.dashboard-modal-close {
-  padding: 2px 8px;
-}
-
-.dashboard-modal-desc {
-  font-size: 0.8rem;
-  color: var(--v-text-muted);
-  margin-bottom: 12px;
-}
-
-.dashboard-modal-field {
-  margin-bottom: 12px;
-}
-
-.dashboard-modal-field-lg {
-  margin-bottom: 16px;
-}
-
-.dashboard-modal-field-sm {
-  margin-bottom: 10px;
-}
-
-.dashboard-modal-label {
-  font-size: 0.75rem;
-  color: var(--v-text-muted);
-  display: block;
-  margin-bottom: 4px;
-}
-
-.dashboard-modal-label-tight {
-  margin-bottom: 3px;
-}
-
-.dashboard-modal-file-input {
-  padding: 6px;
-}
-
-.dashboard-modal-textarea {
-  font-family: var(--v-font-mono);
-  font-size: 0.75rem;
-}
-
-.dashboard-modal-grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.dashboard-modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1610,3 +1579,4 @@ html[data-theme="dark"] .role-request-banner.role-request-pending {
 }
 
 .form-error.hidden { display: none; }
+

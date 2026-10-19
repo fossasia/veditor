@@ -102,68 +102,7 @@
 }
 
 /* ── Edit Modal ───────────────────────────────────────────────── */
-.events-modal-backdrop {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 100;
-  align-items: center;
-  justify-content: center;
-}
-
-.events-modal-backdrop.active {
-  display: flex;
-}
-
-.events-modal-card {
-  background: var(--v-bg-surface);
-  border: 1px solid var(--v-border-subtle);
-  border-radius: var(--v-radius-lg);
-  width: 90%;
-  max-width: 440px;
-  padding: 24px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-}
-
-.events-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.events-modal-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--v-text-primary);
-  margin: 0;
-}
-
-.events-modal-field {
-  margin-bottom: 16px;
-}
-
-.events-modal-desc {
-  font-size: 0.85rem;
-  color: var(--v-text-secondary);
-  line-height: 1.5;
-  margin-bottom: 20px;
-}
-
-.events-modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 /* ── API Keys Modal Styles ─────────────────────────────────────── */
-.events-modal-card-lg {
-  max-width: 620px;
-}
 
 .api-key-info-box {
   background: var(--v-bg-subtle, rgba(255, 255, 255, 0.03));

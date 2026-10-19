@@ -53,11 +53,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   const modal = document.getElementById("reset-modal");
-  document.getElementById("btn-open-reset-modal")?.addEventListener("click", () => modal?.showModal());
-  document.getElementById("btn-cancel-modal")?.addEventListener("click", () => modal?.close());
-  modal?.addEventListener("click", (e) => {
-    if (e.target === modal) modal.close();
-  });
+  document.getElementById("btn-open-reset-modal")?.addEventListener("click", () => Modal.open(modal));
+  document.getElementById("btn-cancel-modal")?.addEventListener("click", () => Modal.close(modal));
 
   setTimeout(() => {
     document.querySelectorAll(".admin-alert").forEach((a) => {
