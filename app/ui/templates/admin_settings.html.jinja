@@ -200,26 +200,28 @@
   </form>
 
   <!-- Native Website Reset Confirmation Modal -->
-  <dialog id="reset-modal" class="admin-modal">
-    <div class="modal-card">
-      <div class="modal-icon-box danger">
-        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-          <line x1="12" y1="9" x2="12" y2="13"></line>
-          <line x1="12" y1="17" x2="12.01" y2="17"></line>
-        </svg>
-      </div>
-      <div class="modal-content-area">
-        <h3 class="modal-title">Reset to System Defaults?</h3>
-        <p class="modal-desc">
-          All runtime overrides will be cleared. Talk margin, audio loudness, and export presets will immediately revert to their system defaults.
-        </p>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-modal-cancel" id="btn-cancel-modal">Cancel</button>
-        <button type="submit" form="settings-form" name="action" value="reset_all" class="btn btn-modal-danger" id="btn-confirm-reset">
-          Reset to Defaults
-        </button>
+  <dialog id="reset-modal" class="v-modal">
+    <div class="v-modal-card v-modal-card-sm">
+      <div class="modal-card">
+        <div class="modal-icon-box danger">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </div>
+        <div class="modal-content-area">
+          <h3 class="modal-title">Reset to System Defaults?</h3>
+          <p class="modal-desc">
+            All runtime overrides will be cleared. Talk margin, audio loudness, and export presets will immediately revert to their system defaults.
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-modal-cancel" id="btn-cancel-modal" data-modal-close>Cancel</button>
+          <button type="submit" form="settings-form" name="action" value="reset_all" class="btn btn-modal-danger" id="btn-confirm-reset">
+            Reset to Defaults
+          </button>
+        </div>
       </div>
     </div>
   </dialog>
