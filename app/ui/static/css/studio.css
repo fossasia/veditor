@@ -718,11 +718,22 @@ a.breadcrumb-event:hover {
   margin-bottom: 16px;
 }
 
+.review-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
 .review-box-title {
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--v-text-primary);
   margin-bottom: 8px;
+}
+
+.review-box-header .review-box-title {
+  margin-bottom: 0;
 }
 
 .review-notes-wrap {
@@ -812,6 +823,84 @@ a.breadcrumb-event:hover {
   font-family: var(--v-font-mono, monospace);
   color: var(--v-text-primary);
   font-weight: 600;
+}
+
+/* ── Preview Stage Review Actions Help (Info Icon Popover) ─────────────── */
+.review-help-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--v-border-subtle);
+  background: var(--v-bg-surface);
+  color: var(--v-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-info-icon:hover,
+.btn-info-icon.is-active {
+  border-color: var(--v-primary);
+  color: var(--v-primary);
+  background: var(--v-bg-surface-hover);
+}
+
+.preview-help-popover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  padding: 10px 12px;
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  z-index: 60;
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+.review-help-wrap:hover .preview-help-popover,
+.preview-help-popover.is-open {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preview-help-popover-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--v-border-subtle);
+  padding-bottom: 4px;
+}
+
+.preview-help-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preview-help-name {
+  font-weight: 600;
+  color: var(--v-text-primary);
+}
+
+.preview-help-desc {
+  color: var(--v-text-muted);
+  line-height: 1.35;
 }
 
 .btn-reject-spacing {
@@ -1140,6 +1229,40 @@ a.breadcrumb-event:hover {
 
 .bumper-handoff-card {
   margin-top: 1rem;
+}
+
+.handoff-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--v-primary);
+  background: var(--v-bg-card);
+  color: var(--v-text-secondary);
+  font-size: 0.78rem;
+}
+
+.handoff-status-label {
+  color: var(--v-text-primary);
+  font-weight: 600;
+}
+
+.handoff-status time {
+  color: var(--v-text-muted);
+  font-family: var(--v-font-mono);
+  font-size: 0.72rem;
+}
+
+.handoff-resend-btn {
+  margin-top: 2px;
+}
+
+.handoff-cooldown-hint {
+  margin: 6px 0 0;
+  color: var(--v-text-muted);
+  font-size: 0.7rem;
+  text-align: center;
 }
 
 .handoff-email-input {

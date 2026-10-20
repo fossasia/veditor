@@ -31,6 +31,9 @@
     {% endif %}
 
     <form class="auth-form" method="post" action="/verify-email/resend">
+      {% if next %}
+        <input type="hidden" name="next" value="{{ next }}">
+      {% endif %}
       <div class="form-group">
         <label class="form-label" for="email">Email Address</label>
         <input type="email" id="email" name="email" class="input-field" required autofocus maxlength="255" value="{{ email or '' }}" placeholder="name@example.com">
@@ -40,11 +43,11 @@
     </form>
 
     <div class="auth-action-row">
-      <a href="/login" class="btn btn-secondary btn-auth-submit">Back to Sign In</a>
+      <a href="/login{% if next %}?next={{ next | urlencode }}{% endif %}" class="btn btn-secondary btn-auth-submit">Back to Sign In</a>
     </div>
 
     <div class="auth-footer">
-      <span>Need an account? <a href="/signup">Sign up</a></span>
+      <span>Need an account? <a href="/signup{% if next %}?next={{ next | urlencode }}{% endif %}">Sign up</a></span>
     </div>
   </div>
 </div>

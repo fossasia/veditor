@@ -762,7 +762,7 @@ def test_admin_event_detail_success(client: TestClient, db_session):
     # Talk rows
     assert "Intro to Rust" in html
     assert "Theater 1" in html
-    assert "Published" in html
+    assert "Finished" in html
 
     assert "Scaling Microservices" in html
     assert "Theater 2" in html

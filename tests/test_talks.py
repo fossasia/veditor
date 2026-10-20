@@ -1506,3 +1506,371 @@ def test_post_recording_with_recording_start_enqueues_detect():
             )  # 10:45 - 10:00 = 45m (2700s)
 
     app.dependency_overrides.clear()
+
+
+def test_handoff_with_speaker_email_enqueues_email():
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Keynote",
+        room="Room 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_intro_outro",
+        speaker_email=None,
+    )
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = mock_talk
+
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        response = client.post(
+            "/talks/1/handoff",
+            json={
+                "include_intro": False,
+                "include_outro": False,
+                "speaker_email": "speaker@example.com",
+            },
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert response.status_code == 200
+        assert mock_talk.status == "pending_bounds"
+        assert mock_talk.speaker_email == "speaker@example.com"
+        from app.tasks import job_send_speaker_handoff_email
+
+        enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
+        assert job_send_speaker_handoff_email in enqueued_jobs
+
+    app.dependency_overrides.clear()
+
+
+def test_handoff_resend_cooldown_and_missing_speaker():
+    from datetime import timedelta
+
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    # Talk in pending_bounds without speaker_email fails to resend
+    mock_talk = models.Talk(
+        id=2,
+        event_id=1,
+        title="Session",
+        room="Room 2",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_bounds",
+        speaker_email=None,
+    )
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = mock_talk
+
+    resp = client.post(
+        "/talks/2/handoff",
+        json={"include_intro": False, "include_outro": False},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert resp.status_code == 400
+    assert "speaker_email is required" in resp.json()["detail"]
+
+    # Talk with speaker_email but within 60s cooldown fails with 429
+    mock_talk.speaker_email = "speaker@example.com"
+    mock_talk.handed_off_at = datetime.now(UTC) - timedelta(seconds=10)
+
+    resp = client.post(
+        "/talks/2/handoff",
+        json={"include_intro": False, "include_outro": False},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert resp.status_code == 429
+    assert "please wait before resending" in resp.json()["detail"]
+
+    # Talk with speaker_email past cooldown succeeds (200)
+    mock_talk.handed_off_at = datetime.now(UTC) - timedelta(seconds=70)
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        resp = client.post(
+            "/talks/2/handoff",
+            json={"include_intro": False, "include_outro": False},
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert resp.status_code == 200
+        mock_enqueue.assert_called_once()
+
+    app.dependency_overrides.clear()
+
+
+def test_handoff_eventyay_synced_talk_does_not_send_mail():
+    """Handoff for an Eventyay-synced talk advances to pending_bounds without sending email."""
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    mock_event = models.Event(id=1, name="Eventyay Conf", source="eventyay")
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Eventyay Synced Keynote",
+        room="Hall 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_intro_outro",
+        speaker_email="speaker@example.com",
+    )
+    mock_talk.event = mock_event
+
+    def mock_query(model):
+        q = MagicMock()
+        if model is models.Talk:
+            q.filter.return_value.first.return_value = mock_talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                mock_talk
+            )
+        elif model is models.Event:
+            q.filter.return_value.first.return_value = mock_event
+        elif model is models.Client:
+            q.filter.return_value.first.return_value = mock_client
+        return q
+
+    mock_db.query = mock_query
+
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        resp = client.post(
+            "/talks/1/handoff",
+            json={
+                "include_intro": False,
+                "include_outro": False,
+                "speaker_email": "speaker@example.com",
+            },
+            headers={"X-API-Key": "valid_key"},
+        )
+        assert resp.status_code == 200
+        assert mock_talk.status == "pending_bounds"
+        assert mock_talk.handed_off_at is None
+        from app.tasks import job_send_speaker_handoff_email
+
+        enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
+        assert job_send_speaker_handoff_email not in enqueued_jobs
+
+    app.dependency_overrides.clear()
+
+
+def test_handoff_sso_session_does_not_send_mail():
+    """When an organizer acts via an SSO session, handoff email is not sent."""
+    from app.security import create_sso_token
+
+    mock_db = MagicMock()
+    token = create_sso_token(
+        scope_type="event",
+        scope_id=1,
+        role="organizer",
+        email="organizer@eventyay.com",
+    )
+
+    mock_event = models.Event(id=1, name="SSO Event")
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="SSO Keynote",
+        room="Hall 1",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_intro_outro",
+        speaker_email="speaker@example.com",
+    )
+    mock_talk.event = mock_event
+
+    def mock_query(model):
+        q = MagicMock()
+        if model is models.Talk:
+            q.filter.return_value.first.return_value = mock_talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                mock_talk
+            )
+        elif model is models.Event:
+            q.filter.return_value.first.return_value = mock_event
+        return q
+
+    mock_db.query = mock_query
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        resp = client.post(
+            "/talks/1/handoff",
+            json={"include_intro": False, "include_outro": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert mock_talk.status == "pending_bounds"
+        assert mock_talk.handed_off_at is None
+        from app.tasks import job_send_speaker_handoff_email
+
+        enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
+        assert job_send_speaker_handoff_email not in enqueued_jobs
+
+    app.dependency_overrides.clear()
+
+
+def test_handoff_eventyay_talk_resend_email_rejected():
+    """Resending handoff email on an Eventyay-synced talk is rejected with 400."""
+    mock_db = MagicMock()
+    mock_client = models.Client(id=1, event_ids=[1])
+
+    mock_event = models.Event(id=1, name="Eventyay Conf", source="eventyay")
+    mock_talk = models.Talk(
+        id=2,
+        event_id=1,
+        title="Eventyay Session",
+        room="Hall 2",
+        start=datetime.now(UTC),
+        end=datetime.now(UTC),
+        status="pending_bounds",
+        speaker_email="speaker@example.com",
+    )
+    mock_talk.event = mock_event
+
+    def mock_query(model):
+        q = MagicMock()
+        if model is models.Talk:
+            q.filter.return_value.first.return_value = mock_talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                mock_talk
+            )
+        elif model is models.Event:
+            q.filter.return_value.first.return_value = mock_event
+        elif model is models.Client:
+            q.filter.return_value.first.return_value = mock_client
+        return q
+
+    mock_db.query = mock_query
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    resp = client.post(
+        "/talks/2/handoff",
+        json={"include_intro": False, "include_outro": False},
+        headers={"X-API-Key": "valid_key"},
+    )
+    assert resp.status_code == 400
+    assert "Eventyay" in resp.json()["detail"]
+
+    app.dependency_overrides.clear()
+
+
+def test_job_send_speaker_handoff_email_skips_eventyay_talk():
+    """job_send_speaker_handoff_email cleanly skips if talk event is synced from Eventyay."""
+    from app.tasks import job_send_speaker_handoff_email
+
+    mock_event = models.Event(id=1, name="Eventyay Conf", source="eventyay")
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Talk Title",
+        speaker_email="speaker@example.com",
+    )
+
+    class MockWorkerDB:
+        def __enter__(self):
+            db = MagicMock()
+
+            def mock_query(model):
+                q = MagicMock()
+                if model is models.Talk:
+                    q.filter.return_value.first.return_value = mock_talk
+                elif model is models.Event:
+                    q.filter.return_value.first.return_value = mock_event
+                return q
+
+            db.query = mock_query
+            return db
+
+        def __exit__(self, *args):
+            pass
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=MockWorkerDB),
+        patch("app.email.send_speaker_handoff_email") as mock_send,
+    ):
+        result = job_send_speaker_handoff_email(1)
+        assert result is True
+        mock_send.assert_not_called()
+
+
+def test_is_eventyay_synced_exact_matching():
+    """Event.is_eventyay_synced must match managed sources ('eventyay', 'platform') exactly."""
+    assert models.Event(source="eventyay").is_eventyay_synced is True
+    assert models.Event(source="EVENTYAY ").is_eventyay_synced is True
+    assert models.Event(source="platform").is_eventyay_synced is True
+    assert models.Event(source="classroom_sso").is_eventyay_synced is False
+    assert models.Event(source="other").is_eventyay_synced is False
+    assert models.Event(source=None).is_eventyay_synced is False
+
+
+def test_handoff_platform_user_on_regular_event_sends_email():
+    """Platform API user handing off a talk in a regular event sends email."""
+    from app.auth import CurrentUser, get_current_user
+
+    mock_db = MagicMock()
+    user = CurrentUser(
+        user_id=1,
+        role="organizer",
+        source="api_key",
+        is_platform=True,
+        event_ids=[1],
+    )
+    mock_event = models.Event(id=1, name="Regular Conf", source=None)
+    now = datetime.now(UTC)
+    mock_talk = models.Talk(
+        id=1,
+        event_id=1,
+        title="Regular Talk",
+        room="Room 1",
+        start=now,
+        end=now,
+        status="pending_intro_outro",
+        speaker_email="speaker@example.com",
+    )
+    mock_talk.event = mock_event
+
+    def mock_query(model):
+        q = MagicMock()
+        if model is models.Talk:
+            q.filter.return_value.first.return_value = mock_talk
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                mock_talk
+            )
+        elif model is models.Event:
+            q.filter.return_value.first.return_value = mock_event
+        return q
+
+    mock_db.query = mock_query
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: FakeStorageBackend()
+
+    try:
+        with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+            resp = client.post(
+                "/talks/1/handoff",
+                json={"include_intro": False, "include_outro": False},
+            )
+            assert resp.status_code == 200
+            assert mock_talk.status == "pending_bounds"
+            assert mock_talk.handed_off_at is not None
+            from app.tasks import job_send_speaker_handoff_email
+
+            enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
+            assert job_send_speaker_handoff_email in enqueued_jobs
+    finally:
+        app.dependency_overrides.clear()

@@ -1482,7 +1482,11 @@ def test_studio_review_notes_present_for_preview(client: TestClient, db_session)
     res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
     assert res.status_code == 200
     assert "review-notes-input" in res.text
-    assert "Approve Preview" in res.text
+    assert "Approve Video" in res.text
+    assert "Edit Video" in res.text
+    assert "Reset Video" in res.text
+    assert "btn-preview-help" in res.text
+    assert "preview-help-popover" in res.text
 
     # Verify pending_bounds also renders review-notes-input, timestamps card, and 'Submit Timestamps'
     talk.status = "pending_bounds"
@@ -1735,7 +1739,7 @@ def test_studio_done_talk_download_actions(
         # 1. Studio page renders download actions
         res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
         assert res.status_code == 200
-        assert "Published & Complete" in res.text
+        assert "Completed" in res.text
         assert 'id="btn-download-master"' in res.text
         assert "Download Master Video" in res.text
         assert "download" in res.text
@@ -2376,7 +2380,7 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     assert 'id="btn-confirm-reset-raw"' in res.text
     assert 'id="btn-cancel-reset-raw-modal"' in res.text
     assert 'id="btn-close-reset-raw-modal"' in res.text
-    assert "Reset Talk to Raw" in res.text
+    assert "Reset Video" in res.text
     assert 'id="btn-reject"' in res.text
     # Ensure extra step retry lifecycle button is removed
     assert 'id="btn-retry"' not in res.text
@@ -3767,3 +3771,188 @@ def test_talk_studio_organizer_request_prompt(client: TestClient, db_session):
     assert res_sso.status_code == 200
     assert "btn-request-organizer" not in res_sso.text
     assert "modal-request-organizer" not in res_sso.text
+
+
+def test_check_talk_access_persists_promoted_speaker_role(db_session):
+    """Ensure check_talk_access updates models.User record in database upon role promotion."""
+    from datetime import UTC, datetime
+
+    from app.auth import CurrentUser, check_talk_access
+
+    now = datetime.now(UTC)
+
+    user = models.User(
+        email="promoted_speaker@example.com",
+        hashed_password="hash",
+        role="user",
+        is_active=True,
+    )
+    event = models.Event(name="Role Persist Event")
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(user)
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Keynote",
+        speaker_email="promoted_speaker@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    current_user = CurrentUser(
+        user_id=user.id,
+        email="promoted_speaker@example.com",
+        role="user",
+        source="cookie",
+    )
+    check_talk_access(talk, current_user, db_session)
+    assert current_user.role == "speaker"
+
+    # Reload directly from database to verify persistence
+    persisted = db_session.query(models.User).filter(models.User.id == user.id).first()
+    assert persisted.role == "speaker"
+
+
+def test_organizer_dashboard_includes_assigned_speaker_talks(
+    client: TestClient, db_session
+):
+    """Ensure an organizer's dashboard displays talks where they are assigned as speaker."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+
+    org_a = models.User(
+        email="org_a@example.com", hashed_password="hash", role="organizer"
+    )
+    org_b = models.User(
+        email="org_b@example.com", hashed_password="hash", role="organizer"
+    )
+    db_session.add(org_a)
+    db_session.add(org_b)
+    db_session.commit()
+
+    event_a = models.Event(name="Event A", created_by_user_id=org_a.id)
+    event_b = models.Event(name="Event B", created_by_user_id=org_b.id)
+    db_session.add(event_a)
+    db_session.add(event_b)
+    db_session.commit()
+
+    talk_a = models.Talk(event_id=event_a.id, title="Talk A Hosted", start=now, end=now)
+    talk_b = models.Talk(
+        event_id=event_b.id,
+        title="Talk B Speaker Slot",
+        speaker_email="org_a@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk_a)
+    db_session.add(talk_b)
+    db_session.commit()
+
+    token_a = create_session_token(org_a.id, org_a.role)
+    client.cookies.set("veditor_session", token_a)
+    resp = client.get("/studio")
+    assert resp.status_code == 200
+    assert "Talk A Hosted" in resp.text
+    assert "Talk B Speaker Slot" in resp.text
+
+
+def test_studio_handoff_utc_format_and_cooldown_attr(client: TestClient, db_session):
+    """Ensure handed_off_at is rendered in UTC and button has data-handed-off-at."""
+    from datetime import UTC, datetime, timedelta, timezone
+
+    now = datetime.now(UTC)
+    tz_ist = timezone(timedelta(hours=5, minutes=30))
+    handoff_time = datetime(2026, 10, 14, 18, 0, tzinfo=tz_ist)
+
+    user = models.User(
+        email="org_utc@example.com", hashed_password="hash", role="organizer"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    event = models.Event(name="UTC Event", created_by_user_id=user.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Timezone Talk",
+        status="pending_bounds",
+        speaker_email="speaker@example.com",
+        handed_off_at=handoff_time,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+    resp = client.get(f"/studio/talks/{talk.id}")
+    assert resp.status_code == 200
+    # 18:00 IST = 12:30 UTC
+    assert "Oct 14, 2026 at 12:30 UTC" in resp.text
+    assert 'data-handed-off-at="' in resp.text
+    assert "btn-resend-handoff" in resp.text
+    assert "Speaker handoff requested" in resp.text
+
+
+def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_session):
+    """Ensure speaker matching speaker_email gets speaker controls even if role is 'user'."""
+    now = datetime.now(UTC)
+
+    event = models.Event(name="SSO Speaker Event")
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="SSO Speaker Talk",
+        status="pending_bounds",
+        speaker_email="assigned_sso_speaker@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    # 1. SSO token with matching email
+    sso_token = create_sso_token(
+        scope_type="event",
+        scope_id=event.id,
+        role="speaker",
+        email="assigned_sso_speaker@example.com",
+    )
+    resp = client.get(
+        f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert "Awaiting Speaker to Submit Timestamps" not in resp.text
+    assert "Submit Timestamps" in resp.text
+
+    # 2. Registered user with role="user" matching talk.speaker_email
+    human_speaker = models.User(
+        email="assigned_sso_speaker@example.com",
+        hashed_password="pw",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(human_speaker)
+    db_session.commit()
+
+    user_token = create_session_token(human_speaker.id, human_speaker.role)
+    client.cookies.set("veditor_session", user_token)
+    resp2 = client.get(f"/studio/talks/{talk.id}")
+    assert resp2.status_code == 200
+    assert "Awaiting Speaker to Submit Timestamps" not in resp2.text
+    assert "Submit Timestamps" in resp2.text
+
+
+def test_talk_speaker_email_index():
+    """Ensure speaker_email column has an index defined on models.Talk."""
+    assert models.Talk.__table__.c.speaker_email.index is True

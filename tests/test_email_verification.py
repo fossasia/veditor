@@ -596,3 +596,75 @@ def test_verify_email_resend_enqueue_failure_clears_rate_key_and_returns_uniform
         db.query(models.User).filter(models.User.id == user.id).delete()
         db.commit()
         db.close()
+
+
+def test_smtp_rejects_plaintext_authentication(caplog):
+    """Ensure sending emails over unencrypted SMTP with authentication is rejected."""
+    from app.email import (
+        send_password_reset_email,
+        send_speaker_handoff_email,
+        send_verification_email,
+    )
+
+    with (
+        patch.object(settings, "smtp_host", "smtp.example.com"),
+        patch.object(settings, "smtp_user", "smtp_user"),
+        patch.object(settings, "smtp_password", "smtp_pass"),
+        patch.object(settings, "smtp_ssl", False),
+        patch.object(settings, "smtp_tls", False),
+    ):
+        assert not send_speaker_handoff_email(
+            "speaker@example.com", "Talk", "Event", "/studio"
+        )
+        assert not send_verification_email(
+            "user@example.com", "http://localhost/verify"
+        )
+        assert not send_password_reset_email(
+            "user@example.com", "http://localhost/reset"
+        )
+        assert "Plaintext SMTP authentication is rejected" in caplog.text
+
+
+def test_verify_email_resend_preserves_next_parameter():
+    """Verify that next redirect target is preserved across GET and POST /verify-email/resend."""
+    db = SessionLocal()
+    unique_email = f"resend_next_{uuid.uuid4().hex[:6]}@example.com"
+    user = models.User(
+        email=unique_email,
+        hashed_password=hash_password("Password123!"),
+        role="user",
+        is_active=True,
+        is_verified=False,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    client = TestClient(app)
+    try:
+        # GET preserves next in hidden input and links
+        res_get = client.get(
+            f"/verify-email/resend?email={unique_email}&next=/studio/talks/99"
+        )
+        assert res_get.status_code == 200
+        assert 'name="next" value="/studio/talks/99"' in res_get.text
+        assert 'href="/login?next=/studio/talks/99"' in res_get.text
+        assert 'href="/signup?next=/studio/talks/99"' in res_get.text
+
+        # POST enqueues job with safe next parameter
+        with (
+            patch("app.routes.auth.redis_conn.set", return_value=True),
+            patch("app.routes.auth.light_queue.enqueue") as mock_enqueue,
+        ):
+            res_post = client.post(
+                "/verify-email/resend",
+                data={"email": unique_email, "next": "/studio/talks/99"},
+            )
+            assert res_post.status_code == 200
+            assert mock_enqueue.called
+            call_args = mock_enqueue.call_args[0]
+            assert "/studio/talks/99" in call_args
+    finally:
+        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.commit()
+        db.close()

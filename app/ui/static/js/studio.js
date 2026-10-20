@@ -863,6 +863,45 @@ window.approveTalk = async function(id) {
   }
 };
 
+function initHandoffCooldown() {
+  const btn = document.getElementById('btn-resend-handoff');
+  if (!btn || !btn.dataset.handedOffAt) return;
+  const handedOffMs = Date.parse(btn.dataset.handedOffAt);
+  if (isNaN(handedOffMs)) return;
+
+  function update() {
+    const elapsedSec = Math.floor((Date.now() - handedOffMs) / 1000);
+    const remaining = 60 - elapsedSec;
+    if (remaining > 0) {
+      btn.disabled = true;
+      btn.textContent = `Resend Handoff Email (${remaining}s)`;
+      setTimeout(update, 1000);
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Resend Handoff Email';
+    }
+  }
+  update();
+}
+
+window.resendHandoffEmail = async function(id) {
+  if (isStudioViewOnly()) return;
+  const btn = document.getElementById('btn-resend-handoff');
+  if (btn && btn.disabled) return;
+  setBtnBusy(btn, true, 'Sending...');
+  try {
+    await postAPI(`/talks/${id}/handoff`, {
+      include_intro: false,
+      include_outro: false,
+      speaker_email: getStudioShell()?.dataset?.speakerEmail || null,
+    });
+    location.reload();
+  } catch (err) {
+    await Modal.alert({ title: 'Resend Failed', message: `Resend failed: ${err.message}`, variant: 'danger' });
+    setBtnBusy(btn, false);
+  }
+};
+
 
 window.abortTalk = function(id) {
   if (isStudioViewOnly()) return;
@@ -920,7 +959,7 @@ window.confirmResetRawTalk = async function() {
   try {
     await postAPI(`/talks/${id}/review`, {
       decision: 'reject',
-      note: notes || 'Reset talk to raw video',
+      note: notes || 'Reset video',
     });
     location.reload();
   } catch (err) {
@@ -966,12 +1005,12 @@ window.requestChangesTalk = async function(id) {
   if (!id || typeof id !== 'number') id = getTalkId();
   const notes = (document.getElementById('review-notes-input') || {}).value || '';
   const btn = document.getElementById('btn-needs-work');
-  setBtnBusy(btn, true, 'Requesting changes...');
+  setBtnBusy(btn, true, 'Opening editor...');
   try {
-    await postAPI(`/talks/${id}/review`, { decision: 'needs_work', note: notes || 'Needs work' });
+    await postAPI(`/talks/${id}/review`, { decision: 'needs_work', note: notes || 'Edit video' });
     location.reload();
   } catch (err) {
-    await Modal.alert({ title: 'Request Changes Failed', message: `Request changes failed: ${err.message}`, variant: 'danger' });
+    await Modal.alert({ title: 'Edit Video Failed', message: `Edit video failed: ${err.message}`, variant: 'danger' });
     setBtnBusy(btn, false);
   }
 };
@@ -1503,6 +1542,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  initHandoffCooldown();
+
   const actionBtns = document.getElementById('action-btns');
   if (actionBtns) {
     actionBtns.addEventListener('click', (e) => {
@@ -1516,6 +1557,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const approveBtn = e.target.closest('#btn-approve');
       if (approveBtn) {
         window.approveTalk(getTalkId());
+        return;
+      }
+      const resendBtn = e.target.closest('#btn-resend-handoff');
+      if (resendBtn) {
+        window.resendHandoffEmail(getTalkId());
         return;
       }
       const rejectBtn = e.target.closest('#btn-reject');
@@ -1532,6 +1578,31 @@ document.addEventListener('DOMContentLoaded', () => {
       if (abortBtn) {
         window.abortTalk(getTalkId());
         return;
+      }
+    });
+  }
+
+  const btnHelp = document.getElementById('btn-preview-help');
+  const popover = document.getElementById('preview-help-popover');
+  if (btnHelp && popover) {
+    btnHelp.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = popover.classList.toggle('is-open');
+      btnHelp.classList.toggle('is-active', isOpen);
+      btnHelp.setAttribute('aria-expanded', String(isOpen));
+    });
+    document.addEventListener('click', (e) => {
+      if (!popover.contains(e.target) && !btnHelp.contains(e.target)) {
+        popover.classList.remove('is-open');
+        btnHelp.classList.remove('is-active');
+        btnHelp.setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && popover.classList.contains('is-open')) {
+        popover.classList.remove('is-open');
+        btnHelp.classList.remove('is-active');
+        btnHelp.setAttribute('aria-expanded', 'false');
       }
     });
   }

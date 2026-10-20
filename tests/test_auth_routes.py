@@ -169,6 +169,18 @@ def test_get_signup_already_authenticated(client: TestClient, db_session):
     assert response.status_code == 302
     assert response.headers["location"] == "/studio"
 
+    # Preserves safe next destination
+    res_next = client.get("/signup?next=/studio/talks/123", follow_redirects=False)
+    assert res_next.status_code == 302
+    assert res_next.headers["location"] == "/studio/talks/123"
+
+    # Unsafe next destination falls back to /studio
+    res_unsafe = client.get(
+        "/signup?next=https://malicious.com", follow_redirects=False
+    )
+    assert res_unsafe.status_code == 302
+    assert res_unsafe.headers["location"] == "/studio"
+
 
 def test_post_signup_validation_errors(client: TestClient):
     # Invalid email regex

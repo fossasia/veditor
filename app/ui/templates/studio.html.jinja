@@ -21,7 +21,7 @@
   {% elif status == 'needs_work' %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
   {% elif status == 'done' %}
-    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+    <span class="badge badge-done"><span class="badge-dot"></span>Finished</span>
   {% elif status in ['rejected', 'broken'] %}
     <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
   {% else %}
@@ -95,7 +95,7 @@
 {% set can_manage = (user and user.role in ['organizer', 'admin'] and not user.is_sso) or (user is none) %}
 {% set is_admin_or_org = (user and user.role in ['organizer', 'admin']) or (user is none) %}
 {% set awaiting_speaker = talk.speaker_email and not is_speaker %}
-<div class="studio-shell{% if is_other_organizer_talk %} is-view-only{% endif %}" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-talk-title="{{ (talk.title or '') | e }}" data-talk-room="{{ (talk.room or '') | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-is-other-organizer="{{ 'true' if is_other_organizer_talk else 'false' }}">
+<div class="studio-shell{% if is_other_organizer_talk %} is-view-only{% endif %}" data-talk-id="{{ talk.id }}" data-talk-status="{{ talk.status }}" data-speaker-email="{{ talk.speaker_email or '' }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-talk-title="{{ (talk.title or '') | e }}" data-talk-room="{{ (talk.room or '') | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-is-other-organizer="{{ 'true' if is_other_organizer_talk else 'false' }}">
 
 {% set is_processing = talk.status in ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
 {% set active_job = (talk.jobs | selectattr('status', 'equalto', 'running') | list | first) if talk.jobs else none %}
@@ -424,8 +424,36 @@
 
       <!-- Action Panel for Review Actions -->
       <div class="review-box">
-        <div class="review-box-title">
-          Review Actions
+        <div class="review-box-header">
+          <div class="review-box-title">
+            Review Actions
+          </div>
+          {% if talk.status == 'preview' and not awaiting_speaker %}
+          <div class="review-help-wrap">
+            <button type="button" class="btn-info-icon" id="btn-preview-help" aria-label="Review actions guide" aria-expanded="false" title="Review actions guide">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+            </button>
+            <div class="preview-help-popover" id="preview-help-popover" role="tooltip">
+              <div class="preview-help-popover-title">Button Actions</div>
+              <div class="preview-help-item">
+                <span class="preview-help-name">Approve Video</span>
+                <span class="preview-help-desc">Approve preview and start final production transcode.</span>
+              </div>
+              <div class="preview-help-item">
+                <span class="preview-help-name">Edit Video</span>
+                <span class="preview-help-desc">Reopen timestamp editor to adjust cut boundaries.</span>
+              </div>
+              <div class="preview-help-item">
+                <span class="preview-help-name">Reset Video</span>
+                <span class="preview-help-desc">Clear cuts and bumpers to start over from raw recording.</span>
+              </div>
+            </div>
+          </div>
+          {% endif %}
         </div>
 
         {% if talk.status in ['pending_bounds', 'preview', 'needs_work'] and not awaiting_speaker %}
@@ -491,6 +519,17 @@
                 Submit Timestamps
               </button>
             {% endif %}
+            {% if is_admin_or_org and talk.handed_off_at %}
+              {% set handed_off_at_utc = talk.handed_off_at.astimezone(UTC) if talk.handed_off_at.tzinfo else talk.handed_off_at %}
+              <div class="handoff-status">
+                <span class="handoff-status-label">Speaker handoff requested</span>
+                <time datetime="{{ talk.handed_off_at.isoformat() }}">{{ handed_off_at_utc.strftime('%b %d, %Y at %H:%M UTC') }}</time>
+              </div>
+              <button class="btn btn-ghost w-full handoff-resend-btn" id="btn-resend-handoff" data-edit-control="true" data-handed-off-at="{{ talk.handed_off_at.isoformat() }}" title="You can resend after the 60-second cooldown">
+                Resend Handoff Email
+              </button>
+              <p class="handoff-cooldown-hint">Resend is limited to once every 60 seconds.</p>
+            {% endif %}
             {% if is_admin_or_org %}
               <button class="btn btn-danger w-full btn-reject-spacing" id="btn-abort" data-edit-control="true">
                 Abort Talk
@@ -518,13 +557,13 @@
               </div>
             {% else %}
               <button class="btn btn-success w-full" id="btn-approve" data-edit-control="true">
-                Approve Preview
+                Approve Video
               </button>
               <button class="btn btn-warning w-full" id="btn-needs-work" data-edit-control="true">
-                Request Changes (Needs Work)
+                Edit Video
               </button>
               <button class="btn btn-danger w-full btn-reject-spacing" id="btn-reject" data-edit-control="true">
-                Reset Talk to Raw
+                Reset Video
               </button>
             {% endif %}
             {% if is_admin_or_org %}
@@ -672,7 +711,7 @@
             {% endif %}
           {% elif talk.status == 'done' %}
             <div class="badge badge-done badge-status-full">
-              <span class="badge-dot"></span> Published & Complete
+              <span class="badge-dot"></span> Completed
             </div>
 
             <div class="published-download-card">
@@ -848,7 +887,7 @@
 <dialog id="modal-reset-raw" class="v-modal">
   <div class="v-modal-card">
     <div class="v-modal-header">
-      <h3 class="v-modal-title">Reset to Raw Video</h3>
+      <h3 class="v-modal-title">Reset Video</h3>
       <button type="button" class="btn btn-ghost btn-sm btn-close-modal" id="btn-close-reset-raw-modal" data-modal-close aria-label="Close dialog">✕</button>
     </div>
     <div class="v-modal-body">
@@ -858,7 +897,7 @@
     </div>
     <div class="v-modal-footer">
       <button type="button" class="btn btn-ghost btn-sm" id="btn-cancel-reset-raw-modal" data-modal-close>Cancel</button>
-      <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-reset-raw">Reset to Raw</button>
+      <button type="button" class="btn btn-danger btn-sm" id="btn-confirm-reset-raw">Reset Video</button>
     </div>
   </div>
 </dialog>

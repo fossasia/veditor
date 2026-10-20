@@ -23,7 +23,7 @@ const STATUS_BADGE_MAP = {
   uploading:           '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Uploading</span>',
   preview:             '<span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>',
   publishing:          '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Publishing</span>',
-  done:                '<span class="badge badge-done"><span class="badge-dot"></span>Published</span>',
+  done:                '<span class="badge badge-done"><span class="badge-dot"></span>Finished</span>',
   rejected:            '<span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>',
   failed:              '<span class="badge badge-danger"><span class="badge-dot"></span>Failed</span>',
   broken:              '<span class="badge badge-danger"><span class="badge-dot"></span>Broken</span>',
