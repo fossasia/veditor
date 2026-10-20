@@ -173,6 +173,20 @@ just rq-worker
 pre-commit install
 ```
 
+9. Run unit tests
+
+```sh
+pytest
+```
+
+Tests that wipe or rebuild state shared with other tests (currently the
+Alembic migration check) are marked `destructive` and skipped by default.
+Run them on their own, never alongside the rest of the suite:
+
+```bash
+pytest -m destructive
+```
+
 ### Other OSes
 
 1. Install System Dependencies (macOS via Homebrew)
@@ -202,7 +216,7 @@ pre-commit install
    ```bash
    uv venv
    source .venv/bin/activate
-   uv sync
+   uv sync --all-groups
    uv run pre-commit install
    ```
 

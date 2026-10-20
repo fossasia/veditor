@@ -99,6 +99,11 @@ def run_bootstrap_cli():
     return api_key_match.group(1), int(event_id_match.group(1))
 
 
+@pytest.mark.skipif(
+    os.getenv("ALLOW_SMOKE_DB_WIPE") != "1",
+    reason="This test wipes the database; run only against a disposable DB "
+    "(see smoke-test.yml, which sets ALLOW_SMOKE_DB_WIPE=1).",
+)
 def test_end_to_end_smoke(clean_db):
     # 1. Clean DB is handled by the fixture
 

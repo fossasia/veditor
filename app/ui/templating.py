@@ -75,15 +75,15 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
                 user = CurrentUser(
                     user_id=None,
                     client_id=None,
-                    email=sso_payload.get("email"),
-                    display_name=sso_payload.get("display_name"),
-                    role=sso_payload["role"],
+                    email=sso_payload.email,
+                    display_name=sso_payload.display_name,
+                    role=sso_payload.role,
                     source="sso",
-                    event_ids=[sso_payload["scope_id"]]
-                    if sso_payload.get("scope_type") == "event"
+                    event_ids=[sso_payload.scope_id]
+                    if sso_payload.scope_type == "event"
                     else [],
-                    scope_type=sso_payload.get("scope_type"),
-                    scope_id=sso_payload.get("scope_id"),
+                    scope_type=sso_payload.scope_type,
+                    scope_id=sso_payload.scope_id,
                 )
             else:
                 payload = decode_session_token(token)

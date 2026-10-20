@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     postgres_host: str = ""
     postgres_port: int | None = None
 
+    # TODO: Detect being run in pytest-xdist
+    # and allocate a DB number for each xdist worker.
+    # Ref: https://pytest-xdist.readthedocs.io/en/latest/how-to.html#identifying-the-worker-process-during-a-test
+    # It may require to change this config key, so we will do it later.
     redis_url: str = "redis://localhost:6379/0"
 
     data_dir: str = "data"
@@ -266,23 +270,21 @@ SYSTEM_SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
     ),
 }
 
-EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
-    {
-        "postgres_user",
-        "postgres_password",
-        "postgres_host",
-        "postgres_port",
-        "postgres_db",
-        "database_url",
-        "redis_url",
-        "session_secret",
-        "jwt_algorithm",
-        "data_dir",
-        "ingest_roots",
-        "storage_backend",
-        "smtp_password",
-    }
-)
+EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset({
+    "postgres_user",
+    "postgres_password",
+    "postgres_host",
+    "postgres_port",
+    "postgres_db",
+    "database_url",
+    "redis_url",
+    "session_secret",
+    "jwt_algorithm",
+    "data_dir",
+    "ingest_roots",
+    "storage_backend",
+    "smtp_password",
+})
 
 
 def _cast_setting_value(key: str, raw_val: str, default: Any = None) -> Any:

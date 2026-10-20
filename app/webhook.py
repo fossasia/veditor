@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import any_
 from sqlalchemy.orm import Session
 
 from app import models
@@ -34,7 +35,7 @@ def get_candidate_clients(
             db.query(models.Client)
             .filter(
                 (
-                    models.Client.event_ids.any(event_id)
+                    (any_(models.Client.event_ids) == event_id)
                     | (models.Client.is_platform.is_(True))
                 ),
                 models.Client.webhook_url.is_not(None),

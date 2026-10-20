@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn>=0.52.3",
     "rq>=2.11.0",
     "redis>=8.1.0",
-    "sqlalchemy>=2.0.52",
+    "sqlalchemy>=2.1.5",
     "alembic>=1.19.1",
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
@@ -38,6 +38,8 @@ test = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-env>=1.8.0",
+    "pytest-sugar>=1.1.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
@@ -54,7 +56,7 @@ exclude = ["migrations"]
 
 [tool.mypy]
 python_version = "3.14"
-plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+plugins = ["pydantic.mypy"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -62,3 +64,14 @@ no_implicit_optional = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
+
+[tool.pytest]
+minversion = "9.0"
+testpaths = [
+    "tests",
+]
+# Destructive tests are opt-in: skip them unless explicitly selected.
+addopts = ["-m", "not destructive"]
+markers = [
+    "destructive: drops/recreates database objects shared by other tests; run separately (-m destructive)",
+]

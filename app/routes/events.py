@@ -12,6 +12,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import any_
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -244,11 +245,11 @@ def _get_event_client(event_id: int, db: Session) -> models.Client | None:
         db.query(models.Client)
         .filter(
             models.Client.is_platform.is_(False),
-            models.Client.event_ids.any(event_id),
+            any_(models.Client.event_ids) == event_id,
         )
         .all()
     )
-    matching = [c for c in clients if event_id in (c.event_ids or [])]
+    matching = [c for c in clients if event_id in (c.event_ids or [])] 
     if not matching:
         return None
     for c in matching:
@@ -278,11 +279,11 @@ def list_event_api_keys(
         db.query(models.Client)
         .filter(
             models.Client.is_platform.is_(False),
-            models.Client.event_ids.any(event_id),
+            any_(models.Client.event_ids) == event_id,
         )
         .all()
     )
-    event_clients = [c for c in event_clients if event_id in (c.event_ids or [])]
+    event_clients = [c for c in event_clients if event_id in (c.event_ids or [])] 
 
     results = []
     for c in event_clients:
@@ -336,7 +337,7 @@ def create_event_api_key(
         db.query(models.Client)
         .filter(
             models.Client.is_platform.is_(False),
-            models.Client.event_ids.any(event_id),
+            any_(models.Client.event_ids) == event_id,
         )
         .all()
     )

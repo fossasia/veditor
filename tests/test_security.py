@@ -5,7 +5,9 @@ import jwt
 import pytest
 
 from app.config import settings
+from app.consts import SSOScopeType
 from app.security import (
+    SSOTokenPayload,
     create_access_token,
     create_session_token,
     create_sso_token,
@@ -336,15 +338,19 @@ def test_create_sso_token_event():
 
     payload = decode_sso_token(token)
     assert payload is not None
-    assert payload["type"] == "sso"
-    assert payload["scope_type"] == "event"
-    assert payload["scope_id"] == 10
-    assert payload["role"] == "organizer"
-    assert "exp" in payload
-    assert "iat" in payload
-    assert "user_id" not in payload
-    assert "sub" not in payload
-    assert "email" not in payload
+    assert isinstance(payload, SSOTokenPayload)
+    assert isinstance(payload.scope_type, SSOScopeType)
+    assert payload.scope_type is SSOScopeType.EVENT
+    # StrEnum keeps string equality semantics so existing callers that
+    # compare ``payload.scope_type == "event"`` continue to work.
+    assert payload.scope_type == "event"
+    assert payload.scope_id == 10
+    assert payload.role == "organizer"
+    # Decoded data is normalized, so identity claims never leak through:
+    # user_id/sub are never attributes of SSOTokenPayload
+    assert not hasattr(payload, "user_id")
+    assert not hasattr(payload, "sub")
+    assert payload.email is None
 
 
 def test_create_sso_token_talk():
@@ -353,12 +359,14 @@ def test_create_sso_token_talk():
 
     payload = decode_sso_token(token)
     assert payload is not None
-    assert payload["type"] == "sso"
-    assert payload["scope_type"] == "talk"
-    assert payload["scope_id"] == 42
-    assert payload["role"] == "speaker"
-    assert "user_id" not in payload
-    assert "sub" not in payload
+    assert isinstance(payload, SSOTokenPayload)
+    assert isinstance(payload.scope_type, SSOScopeType)
+    assert payload.scope_type is SSOScopeType.TALK
+    assert payload.scope_type == "talk"
+    assert payload.scope_id == 42
+    assert payload.role == "speaker"
+    assert not hasattr(payload, "user_id")
+    assert not hasattr(payload, "sub")
 
 
 def test_create_sso_token_invalid_inputs():
@@ -581,7 +589,7 @@ def test_decode_sso_token_malformed_claims():
     )
     payload = decode_sso_token(good_tok)
     assert payload is not None
-    assert payload["email"] == "speaker@example.com"
+    assert payload.email == "speaker@example.com"
 
 
 def test_settings_sso_token_expire_seconds_validation():

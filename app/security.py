@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.errors import HeaderParseError
 from email.headerregistry import Address
@@ -13,6 +14,34 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from app.config import ALLOWED_JWT_ALGORITHMS, settings
+from app.consts import AuthRole, SSOScopeType
+
+
+@dataclass(frozen=True, slots=True)
+class SSOTokenPayload:
+    """
+    Typed, validated payload of an SSO JWT.
+
+    Returned by :func:`decode_sso_token` in place of a raw ``dict`` so call
+    sites get autocomplete, type-checked attribute access, and the ``role``
+    already bound to the canonical :class:`AuthRole` enum and ``scope_type``
+    bound to :class:`SSOScopeType`. ``iat``/``exp`` carry Unix-epoch
+    timestamps as decoded by PyJWT.
+    """
+
+    scope_type: SSOScopeType
+    scope_id: int
+    role: AuthRole
+    exp: int
+    iat: int | None = None
+    email: str | None = None
+    display_name: str | None = None
+
+
+# Roles an SSO JWT is allowed to carry. Both are valid ``AuthRole`` members, so
+# validating against this set is equivalent to validating against the enum.
+SSO_VALID_ROLES: tuple[AuthRole, ...] = (AuthRole.ORGANIZER, AuthRole.SPEAKER)
+
 
 _hasher = PasswordHasher()
 _session_secret: str | None = None
@@ -434,7 +463,7 @@ def is_valid_email(email: str) -> bool:
 
 
 def create_sso_token(
-    scope_type: Literal["event", "talk"],
+    scope_type: SSOScopeType | Literal["event", "talk"],
     scope_id: int,
     role: str,
     expires_in_seconds: int | None = None,
@@ -445,14 +474,16 @@ def create_sso_token(
     Generates a short-lived signed SSO token scoped to an event or talk,
     with no user_id or personal identity claims.
     """
-    if scope_type not in ("event", "talk"):
+    try:
+        scope_type_enum = SSOScopeType(scope_type)
+    except ValueError, TypeError:
         raise ValueError("scope_type must be 'event' or 'talk'")
     if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
         raise ValueError("scope_id must be a positive integer")
     if role not in ("organizer", "speaker"):
         raise ValueError("role must be 'organizer' or 'speaker'")
     if (
-        scope_type == "event"
+        scope_type_enum is SSOScopeType.EVENT
         and role == "speaker"
         and (not isinstance(email, str) or not email.strip())
     ):
@@ -471,7 +502,7 @@ def create_sso_token(
         else settings.sso_token_expire_seconds
     )
     payload = {
-        "scope_type": scope_type,
+        "scope_type": scope_type_enum.value,
         "scope_id": scope_id,
         "role": role,
         "type": "sso",
@@ -485,11 +516,16 @@ def create_sso_token(
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
-def decode_sso_token(token: str) -> dict | None:
+def decode_sso_token(token: str) -> SSOTokenPayload | None:
     """
     Decodes and validates an SSO token.
-    Returns the decoded payload dict if valid, or None if expired, tampered,
-    malformed, containing user_id, or missing required claims.
+
+    Returns a typed :class:`SSOTokenPayload` on success, or ``None`` if the
+    token is expired, tampered, malformed, contains user identity claims, or
+    fails the SSO-specific claim allow-list. The ``role`` field is normalized
+    to an :class:`AuthRole` enum and ``scope_type`` to a :class:`SSOScopeType`
+    enum so call sites can pass them straight into ``CurrentUser(...)`` and
+    template context.
     """
     if not token or not isinstance(token, str):
         return None
@@ -504,22 +540,62 @@ def decode_sso_token(token: str) -> dict | None:
             return None
         if "user_id" in payload or "sub" in payload:
             return None
-        if payload.get("scope_type") not in ("event", "talk"):
+        try:
+            scope_type_enum = SSOScopeType(payload.get("scope_type"))
+        except ValueError, TypeError:
             return None
         scope_id = payload.get("scope_id")
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
-        if payload.get("role") not in ("organizer", "speaker"):
+        raw_role = payload.get("role")
+        try:
+            role = AuthRole(raw_role)
+        except ValueError, TypeError:
+            return None
+        if role not in SSO_VALID_ROLES:
             return None
         if (
-            payload.get("scope_type") == "event"
-            and payload.get("role") == "speaker"
+            scope_type_enum is SSOScopeType.EVENT
+            and role is AuthRole.SPEAKER
             and (
                 not isinstance(payload.get("email"), str)
                 or not payload["email"].strip()
             )
         ):
             return None
-        return payload
+
+        exp = payload.get("exp")
+        iat = payload.get("iat")
+        # PyJWT returns numeric-date claims as Python ints; defensive checks
+        # keep the dataclass honest if a future JWT lib changes that.
+        if (
+            not isinstance(exp, int)
+            or isinstance(exp, bool)
+            or (iat is not None and (not isinstance(iat, int) or isinstance(iat, bool)))
+        ):
+            return None
+
+        email_raw = payload.get("email")
+        display_name_raw = payload.get("display_name")
+        email = (
+            email_raw.strip()
+            if isinstance(email_raw, str) and email_raw.strip()
+            else None
+        )
+        display_name = (
+            display_name_raw.strip()
+            if isinstance(display_name_raw, str) and display_name_raw.strip()
+            else None
+        )
+
+        return SSOTokenPayload(
+            scope_type=scope_type_enum,
+            scope_id=scope_id,
+            role=role,
+            exp=exp,
+            iat=iat if isinstance(iat, int) else None,
+            email=email,
+            display_name=display_name,
+        )
     except (jwt.PyJWTError, TypeError, ValueError, AttributeError) as _exc:
         return None

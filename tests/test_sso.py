@@ -17,6 +17,7 @@ from app.auth import (
     get_current_user,
 )
 from app.config import settings
+from app.consts import AuthRole
 from app.db import get_db
 from app.main import app
 from app.security import (
@@ -147,12 +148,12 @@ def test_event_sso_token_success(mock_db):
 
     payload = decode_sso_token(data["token"])
     assert payload is not None
-    assert payload["scope_type"] == "event"
-    assert payload["scope_id"] == 1
-    assert payload["role"] == "organizer"
-    assert "user_id" not in payload
-    assert "sub" not in payload
-    assert "email" not in payload
+    assert payload.scope_type == "event"
+    assert payload.scope_id == 1
+    assert payload.role == "organizer"
+    # Identity claims are explicitly excluded from the typed SSO payload.
+    assert not hasattr(payload, "user_id")
+    assert not hasattr(payload, "sub")
 
 
 # ── 2. POST /talks/{talk_id}/sso-token ─────────────────────────────────────────
@@ -244,11 +245,11 @@ def test_talk_sso_token_success(mock_db):
 
     payload = decode_sso_token(data["token"])
     assert payload is not None
-    assert payload["scope_type"] == "talk"
-    assert payload["scope_id"] == 10
-    assert payload["role"] == "speaker"
-    assert "user_id" not in payload
-    assert "sub" not in payload
+    assert payload.scope_type == "talk"
+    assert payload.scope_id == 10
+    assert payload.role == "speaker"
+    assert not hasattr(payload, "user_id")
+    assert not hasattr(payload, "sub")
 
 
 # ── 3. Identity Resolution (get_current_user) ─────────────────────────────────
@@ -910,11 +911,11 @@ def test_sso_token_organizer_role_and_identity():
     )
     payload = decode_sso_token(token)
     assert payload is not None
-    assert payload["role"] == "organizer"
-    assert payload["email"] == "organizer@example.org"
-    assert payload["display_name"] == "Lead Organizer"
-    assert payload["scope_type"] == "event"
-    assert payload["scope_id"] == 42
+    assert payload.role == "organizer"
+    assert payload.email == "organizer@example.org"
+    assert payload.display_name == "Lead Organizer"
+    assert payload.scope_type == "event"
+    assert payload.scope_id == 42
 
 
 def test_get_current_user_populates_identity_from_sso(mock_db):
@@ -942,6 +943,11 @@ def test_get_current_user_populates_identity_from_sso(mock_db):
     assert user.display_name == "Lead Organizer"
     assert user.is_sso is True
     assert user.event_ids == [1]
+
+    # Wiring: decode_sso_token emits AuthRole, so user.role is the enum itself
+    # without any per-call-site conversion.
+    assert user.role is AuthRole.ORGANIZER
+    assert isinstance(user.role, AuthRole)
 
 
 def test_studio_dashboard_displays_sso_email_identity(mock_db):

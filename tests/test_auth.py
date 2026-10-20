@@ -19,6 +19,7 @@ from app.auth import (
     require_talk_access,
     verify_event_access,
 )
+from app.consts import ROLE_HIERARCHY
 from app.db import SessionLocal, get_db
 from app.main import app
 from app.models import Client, Event, Talk, User
@@ -687,7 +688,6 @@ def test_require_talk_access_success_and_unauthorized():
 
 def test_role_hierarchy_levels():
     """Verify exact role hierarchy: user(0) < speaker(1) < organizer(2) < admin(3)."""
-    from app.auth import ROLE_HIERARCHY
 
     assert ROLE_HIERARCHY["user"] == 0
     assert ROLE_HIERARCHY["speaker"] == 1
@@ -813,9 +813,6 @@ def test_login_routes_next_redirect_and_open_redirect_protection():
 def test_get_client_throttles_last_used_at_updates():
     from datetime import UTC, datetime, timedelta
     from unittest.mock import MagicMock
-
-    from app.auth import get_client
-    from app.models import Client
 
     mock_db = MagicMock()
     now = datetime.now(UTC)

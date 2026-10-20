@@ -69,3 +69,7 @@ jobs:
         run: uv run alembic upgrade head
       - name: Run tests
         run: uv run pytest --ignore=tests/test_smoke.py
+      # Destructive tests drop the whole test schema, so they must run alone,
+      # never interleaved or parallelized with the rest of the suite.
+      - name: Run destructive tests
+        run: uv run pytest -m destructive -n0
