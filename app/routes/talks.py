@@ -1681,22 +1681,31 @@ def create_talk_sso_token(
         )
     if not talk:
         talk_filters = [models.Talk.external_id == talk_identifier]
-        if not getattr(client, "is_platform", False) and client.event_ids:
-            talk_filters.append(models.Talk.event_id.in_(client.event_ids))
-        elif target_event_id is not None:
-            resolved_eid = (
-                int(target_event_id) if str(target_event_id).isdigit() else None
+        resolved_event_id: int | None = None
+        if target_event_id is not None:
+            target_str = str(target_event_id).strip()
+            # Match by Event.external_id first to prevent numeric external IDs from clashing with internal PKs
+            event_match = (
+                db.query(models.Event)
+                .filter(models.Event.external_id == target_str)
+                .first()
             )
-            if resolved_eid is None:
-                ev = (
-                    db.query(models.Event)
-                    .filter(models.Event.external_id == str(target_event_id))
-                    .first()
-                )
-                if ev:
-                    resolved_eid = ev.id
-            if resolved_eid is not None:
-                talk_filters.append(models.Talk.event_id == resolved_eid)
+            if event_match:
+                resolved_event_id = event_match.id
+            elif target_str.isdigit():
+                resolved_event_id = int(target_str)
+
+        if not getattr(client, "is_platform", False) and client.event_ids:
+            if resolved_event_id is not None:
+                if resolved_event_id in client.event_ids:
+                    talk_filters.append(models.Talk.event_id == resolved_event_id)
+                else:
+                    talk_filters.append(models.Talk.event_id.in_(client.event_ids))
+            else:
+                talk_filters.append(models.Talk.event_id.in_(client.event_ids))
+        elif resolved_event_id is not None:
+            talk_filters.append(models.Talk.event_id == resolved_event_id)
+
         talk = db.query(models.Talk).filter(*talk_filters).first()
     if not talk:
         raise HTTPException(
