@@ -255,27 +255,29 @@ You only need to create the derived test database once (`createdb test_veditor`)
 
 The project includes an end-to-end smoke test that runs through the complete state flow of a Talk, covering the core requirements of Phase 1.
 
-**Note**: The smoke test expects a live API server and will wipe the database configured by your `POSTGRES_*` env vars to ensure a clean state.
-Our convention is to use a test database named `test_<name>`, for example `test_veditor`. If your database name does not start with `test_`, set `ALLOW_SMOKE_DB_WIPE=1` to run it.
+**Note**: The smoke test expects a live API server and will wipe the database configured by your `POSTGRES_*` env vars (the database named by `POSTGRES_DB`, not the separate `test_<name>` database used by the unit-test suite) to ensure a clean state.
+
+The whole test is **skipped by default** unless `ALLOW_SMOKE_DB_WIPE=1` is set. When it runs, it additionally refuses to wipe any database whose name does not start with `test_` unless that same variable is set. So a developer run needs either a `test_*` database plus `ALLOW_SMOKE_DB_WIPE=1`, or any database name with `ALLOW_SMOKE_DB_WIPE=1`. CI sets `ALLOW_SMOKE_DB_WIPE=1` in `.github/workflows/smoke-test.yml`.
 
 ### Running against the Docker Stack
-1. Start the complete stack:
+1. Make sure `.env` exists (`cp .env.example .env`) and set `POSTGRES_DB` to a disposable database (any name is fine when `ALLOW_SMOKE_DB_WIPE=1`; otherwise prefix it with `test_`, e.g. `test_disposable`). The Postgres service auto-creates the database on first init from this variable.
+2. Start the complete stack:
    ```bash
    docker compose up -d --build
    ```
-2. Wait for the API to be healthy (`curl http://localhost:8000/health`).
-3. Run the database migrations against the containerized database:
+3. Wait for the API to be healthy (`curl http://localhost:8000/health`).
+4. Run the database migrations against the containerized database:
    ```bash
    uv run alembic upgrade head
    ```
-4. Run the smoke test:
+5. Run the smoke test:
    ```bash
-   uv run pytest tests/test_smoke.py
+   ALLOW_SMOKE_DB_WIPE=1 uv run pytest tests/test_smoke.py
    ```
 
 ### Running Native
 
-1. Ensure your local Postgres and Redis are running and configured in `.env` (typical Linux setup will not need `.env`).
+1. Ensure your local Postgres and Redis are running and configured in `.env` (typical Linux setup will not need `.env`). Set `POSTGRES_DB` to a disposable database (any name is fine when `ALLOW_SMOKE_DB_WIPE=1`; otherwise prefix it with `test_`, e.g. `test_disposable`) and `createdb` it.
 
 2. Start the API server:
    ```bash
@@ -283,7 +285,7 @@ Our convention is to use a test database named `test_<name>`, for example `test_
    ```
 3. In a separate terminal, run the smoke test:
    ```bash
-   uv run pytest tests/test_smoke.py
+   ALLOW_SMOKE_DB_WIPE=1 uv run pytest tests/test_smoke.py
    ```
 
 
