@@ -33,7 +33,7 @@ class SSOTokenPayload:
     scope_id: int
     role: AuthRole
     exp: int
-    iat: int | None = None
+    iat: int | float | None = None
     email: str | None = None
     display_name: str | None = None
 
@@ -566,12 +566,16 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
 
         exp = payload.get("exp")
         iat = payload.get("iat")
-        # PyJWT returns numeric-date claims as Python ints; defensive checks
-        # keep the dataclass honest if a future JWT lib changes that.
+        # PyJWT returns numeric-date claims as Python ints (or floats when
+        # the source carried fractional seconds); defensive checks keep the
+        # dataclass honest if a future JWT lib changes that.
         if (
             not isinstance(exp, int)
             or isinstance(exp, bool)
-            or (iat is not None and (not isinstance(iat, int) or isinstance(iat, bool)))
+            or (
+                iat is not None
+                and (not isinstance(iat, (int, float)) or isinstance(iat, bool))
+            )
         ):
             return None
 
@@ -593,7 +597,7 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             scope_id=scope_id,
             role=role,
             exp=exp,
-            iat=iat if isinstance(iat, int) else None,
+            iat=iat if isinstance(iat, (int, float)) else None,
             email=email,
             display_name=display_name,
         )
