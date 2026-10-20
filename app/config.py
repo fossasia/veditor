@@ -270,21 +270,23 @@ SYSTEM_SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
     ),
 }
 
-EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset({
-    "postgres_user",
-    "postgres_password",
-    "postgres_host",
-    "postgres_port",
-    "postgres_db",
-    "database_url",
-    "redis_url",
-    "session_secret",
-    "jwt_algorithm",
-    "data_dir",
-    "ingest_roots",
-    "storage_backend",
-    "smtp_password",
-})
+EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "postgres_user",
+        "postgres_password",
+        "postgres_host",
+        "postgres_port",
+        "postgres_db",
+        "database_url",
+        "redis_url",
+        "session_secret",
+        "jwt_algorithm",
+        "data_dir",
+        "ingest_roots",
+        "storage_backend",
+        "smtp_password",
+    }
+)
 
 
 def _cast_setting_value(key: str, raw_val: str, default: Any = None) -> Any:

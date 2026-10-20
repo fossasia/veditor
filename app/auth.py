@@ -95,8 +95,7 @@ def _normalize_auth_value(value: str | None) -> str | None:
 def lock_active_admins(session: Session) -> list[int]:
     """Locks active administrator rows in ascending ID order and returns their IDs."""
     rows = (
-        session
-        .query(models.User.id)
+        session.query(models.User.id)
         .filter(models.User.role == "admin", models.User.is_active.is_(True))
         .order_by(models.User.id.asc())
         .with_for_update()
@@ -312,8 +311,7 @@ def get_current_user(
             payload = decode_session_token(raw_cookie)
             if payload:
                 user = (
-                    db
-                    .query(models.User)
+                    db.query(models.User)
                     .filter(models.User.id == payload["user_id"])
                     .first()
                 )
@@ -348,8 +346,7 @@ def get_current_user(
         cookie_api = _normalize_auth_value(req_cookies.get("veditor_api_key"))
     if cookie_api:
         client = (
-            db
-            .query(models.Client)
+            db.query(models.Client)
             .filter(models.Client.hashed_key == hash_api_key(cookie_api))
             .first()
         )
@@ -393,8 +390,7 @@ def get_current_user(
         payload = decode_access_token(token)
         if payload:
             user = (
-                db
-                .query(models.User)
+                db.query(models.User)
                 .filter(models.User.id == payload["user_id"])
                 .first()
             )

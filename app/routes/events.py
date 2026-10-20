@@ -249,7 +249,7 @@ def _get_event_client(event_id: int, db: Session) -> models.Client | None:
         )
         .all()
     )
-    matching = [c for c in clients if event_id in (c.event_ids or [])] 
+    matching = [c for c in clients if event_id in (c.event_ids or [])]
     if not matching:
         return None
     for c in matching:
@@ -283,7 +283,7 @@ def list_event_api_keys(
         )
         .all()
     )
-    event_clients = [c for c in event_clients if event_id in (c.event_ids or [])] 
+    event_clients = [c for c in event_clients if event_id in (c.event_ids or [])]
 
     results = []
     for c in event_clients:
