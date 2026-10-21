@@ -14,7 +14,7 @@
   {% elif status == 'needs_work' %}
     <span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>
   {% elif status == 'done' %}
-    <span class="badge badge-done"><span class="badge-dot"></span>Published</span>
+    <span class="badge badge-done"><span class="badge-dot"></span>Finished</span>
   {% elif status in ['rejected', 'broken'] %}
     <span class="badge badge-danger"><span class="badge-dot"></span>{{ status | title }}</span>
   {% else %}
@@ -43,7 +43,7 @@
         <span>Event ID: <strong>#{{ event.id }}</strong></span>
         <span>&bull;</span>
         <span>
-          Organizer: 
+          Organizer:
           {% if event.created_by_user %}
             <strong>{{ event.created_by_user.email }}</strong>
           {% elif event.created_by_user_id %}

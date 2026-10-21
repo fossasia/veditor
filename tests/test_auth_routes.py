@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from app import models
-from app.db import Base, engine, get_db
+from app.db import Base, engine
 from app.main import app
 from app.security import (
     create_session_token,
@@ -24,24 +24,6 @@ def setup_database():
 @pytest.fixture
 def client():
     return TestClient(app)
-
-
-@pytest.fixture
-def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(
-        bind=connection, join_transaction_mode="create_savepoint"
-    )
-    app.dependency_overrides[get_db] = lambda: session
-
-    try:
-        yield session
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        session.close()
-        transaction.rollback()
-        connection.close()
 
 
 def test_get_login_unauthenticated(client: TestClient):
@@ -186,6 +168,18 @@ def test_get_signup_already_authenticated(client: TestClient, db_session):
     response = client.get("/signup", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["location"] == "/studio"
+
+    # Preserves safe next destination
+    res_next = client.get("/signup?next=/studio/talks/123", follow_redirects=False)
+    assert res_next.status_code == 302
+    assert res_next.headers["location"] == "/studio/talks/123"
+
+    # Unsafe next destination falls back to /studio
+    res_unsafe = client.get(
+        "/signup?next=https://malicious.com", follow_redirects=False
+    )
+    assert res_unsafe.status_code == 302
+    assert res_unsafe.headers["location"] == "/studio"
 
 
 def test_post_signup_validation_errors(client: TestClient):

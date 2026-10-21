@@ -14,7 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
@@ -163,8 +163,7 @@ def _authorize_studio_talk(
         authorized = (
             user.role == "admin"
             or (
-                user.role == "speaker"
-                and talk.speaker_email
+                talk.speaker_email
                 and user.email
                 and talk.speaker_email.lower() == user.email.lower()
             )
@@ -188,6 +187,14 @@ def _authorize_studio_talk(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=not_found_detail,
             )
+        if (
+            user.role == "user"
+            and talk.speaker_email
+            and user.email
+            and talk.speaker_email.lower() == user.email.lower()
+        ):
+            user.role = "speaker"
+            db.commit()
         if hasattr(request, "state"):
             request.state.user = user
         return talk
@@ -454,9 +461,20 @@ def _render_talks_page(
         user_events = db.query(models.Event).filter(models.Event.id == event_id).all()
     elif user:
         if user.role in ("organizer", "admin"):
+            filters = [models.Event.created_by_user_id == user.id]
+            if user.email:
+                speaker_events = (
+                    db.query(models.Talk.event_id)
+                    .filter(
+                        models.Talk.speaker_email == user.email.lower(),
+                        models.Talk.event_id.isnot(None),
+                    )
+                    .scalar_subquery()
+                )
+                filters.append(models.Event.id.in_(speaker_events))
             user_events = (
                 db.query(models.Event)
-                .filter(models.Event.created_by_user_id == user.id)
+                .filter(or_(*filters))
                 .order_by(models.Event.name.asc())
                 .all()
             )
@@ -476,14 +494,29 @@ def _render_talks_page(
     # caller may see, narrowed to the selected event. Speakers see their own
     # talks; everyone else sees the events they have access to (none for plain
     # users).
+    if (
+        user
+        and user.email
+        and user.role == "user"
+        and db.query(models.Talk)
+        .filter(models.Talk.speaker_email == user.email.lower())
+        .first()
+    ):
+        user.role = "speaker"
+        db.commit()
     if user and user.role == "speaker" and user.email:
-        scope = func.lower(models.Talk.speaker_email) == user.email.lower()
+        scope = models.Talk.speaker_email == user.email.lower()
     else:
         scope = models.Talk.event_id.in_([e.id for e in user_events])
         if sso_user and sso_user.get("role") == "speaker":
             scope = and_(
                 scope,
-                func.lower(models.Talk.speaker_email) == sso_user["email"].lower(),
+                models.Talk.speaker_email == sso_user["email"].lower(),
+            )
+        elif user and user.email and user.role != "admin":
+            scope = or_(
+                scope,
+                models.Talk.speaker_email == user.email.lower(),
             )
     if event_id is not None:
         scope = and_(scope, models.Talk.event_id == event_id)
@@ -907,9 +940,25 @@ def studio(
             "preview_urls": preview_urls,
             "all_statuses": ALL_STATUSES,
             "is_speaker": (
-                sso_user.get("role") if sso_user else getattr(user, "role", None)
-            )
-            == "speaker",
+                (
+                    sso_user.get("role") == "speaker"
+                    or bool(
+                        talk.speaker_email
+                        and sso_user.get("email")
+                        and talk.speaker_email.lower() == sso_user["email"].lower()
+                    )
+                )
+                if sso_user
+                else (
+                    getattr(user, "role", None) == "speaker"
+                    or bool(
+                        talk.speaker_email
+                        and getattr(user, "email", None)
+                        and talk.speaker_email.lower()
+                        == getattr(user, "email", "").lower()
+                    )
+                )
+            ),
             "is_other_organizer_talk": is_other_organizer_talk,
             "is_from_admin": is_from_admin,
             "back_url": back_url,

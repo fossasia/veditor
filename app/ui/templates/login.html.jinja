@@ -54,7 +54,7 @@
     </form>
 
     <div class="auth-footer">
-      <span>Don't have an account? <a href="/signup">Sign up</a></span>
+      <span>Don't have an account? <a href="/signup{% if next %}?next={{ next | urlencode }}{% endif %}">Sign up</a></span>
     </div>
   </div>
 </div>

@@ -10,12 +10,14 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
@@ -1448,6 +1450,50 @@ class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
 _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 
+# A host name (letters, digits, "-", "_", ".") or an IPv6 literal with an
+# optional zone ID.
+_LOG_SAFE_HOST = re.compile(r"[\w.-]+|[0-9a-fA-F:.]+(%[\w.-]+)?")
+
+
+def _redact_url(url: str) -> str:
+    """Return the scheme and host of *url* for logging.
+
+    Credentials, path, query string and fragment are dropped: services such as
+    Slack and Discord put the webhook token in the path.
+    """
+    if not isinstance(url, str):
+        return "<invalid url>"
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        if not _LOG_SAFE_HOST.fullmatch(host):
+            # urlsplit does not validate the host, which can then hold a
+            # backslash, whitespace or percent-encoded data.
+            return "<invalid url>"
+        if ":" in host:
+            # hostname drops the brackets around IPv6 literals.
+            host = f"[{host}]"
+        if parts.port is not None:
+            host = f"{host}:{parts.port}"
+    except ValueError:
+        return "<invalid url>"
+    return urllib.parse.urlunsplit((parts.scheme, host, "", "", ""))
+
+
+def _describe_webhook_error(exc: Exception) -> str:
+    """Summarize a delivery error for logging without its message text.
+
+    Some error messages repeat the full request URL, so only the exception type
+    and a few safe attributes are reported.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{name} (HTTP {exc.code})"
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
+        return f"{name} ({type(exc.reason).__name__})"
+    return name
+
+
 def job_deliver_webhook(
     webhook_url: str,
     webhook_secret: str,
@@ -1476,6 +1522,7 @@ def job_deliver_webhook(
         logger.error("Failed to prepare webhook payload/signature: %s", exc)
         return False
 
+    redacted_url = _redact_url(webhook_url)
     headers = {
         "Content-Type": "application/json",
         "X-VEditor-Signature": f"sha256={signature}",
@@ -1500,22 +1547,22 @@ def job_deliver_webhook(
                 if resp_status is not None and 200 <= resp_status < 300:
                     logger.info(
                         "Webhook delivered successfully to %s on attempt %d",
-                        webhook_url,
+                        redacted_url,
                         attempt,
                     )
                     return True
                 logger.warning(
                     "Webhook delivery to %s returned HTTP %s on attempt %d",
-                    webhook_url,
+                    redacted_url,
                     resp_status,
                     attempt,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Webhook delivery to %s failed on attempt %d: %s",
-                webhook_url,
+                redacted_url,
                 attempt,
-                exc,
+                _describe_webhook_error(exc),
             )
 
         if attempt == 1:
@@ -1523,12 +1570,14 @@ def job_deliver_webhook(
 
     logger.info(
         "Webhook delivery to %s failed after 2 attempts. Abandoning quietly.",
-        webhook_url,
+        redacted_url,
     )
     return False
 
 
-def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
+def job_send_verification_email(
+    user_id: int, email: str, token: str, next: str = ""
+) -> bool:
     """Send an account verification email via RQ background worker.
 
     Checks user state in DB, generates the verification URL, dispatches via
@@ -1555,6 +1604,8 @@ def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
         settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
     )
     verify_url = f"{base}/verify-email?token={token}"
+    if next:
+        verify_url += f"&next={urllib.parse.quote(next, safe='/')}"
     success = send_verification_email(
         recipient=email,
         verify_url=verify_url,
@@ -1562,6 +1613,54 @@ def job_send_verification_email(user_id: int, email: str, token: str) -> bool:
     )
     if not success:
         raise RuntimeError(f"Failed to deliver verification email to {email}")
+    return True
+
+
+def job_send_speaker_handoff_email(talk_id: int) -> bool:
+    """Send the review link for a handed-off talk."""
+    from app.email import send_speaker_handoff_email
+    from app.models import Event
+
+    with SessionLocal() as db:
+        talk = db.query(Talk).filter(Talk.id == talk_id).first()
+        if not talk or not talk.speaker_email:
+            logger.info(
+                "Skipping handoff email: talk %s has no assigned speaker", talk_id
+            )
+            return True
+        event = db.query(Event).filter(Event.id == talk.event_id).first()
+        event_synced = False
+        if event is not None and isinstance(event, Event):
+            event_synced = event.is_eventyay_synced
+        elif event is not None:
+            src = getattr(event, "source", None)
+            if isinstance(src, str) and src.strip():
+                event_synced = src.strip().lower() in ("eventyay", "platform")
+
+        if event_synced:
+            logger.info(
+                "Skipping handoff email: talk %s is synced from Eventyay/SSO", talk_id
+            )
+            return True
+        event_name = event.name if event else "VEditor"
+        recipient = talk.speaker_email
+        title = talk.title
+
+    if settings.smtp_host and not settings.base_url:
+        raise RuntimeError(
+            "BASE_URL must be configured when SMTP is enabled for email delivery"
+        )
+    base = (
+        settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
+    )
+    success = send_speaker_handoff_email(
+        recipient=recipient,
+        talk_title=title,
+        event_name=event_name,
+        studio_url=f"{base}/studio/talks/{talk_id}",
+    )
+    if not success:
+        raise RuntimeError(f"Failed to deliver handoff email to {recipient}")
     return True
 
 

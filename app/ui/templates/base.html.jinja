@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="/static/css/theme.css">
   <link rel="stylesheet" href="/static/css/app.css">
   <script src="/static/js/theme.js"></script>
+  {% block modal_script %}
+  <script src="/static/js/modal.js"></script>
+  {% endblock %}
   {% block extra_head %}{% endblock %}
 </head>
 <body class="{% if request.url.path == '/studio' or request.url.path.startswith('/studio/') %}is-studio-mode{% endif %}{% if (not user or user.role not in ['organizer', 'admin']) and request.url.path.startswith('/studio/talks/') %} is-speaker{% endif %}">
@@ -156,6 +159,10 @@
     {% block content %}{% endblock %}
   </main>
 </div>
+
+{% block dynamic_modal %}
+<dialog id="v-dynamic-modal" class="v-modal"></dialog>
+{% endblock %}
 
 {% block extra_scripts %}{% endblock %}
 </body>

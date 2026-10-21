@@ -24,24 +24,6 @@ def client():
     return TestClient(app)
 
 
-@pytest.fixture
-def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(
-        bind=connection, join_transaction_mode="create_savepoint"
-    )
-    app.dependency_overrides[get_db] = lambda: session
-
-    try:
-        yield session
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        session.close()
-        transaction.rollback()
-        connection.close()
-
-
 def _create_test_user(
     db, email: str, role: str = "user", is_active: bool = True
 ) -> models.User:
@@ -780,7 +762,7 @@ def test_admin_event_detail_success(client: TestClient, db_session):
     # Talk rows
     assert "Intro to Rust" in html
     assert "Theater 1" in html
-    assert "Published" in html
+    assert "Finished" in html
 
     assert "Scaling Microservices" in html
     assert "Theater 2" in html

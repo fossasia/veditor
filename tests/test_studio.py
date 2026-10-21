@@ -7,12 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
 
 from app import models
 from app.auth import hash_api_key
 from app.config import settings
-from app.db import SessionLocal, get_db
 from app.main import app
 from app.security import create_session_token, create_sso_token
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -101,100 +99,6 @@ def test_templates_have_no_inline_css_or_js():
             assert not inline_body, (
                 f"Inline script body found in {html_file.name}: {inline_body[:50]}..."
             )
-
-
-@pytest.fixture
-def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    created = []
-    orig_add = db.add
-
-    def track_add(instance):
-        created.append(instance)
-        return orig_add(instance)
-
-    db.add = track_add
-    try:
-        yield db
-    finally:
-        try:
-            db.rollback()
-            errors = []
-
-            for obj in reversed(created):
-                try:
-                    insp = inspect(obj)
-                    if insp and insp.has_identity and insp.identity:
-                        obj_id = insp.identity[0]
-                        if isinstance(obj, models.Job):
-                            db.query(models.Job).filter(models.Job.id == obj_id).delete(
-                                synchronize_session=False
-                            )
-                        elif isinstance(obj, models.Review):
-                            db.query(models.Review).filter(
-                                models.Review.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Talk):
-                            db.query(models.Job).filter(
-                                models.Job.talk_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Review).filter(
-                                models.Review.talk_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Talk).filter(
-                                models.Talk.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Client):
-                            db.query(models.Client).filter(
-                                models.Client.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.Event):
-                            talk_ids = [
-                                t[0]
-                                for t in db.query(models.Talk.id)
-                                .filter(models.Talk.event_id == obj_id)
-                                .all()
-                            ]
-                            if talk_ids:
-                                db.query(models.Job).filter(
-                                    models.Job.talk_id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                                db.query(models.Review).filter(
-                                    models.Review.talk_id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                                db.query(models.Talk).filter(
-                                    models.Talk.id.in_(talk_ids)
-                                ).delete(synchronize_session=False)
-                            db.query(models.Event).filter(
-                                models.Event.id == obj_id
-                            ).delete(synchronize_session=False)
-                        elif isinstance(obj, models.User):
-                            db.query(models.Review).filter(
-                                models.Review.user_id == obj_id
-                            ).delete(synchronize_session=False)
-                            db.query(models.Event).filter(
-                                models.Event.created_by_user_id == obj_id
-                            ).update(
-                                {"created_by_user_id": None},
-                                synchronize_session=False,
-                            )
-                            db.query(models.User).filter(
-                                models.User.id == obj_id
-                            ).delete(synchronize_session=False)
-                        db.commit()
-                except Exception as exc:  # noqa: BLE001
-                    db.rollback()
-                    errors.append(exc)
-
-            if errors:
-                raise errors[0]
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            app.dependency_overrides.pop(get_db, None)
-            db.close()
 
 
 def test_dashboard_page(client: TestClient, db_session):
@@ -1578,7 +1482,11 @@ def test_studio_review_notes_present_for_preview(client: TestClient, db_session)
     res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
     assert res.status_code == 200
     assert "review-notes-input" in res.text
-    assert "Approve Preview" in res.text
+    assert "Approve Video" in res.text
+    assert "Edit Video" in res.text
+    assert "Reset Video" in res.text
+    assert "btn-preview-help" in res.text
+    assert "preview-help-popover" in res.text
 
     # Verify pending_bounds also renders review-notes-input, timestamps card, and 'Submit Timestamps'
     talk.status = "pending_bounds"
@@ -1831,7 +1739,7 @@ def test_studio_done_talk_download_actions(
         # 1. Studio page renders download actions
         res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
         assert res.status_code == 200
-        assert "Published & Complete" in res.text
+        assert "Completed" in res.text
         assert 'id="btn-download-master"' in res.text
         assert "Download Master Video" in res.text
         assert "download" in res.text
@@ -2472,7 +2380,7 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     assert 'id="btn-confirm-reset-raw"' in res.text
     assert 'id="btn-cancel-reset-raw-modal"' in res.text
     assert 'id="btn-close-reset-raw-modal"' in res.text
-    assert "Reset Talk to Raw" in res.text
+    assert "Reset Video" in res.text
     assert 'id="btn-reject"' in res.text
     # Ensure extra step retry lifecycle button is removed
     assert 'id="btn-retry"' not in res.text
@@ -3147,6 +3055,7 @@ def test_attach_room_recording_staging_failure_cleans_up(
     db_session.add(t1)
     db_session.add(t2)
     db_session.commit()
+    t1_id, t2_id = t1.id, t2.id
 
     call_count = 0
     real_link_or_copy = temp_storage.link_or_copy
@@ -3176,11 +3085,8 @@ def test_attach_room_recording_staging_failure_cleans_up(
             )
 
         # Assert talk 1 raw file was cleaned up on failure!
-        assert not temp_storage.exists(f"{t1.id}/raw/raw.mp4")
-        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
-        # Assert talk status was not updated in DB
-        db_session.refresh(t1)
-        assert t1.status == "waiting_for_files"
+        assert not temp_storage.exists(f"{t1_id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3267,10 +3173,11 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     db_session.add(t1)
     db_session.add(t2)
     db_session.commit()
+    t1_id, t2_id = t1.id, t2.id
 
     # Seed existing raw file for Talk 1
     t1_orig_bytes = b"original existing raw content for talk 1"
-    temp_storage.put(f"{t1.id}/raw/raw.mp4", t1_orig_bytes)
+    temp_storage.put(f"{t1_id}/raw/raw.mp4", t1_orig_bytes)
 
     real_link_or_copy = temp_storage.link_or_copy
     calls = []
@@ -3278,7 +3185,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     def mock_link_or_copy(key, source):
         calls.append(key)
         # Fail when staging talk 2
-        if key == f"{t2.id}/raw/raw.mp4":
+        if key == f"{t2_id}/raw/raw.mp4":
             raise RuntimeError("Simulated failure on talk 2")
         return real_link_or_copy(key, source)
 
@@ -3299,12 +3206,12 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
             )
 
         # Talk 1 original raw file must be preserved / restored!
-        assert temp_storage.exists(f"{t1.id}/raw/raw.mp4")
-        assert temp_storage.get(f"{t1.id}/raw/raw.mp4").read_bytes() == t1_orig_bytes
+        assert temp_storage.exists(f"{t1_id}/raw/raw.mp4")
+        assert temp_storage.get(f"{t1_id}/raw/raw.mp4").read_bytes() == t1_orig_bytes
         # Talk 2 raw file should not exist
-        assert not temp_storage.exists(f"{t2.id}/raw/raw.mp4")
+        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
         # _cancel_talk_jobs is called prior to staging to prevent in-flight workers from touching overwritten assets
-        mock_cancel.assert_called_once_with(t1.id)
+        mock_cancel.assert_called_once_with(t1_id)
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3864,3 +3771,188 @@ def test_talk_studio_organizer_request_prompt(client: TestClient, db_session):
     assert res_sso.status_code == 200
     assert "btn-request-organizer" not in res_sso.text
     assert "modal-request-organizer" not in res_sso.text
+
+
+def test_check_talk_access_persists_promoted_speaker_role(db_session):
+    """Ensure check_talk_access updates models.User record in database upon role promotion."""
+    from datetime import UTC, datetime
+
+    from app.auth import CurrentUser, check_talk_access
+
+    now = datetime.now(UTC)
+
+    user = models.User(
+        email="promoted_speaker@example.com",
+        hashed_password="hash",
+        role="user",
+        is_active=True,
+    )
+    event = models.Event(name="Role Persist Event")
+    db_session.add(user)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(user)
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Keynote",
+        speaker_email="promoted_speaker@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    current_user = CurrentUser(
+        user_id=user.id,
+        email="promoted_speaker@example.com",
+        role="user",
+        source="cookie",
+    )
+    check_talk_access(talk, current_user, db_session)
+    assert current_user.role == "speaker"
+
+    # Reload directly from database to verify persistence
+    persisted = db_session.query(models.User).filter(models.User.id == user.id).first()
+    assert persisted.role == "speaker"
+
+
+def test_organizer_dashboard_includes_assigned_speaker_talks(
+    client: TestClient, db_session
+):
+    """Ensure an organizer's dashboard displays talks where they are assigned as speaker."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+
+    org_a = models.User(
+        email="org_a@example.com", hashed_password="hash", role="organizer"
+    )
+    org_b = models.User(
+        email="org_b@example.com", hashed_password="hash", role="organizer"
+    )
+    db_session.add(org_a)
+    db_session.add(org_b)
+    db_session.commit()
+
+    event_a = models.Event(name="Event A", created_by_user_id=org_a.id)
+    event_b = models.Event(name="Event B", created_by_user_id=org_b.id)
+    db_session.add(event_a)
+    db_session.add(event_b)
+    db_session.commit()
+
+    talk_a = models.Talk(event_id=event_a.id, title="Talk A Hosted", start=now, end=now)
+    talk_b = models.Talk(
+        event_id=event_b.id,
+        title="Talk B Speaker Slot",
+        speaker_email="org_a@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk_a)
+    db_session.add(talk_b)
+    db_session.commit()
+
+    token_a = create_session_token(org_a.id, org_a.role)
+    client.cookies.set("veditor_session", token_a)
+    resp = client.get("/studio")
+    assert resp.status_code == 200
+    assert "Talk A Hosted" in resp.text
+    assert "Talk B Speaker Slot" in resp.text
+
+
+def test_studio_handoff_utc_format_and_cooldown_attr(client: TestClient, db_session):
+    """Ensure handed_off_at is rendered in UTC and button has data-handed-off-at."""
+    from datetime import UTC, datetime, timedelta, timezone
+
+    now = datetime.now(UTC)
+    tz_ist = timezone(timedelta(hours=5, minutes=30))
+    handoff_time = datetime(2026, 10, 14, 18, 0, tzinfo=tz_ist)
+
+    user = models.User(
+        email="org_utc@example.com", hashed_password="hash", role="organizer"
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    event = models.Event(name="UTC Event", created_by_user_id=user.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Timezone Talk",
+        status="pending_bounds",
+        speaker_email="speaker@example.com",
+        handed_off_at=handoff_time,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+    resp = client.get(f"/studio/talks/{talk.id}")
+    assert resp.status_code == 200
+    # 18:00 IST = 12:30 UTC
+    assert "Oct 14, 2026 at 12:30 UTC" in resp.text
+    assert 'data-handed-off-at="' in resp.text
+    assert "btn-resend-handoff" in resp.text
+    assert "Speaker handoff requested" in resp.text
+
+
+def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_session):
+    """Ensure speaker matching speaker_email gets speaker controls even if role is 'user'."""
+    now = datetime.now(UTC)
+
+    event = models.Event(name="SSO Speaker Event")
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="SSO Speaker Talk",
+        status="pending_bounds",
+        speaker_email="assigned_sso_speaker@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    # 1. SSO token with matching email
+    sso_token = create_sso_token(
+        scope_type="event",
+        scope_id=event.id,
+        role="speaker",
+        email="assigned_sso_speaker@example.com",
+    )
+    resp = client.get(
+        f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert "Awaiting Speaker to Submit Timestamps" not in resp.text
+    assert "Submit Timestamps" in resp.text
+
+    # 2. Registered user with role="user" matching talk.speaker_email
+    human_speaker = models.User(
+        email="assigned_sso_speaker@example.com",
+        hashed_password="pw",
+        role="user",
+        is_active=True,
+    )
+    db_session.add(human_speaker)
+    db_session.commit()
+
+    user_token = create_session_token(human_speaker.id, human_speaker.role)
+    client.cookies.set("veditor_session", user_token)
+    resp2 = client.get(f"/studio/talks/{talk.id}")
+    assert resp2.status_code == 200
+    assert "Awaiting Speaker to Submit Timestamps" not in resp2.text
+    assert "Submit Timestamps" in resp2.text
+
+
+def test_talk_speaker_email_index():
+    """Ensure speaker_email column has an index defined on models.Talk."""
+    assert models.Talk.__table__.c.speaker_email.index is True

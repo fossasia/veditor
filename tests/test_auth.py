@@ -123,7 +123,7 @@ def test_get_current_user_api_key_valid():
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_client
 
-    user = get_current_user(api_key="secret-key", db=mock_db)
+    user = get_current_user(request=MagicMock(), api_key="secret-key", db=mock_db)
     assert user.source == "api_key"
     assert user.role == "admin"
     assert user.user_id is None
@@ -139,7 +139,9 @@ def test_get_current_user_cookie_api_key_valid():
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_client
 
-    user = get_current_user(cookie_api_key="secret-cookie-key", db=mock_db)
+    user = get_current_user(
+        request=MagicMock(), cookie_api_key="secret-cookie-key", db=mock_db
+    )
     assert user.source == "api_key"
     assert user.role == "admin"
     assert user.user_id is None
@@ -153,7 +155,7 @@ def test_get_current_user_api_key_invalid():
     mock_db.query.return_value.filter.return_value.first.return_value = None
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(api_key="bad-key", db=mock_db)
+        get_current_user(request=MagicMock(), api_key="bad-key", db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert excinfo.value.detail == "Invalid API Key"
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
@@ -165,7 +167,7 @@ def test_get_current_user_session_cookie_valid():
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
-    user = get_current_user(cookie_token=token, db=mock_db)
+    user = get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
     assert user.source == "cookie"
     assert user.user_id == 7
     assert user.email == "org@example.com"
@@ -177,7 +179,9 @@ def test_get_current_user_session_cookie_valid():
 def test_get_current_user_session_cookie_invalid():
     mock_db = MagicMock()
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(cookie_token="not.a.valid.jwt", db=mock_db)
+        get_current_user(
+            request=MagicMock(), cookie_token="not.a.valid.jwt", db=mock_db
+        )
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Invalid or expired session token" in excinfo.value.detail
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
@@ -190,7 +194,7 @@ def test_get_current_user_session_cookie_user_inactive():
     mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(cookie_token=token, db=mock_db)
+        get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "inactive" in excinfo.value.detail.lower()
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
@@ -202,7 +206,7 @@ def test_get_current_user_session_cookie_user_not_found():
     mock_db.query.return_value.filter.return_value.first.return_value = None
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(cookie_token=token, db=mock_db)
+        get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "not found" in excinfo.value.detail.lower()
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
@@ -217,7 +221,7 @@ def test_get_current_user_bearer_token_valid():
     mock_db = MagicMock()
     mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
-    user = get_current_user(bearer_creds=mock_creds, db=mock_db)
+    user = get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
     assert user.source == "jwt"
     assert user.user_id == 15
     assert user.email == "dev@example.com"
@@ -231,7 +235,7 @@ def test_get_current_user_bearer_token_invalid():
     mock_db = MagicMock()
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(bearer_creds=mock_creds, db=mock_db)
+        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Invalid or expired access token" in excinfo.value.detail
 
@@ -245,15 +249,18 @@ def test_get_current_user_bearer_token_user_inactive():
     mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(bearer_creds=mock_creds, db=mock_db)
+        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "inactive" in excinfo.value.detail.lower()
 
 
 def test_get_current_user_no_credentials():
     mock_db = MagicMock()
+    request = MagicMock()
+    request.headers = {}
+    request.cookies = {}
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(db=mock_db)
+        get_current_user(request=request, db=mock_db)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert excinfo.value.detail == "Not authenticated"
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"
@@ -266,7 +273,9 @@ def test_get_current_user_precedence_api_key_over_cookie():
     mock_db.query.return_value.filter.return_value.first.return_value = mock_client
 
     token = create_session_token(user_id=2, role="user")
-    user = get_current_user(api_key="api-key", cookie_token=token, db=mock_db)
+    user = get_current_user(
+        request=MagicMock(), api_key="api-key", cookie_token=token, db=mock_db
+    )
     assert user.source == "api_key"
 
 
@@ -277,7 +286,9 @@ def test_get_current_user_fail_fast_on_invalid_api_key():
 
     token = create_session_token(user_id=2, role="user")
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(api_key="bad-key", cookie_token=token, db=mock_db)
+        get_current_user(
+            request=MagicMock(), api_key="bad-key", cookie_token=token, db=mock_db
+        )
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert excinfo.value.detail == "Invalid API Key"
 
@@ -290,7 +301,10 @@ def test_get_current_user_precedence_session_over_cookie_api_key():
 
     token = create_session_token(user_id=2, role="user")
     user = get_current_user(
-        cookie_token=token, cookie_api_key="stale-or-invalid-key", db=mock_db
+        request=MagicMock(),
+        cookie_token=token,
+        cookie_api_key="stale-or-invalid-key",
+        db=mock_db,
     )
     assert user.source == "cookie"
     assert user.user_id == 2
@@ -308,6 +322,7 @@ def test_get_current_user_ignores_stale_cookie_api_key_for_bearer_token():
     mock_creds.credentials = token
 
     user = get_current_user(
+        request=MagicMock(),
         cookie_api_key="stale-or-invalid-key",
         bearer_creds=mock_creds,
         db=mock_db,
@@ -591,12 +606,12 @@ def test_require_event_access_query_param_bypass_prevented():
 
 
 def test_get_current_user_bearer_invalid_header_format():
-    mock_request = MagicMock()
-    mock_request.headers = {"Authorization": "Basic dXNlcjpwYXNz"}
-    mock_request.cookies = {}
+    request = MagicMock()
+    request.headers = {"Authorization": "Basic dXNlcjpwYXNz"}
+    request.cookies = {}
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=mock_request)
+        get_current_user(request=request, db=MagicMock())
     assert excinfo.value.status_code == 401
     assert "Invalid authorization header format" in excinfo.value.detail
     assert excinfo.value.headers.get("WWW-Authenticate") == "Bearer"

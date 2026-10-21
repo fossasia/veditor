@@ -41,7 +41,7 @@
     </div>
 
     <div class="auth-action-row">
-      <a href="/verify-email/resend?email={{ email | urlencode }}" class="btn btn-primary btn-lg btn-auth-submit">Resend Verification Email</a>
+      <a href="/verify-email/resend?email={{ email | urlencode }}{% if next %}&next={{ next | urlencode }}{% endif %}" class="btn btn-primary btn-lg btn-auth-submit">Resend Verification Email</a>
       <a href="/login" class="btn btn-secondary btn-lg btn-auth-submit">Back to Sign In</a>
     </div>
 

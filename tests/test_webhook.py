@@ -16,7 +16,13 @@ from app.db import get_db
 from app.main import app
 from app.review_handlers import handle_needs_work
 from app.storage import get_storage_backend
-from app.tasks import job_cut, job_deliver_webhook, job_preview, job_publish
+from app.tasks import (
+    _redact_url,
+    job_cut,
+    job_deliver_webhook,
+    job_preview,
+    job_publish,
+)
 from app.webhook import dispatch_talk_webhook, get_candidate_clients
 from tests.conftest import FakeStorageBackend
 
@@ -267,6 +273,93 @@ def test_job_deliver_webhook_hmac_signing_and_success():
         # Verify transmitted body matches canonical JSON
         sent_body = json.loads(req.data.decode("utf-8"))
         assert sent_body == payload
+
+
+def test_job_deliver_webhook_logs_redacted_url(caplog):
+    url = "https://user:pass@example.com:8443/hook?token=abc#frag"
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__enter__.return_value = mock_resp
+
+    with (
+        caplog.at_level("INFO", logger="app.tasks"),
+        patch("app.tasks._webhook_opener.open", return_value=mock_resp) as mock_open,
+    ):
+        assert job_deliver_webhook(url, "secret", {"talk_id": 1}) is True
+
+    # The request still goes to the full URL; only the log line is redacted.
+    assert mock_open.call_args[0][0].get_full_url() == url
+    assert "https://example.com:8443" in caplog.text
+    for secret_part in ("user", "pass", "/hook", "token=abc", "frag"):
+        assert secret_part not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://[::1]:8443/hook?t=1", "https://[::1]:8443"),
+        ("https://u:p@[2001:db8::1]/hook", "https://[2001:db8::1]"),
+        # Slack and Discord put the token in the path.
+        ("https://hooks.slack.com/services/T0/B0/secret", "https://hooks.slack.com"),
+        ("https://example.com\\secret/hook", "<invalid url>"),
+        # Characters that cannot appear in a host would let the log line be
+        # forged or carry other data.
+        ("https://example.com%0asecret/hook", "<invalid url>"),
+        ("https://exa mple.com/hook", "<invalid url>"),
+        ("https://example.com\nINFO forged/hook", "<invalid url>"),
+        (None, "<invalid url>"),
+        (b"https://example.com/hook", "<invalid url>"),
+        (123, "<invalid url>"),
+    ],
+)
+def test_redact_url_ipv6_and_non_strings(url, expected):
+    assert _redact_url(url) == expected
+
+
+def test_job_deliver_webhook_failure_log_omits_url(caplog):
+    url = "https://example.com/hook?token=abc"
+    # http.client puts the whole request target into some error messages.
+    error = ValueError(f"URL can't contain control characters. {url!r}")
+
+    with (
+        caplog.at_level("INFO", logger="app.tasks"),
+        patch("app.tasks._webhook_opener.open", side_effect=error),
+        patch("time.sleep"),
+    ):
+        assert job_deliver_webhook(url, "secret", {"talk_id": 1}) is False
+
+    assert "ValueError" in caplog.text
+    assert "token=abc" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            urllib.error.HTTPError(
+                "https://example.com/hook?token=abc", 503, "busy", {}, None
+            ),
+            "HTTPError (HTTP 503)",
+        ),
+        (
+            urllib.error.URLError(ConnectionRefusedError("refused")),
+            "URLError (ConnectionRefusedError)",
+        ),
+    ],
+)
+def test_job_deliver_webhook_failure_log_includes_safe_details(caplog, error, expected):
+    with (
+        caplog.at_level("INFO", logger="app.tasks"),
+        patch("app.tasks._webhook_opener.open", side_effect=error),
+        patch("time.sleep"),
+    ):
+        assert (
+            job_deliver_webhook("https://example.com/hook?token=abc", "s", {}) is False
+        )
+
+    assert expected in caplog.text
+    assert "token=abc" not in caplog.text
 
 
 def test_job_deliver_webhook_retry_success_on_second_attempt():

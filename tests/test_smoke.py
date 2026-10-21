@@ -1,3 +1,20 @@
+"""End-to-end smoke test against a live API server.
+
+NOTE: this test DELETES ALL RECORDS from the "main" database, meaning the
+database configured by the POSTGRES_* variables that the live API server, RQ
+worker, and CLI all connect to (see app/db.py). It is NOT the unit-test database
+derived in Settings.testing_db_name; that name always starts with "test_" (with
+POSTGRES_DB=test_disposable the unit tests would use "test_test_disposable") and
+is never the database this file wipes.
+
+The `test_` prefix check in ensure_wipe_allowed() exists to keep a developer
+from accidentally wiping their main development database. To run this test on a
+personal machine, create a disposable database whose name starts with "test_"
+and point the whole stack at it, for example POSTGRES_DB=test_disposable and
+`createdb test_disposable`. Wiping any other database name requires
+ALLOW_SMOKE_DB_WIPE=1.
+"""
+
 import os
 import re
 import subprocess
@@ -8,6 +25,7 @@ import httpx
 import pytest
 
 from app import models
+from app.config import settings
 from app.db import SessionLocal
 from app.states import advance
 
@@ -15,16 +33,24 @@ from app.states import advance
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 
-@pytest.fixture(scope="module")
-def clean_db():
-    """Starts from a clean DB by deleting existing records."""
-    db_name = os.getenv("POSTGRES_DB", "")
-    if not db_name:
-        pytest.skip("Smoke test requires POSTGRES_DB to identify a test database.")
-    if not (db_name.endswith("_test") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
+def ensure_wipe_allowed(db_name: str) -> None:
+    """Refuses to wipe a database that does not look like a test database.
+
+    The "test_" prefix check keeps a developer from running the smoke test
+    against their main development database and wiping it. `db_name` must be the
+    database actually being wiped (settings.postgres_db), not
+    Settings.testing_db_name, which is derived and therefore always starts with
+    "test_" regardless of what is being wiped.
+    """
+    if not (db_name.startswith("test_") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
         pytest.fail(
-            f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a *_test database."
+            f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a test_* database."
         )
+
+
+def wipe_all_records() -> None:
+    """Deletes all records from the database that SessionLocal connects to."""
+    ensure_wipe_allowed(settings.postgres_db)
 
     session = SessionLocal()
     try:
@@ -36,6 +62,12 @@ def clean_db():
         session.commit()
     finally:
         session.close()
+
+
+@pytest.fixture(scope="module")
+def clean_db() -> None:
+    """Starts from a clean DB by deleting existing records."""
+    wipe_all_records()
 
 
 def run_bootstrap_cli():

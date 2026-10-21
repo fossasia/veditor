@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
-from app.db import SessionLocal, get_db
 from app.main import app
 from app.security import create_session_token
 
@@ -28,33 +27,6 @@ client = TestClient(app)
 def clean_dependency_overrides():
     yield
     app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def db_session():
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    created = []
-    orig_add = db.add
-
-    def track_add(instance, *args, **kwargs):
-        created.append(instance)
-        return orig_add(instance, *args, **kwargs)
-
-    db.add = track_add
-    try:
-        yield db
-    finally:
-        try:
-            db.rollback()
-            for obj in reversed(created):
-                try:
-                    db.delete(obj)
-                    db.commit()
-                except Exception:  # noqa: BLE001
-                    db.rollback()
-        finally:
-            db.close()
 
 
 @pytest.fixture

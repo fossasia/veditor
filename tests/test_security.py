@@ -644,7 +644,7 @@ def test_database_url_encodes_reserved_characters():
         postgres_port=5432,
         postgres_db="ved_db",
     )
-    url = s.database_url
+    url = s.database_url.render_as_string(hide_password=False)
     assert "ved%40user" in url
     assert "p%40ss%3Aword%2Fwith%25special%23chars" in url
     assert "@pg-host:5432/ved_db" in url

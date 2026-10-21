@@ -391,22 +391,6 @@ html[data-sidebar="hidden"] .settings-bottom-dock {
 }
 
 /* ── Native Modal Dialog ── */
-.admin-modal {
-  border: none;
-  border-radius: 12px;
-  background: var(--v-bg-surface, #151922);
-  border: 1px solid var(--v-border, #283144);
-  padding: 1.5rem;
-  max-width: 400px;
-  color: var(--v-text-primary, #ffffff);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
-  margin: auto;
-}
-
-.admin-modal::backdrop {
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(4px);
-}
 
 .modal-card {
   display: flex;
