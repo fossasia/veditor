@@ -2,7 +2,7 @@ import logging
 import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import (
     APIRouter,
@@ -24,7 +24,7 @@ from app.db import get_db
 from app.queue import light_queue
 from app.routes.auth import _get_authenticated_user_from_cookie
 from app.routes.talks import _cancel_talk_jobs, attach_room_recording
-from app.security import decode_sso_token
+from app.security import SSOTokenPayload, decode_sso_token
 from app.storage import StorageBackend, get_storage_backend
 from app.tasks import job_waveform
 from app.ui.templating import templates
@@ -305,9 +305,9 @@ def get_evaluated_milestones(status: str) -> list[dict]:
     return result
 
 
-def _get_sso_cookie_max_age(sso_payload: dict[str, Any]) -> int:
+def _get_sso_cookie_max_age(sso_payload: SSOTokenPayload) -> int:
     """Calculate the remaining validity period in seconds for the session cookie based on token expiration."""
-    exp_timestamp = sso_payload.get("exp")
+    exp_timestamp = sso_payload.exp
     if isinstance(exp_timestamp, (int, float)):
         return max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
     return settings.sso_token_expire_seconds
@@ -593,7 +593,14 @@ def _render_talks_page(
 
 
 ALLOWED_MEDIA_CATEGORIES = frozenset(
-    {"preview", "raw", "intro", "outro", "cut", "final"}
+    {
+        "preview",
+        "raw",
+        "intro",
+        "outro",
+        "cut",
+        "final",
+    }
 )
 
 
