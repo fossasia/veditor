@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +43,7 @@ def setup_test_database() -> Iterator[None]:
 
 
 @pytest.fixture
-def db_session(setup_test_database: Iterator[None]) -> Iterator[Session]:
+def db_session(setup_test_database: Iterator[None]) -> Generator[Session]:
     connection = _test_engine.connect()
     transaction = connection.begin()
     session = TestSessionLocal(bind=connection)
