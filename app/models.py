@@ -138,6 +138,9 @@ class Event(Base):
     retention_overrides: Mapped[dict[str, Any] | None] = mapped_column(
         RetentionOverrides.as_mutable(JSONB), nullable=True, default=None
     )
+    speaker_magic_link_expire_hours: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey(
             "users.id",

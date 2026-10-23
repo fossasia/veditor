@@ -387,7 +387,13 @@ def _validate_system_setting(key: str, value: str) -> None:
     defn = SYSTEM_SETTING_DEFINITIONS[norm]
 
     try:
-        if norm == "detect_duration_tolerance_seconds":
+        if norm == "speaker_magic_link_expire_hours":
+            parsed_hours = int(value)
+            min_hours = int(defn.min_value) if defn.min_value is not None else 1
+            max_hours = int(defn.max_value) if defn.max_value is not None else 8760
+            if not (min_hours <= parsed_hours <= max_hours):
+                raise ValueError
+        elif norm == "detect_duration_tolerance_seconds":
             v = float(value)
             min_val = defn.min_value if defn.min_value is not None else 60.0
             max_val = defn.max_value if defn.max_value is not None else 1800.0
@@ -413,11 +419,16 @@ def _validate_system_setting(key: str, value: str) -> None:
                     detail=f"default_transcode_preset must be one of: {list(valid_transcode)}",
                 )
     except ValueError:
-        detail = (
-            f"detect_duration_tolerance_seconds must be a finite number between {defn.min_value} and {defn.max_value}"
-            if norm == "detect_duration_tolerance_seconds"
-            else "loudness_target_lufs must be a finite float between -70.0 and -5.0"
-        )
+        if norm == "speaker_magic_link_expire_hours":
+            min_hours = int(defn.min_value) if defn.min_value is not None else 1
+            max_hours = int(defn.max_value) if defn.max_value is not None else 8760
+            detail = f"speaker_magic_link_expire_hours must be a positive integer between {min_hours} and {max_hours}"
+        elif norm == "detect_duration_tolerance_seconds":
+            detail = f"detect_duration_tolerance_seconds must be a finite number between {defn.min_value} and {defn.max_value}"
+        else:
+            detail = (
+                "loudness_target_lufs must be a finite float between -70.0 and -5.0"
+            )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 

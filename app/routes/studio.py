@@ -1,7 +1,8 @@
 import logging
 import urllib.parse
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.auth import CurrentUser, hash_api_key
-from app.config import settings
+from app.config import get_setting, settings
 from app.db import get_db
 from app.queue import light_queue
 from app.routes.auth import _get_authenticated_user_from_cookie
@@ -304,6 +305,14 @@ def get_evaluated_milestones(status: str) -> list[dict]:
     return result
 
 
+def _get_sso_cookie_max_age(sso_payload: dict[str, Any]) -> int:
+    """Calculate the remaining validity period in seconds for the session cookie based on token expiration."""
+    exp_timestamp = sso_payload.get("exp")
+    if isinstance(exp_timestamp, (int, float)):
+        return max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
+    return settings.sso_token_expire_seconds
+
+
 @router.get("", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -339,11 +348,13 @@ def dashboard(
             dest_url = f"/studio/talks/{sso_payload.scope_id}"
         else:
             dest_url = f"/studio?event_id={sso_payload.scope_id}"
+        cookie_max_age = _get_sso_cookie_max_age(sso_payload)
+
         resp = RedirectResponse(url=dest_url, status_code=status.HTTP_303_SEE_OTHER)
         resp.set_cookie(
             key="veditor_session",
             value=raw_sso,
-            max_age=settings.sso_token_expire_seconds,
+            max_age=cookie_max_age,
             httponly=True,
             samesite="lax",
             secure=is_secure,
@@ -800,13 +811,15 @@ def studio(
         is_secure = (request.url.scheme == "https") or (
             settings.environment.lower() in ("production", "prod")
         )
+        cookie_max_age = _get_sso_cookie_max_age(sso_payload)
+
         resp = RedirectResponse(
             url=f"/studio/talks/{talk_id}", status_code=status.HTTP_303_SEE_OTHER
         )
         resp.set_cookie(
             key="veditor_session",
             value=raw_sso,
-            max_age=settings.sso_token_expire_seconds,
+            max_age=cookie_max_age,
             httponly=True,
             samesite="lax",
             secure=is_secure,
@@ -991,6 +1004,37 @@ def list_studio_events(
         )
         return resp
 
+    return _render_studio_events_page(request, user, db)
+
+
+def _parse_speaker_review_window_hours(raw_hours: str | None) -> int | None:
+    """
+    Parses and validates the speaker review window in hours from form data.
+    Returns None if empty or "default", or a positive integer.
+    Raises ValueError if non-positive or not a valid integer.
+    """
+    if raw_hours is None:
+        return None
+    cleaned = str(raw_hours).strip()
+    if not cleaned or cleaned.lower() in ("default", "none"):
+        return None
+    try:
+        hours = int(cleaned)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Speaker review window must be a positive integer") from exc
+
+    if hours <= 0:
+        raise ValueError("Speaker review window must be a positive integer")
+    return hours
+
+
+def _render_studio_events_page(
+    request: Request,
+    user: models.User,
+    db: Session,
+    error: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
     events = (
         db.query(models.Event)
         .options(selectinload(models.Event.created_by_user))
@@ -998,14 +1042,20 @@ def list_studio_events(
         .order_by(models.Event.id.asc())
         .all()
     )
-
+    global_hours = get_setting(
+        "speaker_magic_link_expire_hours",
+        default=settings.speaker_magic_link_expire_hours,
+        db=db,
+    )
     return templates.TemplateResponse(
         request,
         "events.html.jinja",
         {
             "events": events,
-            "error": None,
+            "error": error,
+            "global_speaker_magic_link_expire_hours": int(global_hours),
         },
+        status_code=status_code,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -1015,6 +1065,7 @@ def create_studio_event(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
 ):
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
@@ -1035,26 +1086,30 @@ def create_studio_event(
 
     clean_name = name.strip()
     if not clean_name:
-        events = (
-            db.query(models.Event)
-            .options(selectinload(models.Event.created_by_user))
-            .filter(models.Event.created_by_user_id == user.id)
-            .order_by(models.Event.id.asc())
-            .all()
-        )
-        return templates.TemplateResponse(
+        return _render_studio_events_page(
             request,
-            "events.html.jinja",
-            {
-                "events": events,
-                "error": "Event name is required.",
-            },
+            user,
+            db,
+            error="Event name is required.",
             status_code=status.HTTP_400_BAD_REQUEST,
-            headers={"Cache-Control": "no-store"},
+        )
+
+    try:
+        parsed_hours = _parse_speaker_review_window_hours(
+            speaker_magic_link_expire_hours
+        )
+    except ValueError as exc:
+        return _render_studio_events_page(
+            request,
+            user,
+            db,
+            error=str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
     event = models.Event(
         name=clean_name,
+        speaker_magic_link_expire_hours=parsed_hours,
         created_by_user_id=user.id,
     )
     db.add(event)
@@ -1073,6 +1128,7 @@ def edit_studio_event(
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
 ):
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
@@ -1111,6 +1167,17 @@ def edit_studio_event(
         )
 
     event.name = clean_name
+    if speaker_magic_link_expire_hours is not None:
+        try:
+            event.speaker_magic_link_expire_hours = _parse_speaker_review_window_hours(
+                speaker_magic_link_expire_hours
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
     db.commit()
     return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
 
