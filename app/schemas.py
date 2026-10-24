@@ -59,6 +59,46 @@ class EventRead(EventBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RoomBase(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _clean_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Room name cannot be empty")
+        return value
+
+
+class RoomCreate(RoomBase):
+    pass
+
+
+class RoomUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _clean_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("Room name cannot be empty")
+        return value
+
+
+class RoomRead(RoomBase):
+    id: int
+    event_id: int
+    created_at: datetime
+    talks_count: int = 0
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ClientBase(BaseModel):
     name: str | None = None
     is_platform: bool = False

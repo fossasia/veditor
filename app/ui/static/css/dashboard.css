@@ -7,6 +7,10 @@
   width: 100%;
 }
 
+.room-select-row { display: flex; gap: 8px; align-items: stretch; }
+.room-select-row .input-field { flex: 1; }
+.room-select-row .btn { height: 38px; white-space: nowrap; }
+
 #bulk-actions-bar {
   display: none;
   background: var(--v-bg-surface);

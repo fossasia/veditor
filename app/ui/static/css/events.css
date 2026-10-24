@@ -359,3 +359,10 @@
   color: #10b981;
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
+
+.room-create-form { display: flex; gap: 8px; margin-bottom: 16px; }
+.room-create-form .input-field:first-child { flex: 1; }
+.room-create-form .input-field:nth-child(2) { flex: 1.5; }
+.rooms-list { display: grid; gap: 8px; }
+.room-list-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--v-border-subtle); border-radius: var(--v-radius-md); }
+.room-list-row span { display: block; margin-top: 3px; color: var(--v-text-muted); font-size: .82rem; }
