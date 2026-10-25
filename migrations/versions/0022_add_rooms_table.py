@@ -1,4 +1,4 @@
-"""Add event-scoped rooms and backfill existing talk rooms.
+"""Add event-scoped rooms and normalize existing talk room assignments.
 
 Revision ID: 0022
 Revises: 0021
@@ -47,6 +47,10 @@ def upgrade() -> None:
         "WHERE r.event_id = t.event_id "
         "AND lower(trim(t.room)) = lower(r.name) "
         "AND t.room IS DISTINCT FROM r.name"
+    )
+    op.execute(
+        "UPDATE talks SET room = NULL "
+        "WHERE room IS NOT NULL AND trim(room) = ''"
     )
 
 
