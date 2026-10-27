@@ -20,40 +20,29 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: veditor
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_HOST: localhost
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: veditor
-      REDIS_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v7
+      # PostgreSQL is pre-installed on the runner, but its service is off.
+      # For now, GitHub provides "ubuntu-latest" with Ubuntu 24.04, its PostgreSQL is v16.
+      # After November 2026, it will be Ubuntu 26.04 and come with PostgreSQL 18.
+      # If this workflow is run on a self-hosted runner,
+      # need to adjust the `apt-get` command to install PostgreSQL as well.
+      - name: Install Redis
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+      - name: Start PostgreSQL
+        # We don't need to do `systemctl start redis` because the `apt install` command
+        # already triggered it.
+        run: sudo systemctl start postgresql
+      - name: Set up database (peer auth, like README Linux setup)
+        run: |
+          sudo -u postgres createuser -s "$USER"
+          # POSTGRES_DB stays "veditor" (the default); tests use the derived
+          # "test_veditor" database (see app/config.py: Settings.testing_db_name).
+          createdb veditor
+          createdb test_veditor
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -61,10 +50,6 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: uv sync --frozen --group test
-      # The test suite uses the "test_" prefixed database derived from POSTGRES_DB
-      # (app/config.py: Settings.testing_db_name), so create it explicitly.
-      - name: Create test database
-        run: PGPASSWORD=password createdb -h localhost -U postgres test_veditor
       - name: Run migrations
         run: uv run alembic upgrade head
       - name: Run tests
