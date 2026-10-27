@@ -109,6 +109,9 @@
               <button type="button" class="btn btn-ghost btn-sm btn-api-keys" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Manage API Keys">
                 API Keys
               </button>
+              <button type="button" class="btn btn-ghost btn-sm btn-manage-rooms" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" title="Manage Rooms">
+                Rooms
+              </button>
               <button type="button" class="btn btn-ghost btn-sm btn-edit-event" data-event-id="{{ event.id }}" data-event-name="{{ event.name }}" data-event-expire-hours="{{ event.speaker_magic_link_expire_hours or '' }}" title="Edit Event">
                 Edit
               </button>
@@ -169,6 +172,30 @@
         </button>
       </div>
     </form>
+  </div>
+</dialog>
+
+<dialog id="modal-manage-rooms" class="v-modal">
+  <div class="v-modal-card v-modal-card-lg">
+    <div class="v-modal-header">
+      <div>
+        <h3 class="v-modal-title">Rooms for <span id="rooms-event-name-display"></span></h3>
+        <p class="v-modal-desc">Configure rooms available for talks in this event.</p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>✕</button>
+    </div>
+    <div class="v-modal-body">
+      <form id="create-room-form" class="room-create-form">
+        <input id="room-name-input" class="input-field" maxlength="255" placeholder="Room name" required>
+        <input id="room-description-input" class="input-field" placeholder="Description (optional)">
+        <button class="btn btn-primary btn-sm" type="submit">Add Room</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="cancel-room-edit" hidden>Cancel</button>
+      </form>
+      <div id="rooms-list" class="rooms-list"></div>
+    </div>
+    <div class="v-modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Close</button>
+    </div>
   </div>
 </dialog>
 

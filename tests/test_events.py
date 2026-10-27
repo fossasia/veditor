@@ -409,8 +409,12 @@ def test_post_talks_forbidden_for_non_owning_organizer(mock_db):
 
 def test_post_talks_success_for_owning_organizer(mock_db):
     event = models.Event(id=1, name="My Event", created_by_user_id=5)
-    # 1st query: Event check; 2nd query: Talk lookup (None => create)
-    mock_db.query.return_value.filter.return_value.first.side_effect = [event, None]
+    # Event check, talk lookup, and room lookup (both latter queries miss).
+    mock_db.query.return_value.filter.return_value.first.side_effect = [
+        event,
+        None,
+        None,
+    ]
     app.dependency_overrides[get_db] = lambda: mock_db
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=5, role="organizer", source="jwt"

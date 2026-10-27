@@ -1632,11 +1632,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const editBtn = document.getElementById('btn-edit-talk-studio');
   const editModal = document.getElementById('modal-edit-talk-studio');
   if (editBtn && editModal) {
-    editBtn.addEventListener('click', () => {
+    editBtn.addEventListener('click', async () => {
       const shell = getStudioShell();
       if (!shell) return;
       document.getElementById('edit-talk-title').value = shell.dataset.talkTitle || '';
-      document.getElementById('edit-talk-room').value = shell.dataset.talkRoom || '';
+      const roomSelect = document.getElementById('edit-talk-room');
+      const currentRoom = shell.dataset.talkRoom || '';
+      roomSelect.replaceChildren(new Option('No room', ''));
+      if (shell.dataset.eventId) {
+        try {
+          const response = await (window.authFetch || fetch)(`/events/${shell.dataset.eventId}/rooms`);
+          if (!response.ok) throw new Error('Unable to load rooms');
+          const rooms = await response.json();
+          rooms.forEach(room => roomSelect.add(new Option(room.name, room.name)));
+        } catch (_) {
+          // Preserve the current assignment if room loading fails.
+        }
+      }
+      if (currentRoom && !Array.from(roomSelect.options).some(option => option.value === currentRoom)) {
+        roomSelect.add(new Option(currentRoom, currentRoom));
+      }
+      roomSelect.value = currentRoom;
       const toLocalInputFormat = (isoString) => {
         if (!isoString) return '';
         const d = new Date(isoString);

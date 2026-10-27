@@ -265,7 +265,7 @@
       </thead>
       <tbody>
         {% for talk in talks %}
-        <tr data-talk-id="{{ talk.id }}" data-status="{{ talk.status }}" data-title="{{ (talk.title or '') | e }}" data-room="{{ (talk.room or '') | e }}" data-start="{{ talk.start.isoformat() if talk.start else '' }}" data-end="{{ talk.end.isoformat() if talk.end else '' }}" data-speaker-email="{{ (talk.speaker_email or '') | e }}">
+        <tr data-talk-id="{{ talk.id }}" data-event-id="{{ talk.event_id }}" data-status="{{ talk.status }}" data-title="{{ (talk.title or '') | e }}" data-room="{{ (talk.room or '') | e }}" data-start="{{ talk.start.isoformat() if talk.start else '' }}" data-end="{{ talk.end.isoformat() if talk.end else '' }}" data-speaker-email="{{ (talk.speaker_email or '') | e }}">
           {% if can_manage %}
           <td class="col-checkbox">
             <input type="checkbox" class="talk-checkbox" value="{{ talk.id }}">
@@ -368,6 +368,26 @@
     </div>
   </div>
 </dialog>
+<dialog id="modal-quick-create-room" class="v-modal">
+  <div class="v-modal-card">
+    <div class="v-modal-header">
+      <h3 class="v-modal-title">Add Room</h3>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-close>✕</button>
+    </div>
+    <form id="quick-create-room-form">
+      <div class="v-modal-body">
+        <label class="v-modal-label" for="quick-create-room-name">Room Name</label>
+        <input id="quick-create-room-name" class="input-field" maxlength="255" required>
+        <label class="v-modal-label" for="quick-create-room-description">Description</label>
+        <input id="quick-create-room-description" class="input-field">
+      </div>
+      <div class="v-modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm" data-modal-close>Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Add Room</button>
+      </div>
+    </form>
+  </div>
+</dialog>
 {% endif %}
 
 {% if can_attach_room %}
@@ -445,7 +465,10 @@
 
       <div class="v-modal-field-sm">
         <label class="v-modal-label v-modal-label-tight" for="quick-talk-room">Room</label>
-        <input type="text" id="quick-talk-room" class="input-field" value="Auditorium A">
+        <div class="room-select-row">
+          <select id="quick-talk-room" class="input-field"><option value="">No room</option></select>
+          <button type="button" id="btn-quick-add-room" class="btn btn-secondary">+ Add Room</button>
+        </div>
       </div>
 
       <div class="v-modal-field-sm">

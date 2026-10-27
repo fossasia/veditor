@@ -24,6 +24,7 @@ from fastapi import (
 )
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -71,6 +72,60 @@ router = APIRouter(
 )
 
 
+def _lock_event_for_room_operation(db: Session, event_id: int) -> None:
+    """Serialize room lifecycle changes and talk assignments per event."""
+    if not isinstance(db, Session):
+        return
+    db.query(models.Event).filter(models.Event.id == event_id).with_for_update().first()
+
+
+def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str | None:
+    """Register a talk room without changing the legacy Talk.room contract."""
+    if raw_name is None:
+        return None
+    name = raw_name.strip()
+    if not name:
+        return None
+    _lock_event_for_room_operation(db, event_id)
+    for pending in getattr(db, "new", ()):
+        if (
+            isinstance(pending, models.Room)
+            and pending.event_id == event_id
+            and pending.name.lower() == name.lower()
+        ):
+            return pending.name
+    room = (
+        db.query(models.Room)
+        .filter(
+            models.Room.event_id == event_id,
+            func.lower(models.Room.name) == func.lower(name),
+        )
+        .with_for_update()
+        .first()
+    )
+    if room is not None:
+        return room.name if isinstance(room, models.Room) else name
+    new_room = models.Room(event_id=event_id, name=name)
+    try:
+        with db.begin_nested():
+            db.add(new_room)
+            db.flush()
+    except IntegrityError:
+        room = (
+            db.query(models.Room)
+            .filter(
+                models.Room.event_id == event_id,
+                func.lower(models.Room.name) == func.lower(name),
+            )
+            .with_for_update()
+            .first()
+        )
+        if room is not None:
+            return room.name if isinstance(room, models.Room) else name
+        raise
+    return new_room.name
+
+
 @router.post("", response_model=schemas.TalkRead, status_code=status.HTTP_201_CREATED)
 def create_or_update_talk(
     payload: schemas.TalkCreate,
@@ -100,8 +155,9 @@ def create_or_update_talk(
         .first()
     )
 
+    room_name = _ensure_event_room(db, payload.event_id, payload.room)
     if talk:
-        talk.room = payload.room
+        talk.room = room_name
         talk.end = payload.end
         if payload.speaker_email is not None:
             talk.speaker_email = payload.speaker_email
@@ -113,7 +169,7 @@ def create_or_update_talk(
     talk = models.Talk(
         event_id=payload.event_id,
         title=payload.title,
-        room=payload.room,
+        room=room_name,
         start=payload.start,
         end=payload.end,
         speaker_email=payload.speaker_email,
@@ -138,7 +194,7 @@ def create_or_update_talk(
         )
         if not talk:
             raise
-        talk.room = payload.room
+        talk.room = _ensure_event_room(db, payload.event_id, payload.room)
         talk.end = payload.end
         if payload.speaker_email is not None:
             talk.speaker_email = payload.speaker_email
@@ -966,8 +1022,10 @@ def update_talk(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
     check_event_access(talk.event_id, user, db)
-
     update_data = payload.model_dump(exclude_unset=True)
+
+    if "room" in update_data:
+        _lock_event_for_room_operation(db, talk.event_id)
 
     if "title" in update_data:
         title = (update_data["title"] or "").strip()
@@ -979,7 +1037,7 @@ def update_talk(
         talk.title = title
     if "room" in update_data:
         raw_room = update_data["room"]
-        talk.room = raw_room.strip() if (raw_room and raw_room.strip()) else None
+        talk.room = _ensure_event_room(db, talk.event_id, raw_room)
 
     if "start" in update_data and update_data["start"] is None:
         raise HTTPException(
@@ -1370,7 +1428,7 @@ async def import_schedule(
         if not isinstance(t_info, dict):
             continue
         title = t_info.get("title") or "Untitled Talk"
-        room = t_info.get("room") or "Main Hall"
+        room = t_info.get("room")
         raw_ext_id = (
             t_info.get("external_id")
             or t_info.get("code")
@@ -1639,6 +1697,21 @@ async def import_schedule(
                     set((client_record.event_ids or []) + [event.id])
                 )
 
+    _lock_event_for_room_operation(db, event.id)
+    import_room_names = {
+        room.name.lower(): room.name
+        for room in db.query(models.Room).filter(models.Room.event_id == event.id).all()
+    }
+
+    def resolve_import_room(raw_name: str | None) -> str | None:
+        if raw_name is None or not raw_name.strip():
+            return None
+        normalized = raw_name.strip()
+        key = normalized.lower()
+        if key not in import_room_names:
+            import_room_names[key] = _ensure_event_room(db, event.id, normalized)
+        return import_room_names[key]
+
     imported_count = 0
     for v_talk in deduped_talks:
         ext_id = v_talk.get("external_id")
@@ -1678,7 +1751,7 @@ async def import_schedule(
 
         if existing:
             existing.title = v_talk["title"]
-            existing.room = v_talk["room"]
+            existing.room = resolve_import_room(v_talk["room"])
             existing.start = v_talk["start"]
             existing.end = v_talk["end"]
             if v_talk.get("speaker_email"):
@@ -1692,7 +1765,7 @@ async def import_schedule(
             event_id=event.id,
             external_id=ext_id,
             title=v_talk["title"],
-            room=v_talk["room"],
+            room=resolve_import_room(v_talk["room"]),
             start=v_talk["start"],
             end=v_talk["end"],
             speaker_email=v_talk.get("speaker_email"),

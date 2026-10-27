@@ -153,6 +153,11 @@ class Event(Base):
     talks: Mapped[list[Talk]] = relationship(
         back_populates="event", cascade="all, delete-orphan"
     )
+    rooms: Mapped[list[Room]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        order_by="Room.name",
+    )
     created_by_user: Mapped[User | None] = relationship(back_populates="events")
 
     @validates("retention_overrides")
@@ -164,6 +169,31 @@ class Event(Base):
         if not isinstance(self.source, str):
             return False
         return self.source.strip().lower() in ("eventyay", "platform")
+
+
+class Room(Base):
+    __tablename__ = "rooms"
+    __table_args__ = (
+        UniqueConstraint("event_id", "name", name="uq_rooms_event_id_name"),
+        Index(
+            "uq_rooms_event_id_name_ci", "event_id", text("lower(name)"), unique=True
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    event: Mapped[Event] = relationship(back_populates="rooms")
 
 
 class Client(Base):
