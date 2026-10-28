@@ -530,12 +530,20 @@ class RoomRecordingAttachResponse(BaseModel):
 
 
 class RoomRecordingAttachJSONRequest(BaseModel):
-    room: str | None = None
+    room: str
     event_id: int | None = None
     video_url: str | None = None
     relative_key: str | None = None
     source_path: str | None = None
     recording_start: datetime | None = None
+
+    @field_validator("room")
+    @classmethod
+    def validate_room(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("room must not be blank")
+        return value
 
 
 class SystemSettingOption(BaseModel):

@@ -3654,7 +3654,19 @@ def test_attach_room_recording_url_and_source_validations(
         in res.json()["detail"]
     )
 
-    # 3. Conflicting sources: both file and video_url
+    # 3. Room is required and must not be blank in JSON requests
+    for invalid_room in (None, "   "):
+        payload = {"event_id": event.id}
+        if invalid_room is not None:
+            payload["room"] = invalid_room
+        res = client.post(
+            "/talks/room/attach-recording/json",
+            json=payload,
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 422
+
+    # 4. Conflicting sources: both file and video_url
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         with open(clip, "rb") as f_vid:
