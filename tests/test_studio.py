@@ -2883,7 +2883,7 @@ def test_attach_room_recording_from_ingest_roots(
 
     with patch("app.routes.talks.light_queue"):
         res = client.post(
-            "/talks/room/attach-recording",
+            "/talks/room/attach-recording/json",
             json={
                 "room": "Hall B",
                 "event_id": event.id,
@@ -3511,7 +3511,7 @@ def test_attach_room_recording_with_video_url(
     with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
         # 1. Test JSON payload
         res = client.post(
-            "/talks/room/attach-recording",
+            "/talks/room/attach-recording/json",
             json={
                 "room": "Auditorium Stream",
                 "event_id": event.id,
@@ -3628,7 +3628,7 @@ def test_attach_room_recording_url_and_source_validations(
 
     # 1. Invalid URL scheme
     res = client.post(
-        "/talks/room/attach-recording",
+        "/talks/room/attach-recording/json",
         json={
             "room": "Val Room",
             "event_id": event.id,
@@ -3641,7 +3641,7 @@ def test_attach_room_recording_url_and_source_validations(
 
     # 2. No source provided
     res = client.post(
-        "/talks/room/attach-recording",
+        "/talks/room/attach-recording/json",
         json={
             "room": "Val Room",
             "event_id": event.id,

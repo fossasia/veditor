@@ -1891,7 +1891,6 @@ def create_talk_sso_token(
     status_code=status.HTTP_200_OK,
 )
 async def attach_room_recording(
-    request: Request,
     user: Annotated[CurrentUser, Depends(require_role("organizer"))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
@@ -1903,26 +1902,60 @@ async def attach_room_recording(
     source_path: Annotated[str | None, Form()] = None,
     recording_start: Annotated[datetime | None, Form()] = None,
 ):
-    """Attach a continuous room recording to all scheduled sessions in that room."""
-    # Support JSON requests as well as multipart/form-data
-    content_type = request.headers.get("content-type", "")
-    if content_type.startswith("application/json"):
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                room = body.get("room", room)
-                event_id = body.get("event_id", event_id)
-                video_url = body.get("video_url", video_url)
-                relative_key = body.get("relative_key", relative_key)
-                source_path = body.get("source_path", source_path)
-                rec_start_str = body.get("recording_start")
-                if rec_start_str and not recording_start:
-                    try:
-                        recording_start = datetime.fromisoformat(rec_start_str)
-                    except ValueError:
-                        pass
-        except (ValueError, TypeError, UnicodeDecodeError):  # fmt: skip
-            pass
+    """Attach a continuous room recording submitted as multipart form data."""
+    return await _attach_room_recording_impl(
+        user=user,
+        db=db,
+        storage=storage,
+        room=room,
+        event_id=event_id,
+        file=file,
+        video_url=video_url,
+        relative_key=relative_key,
+        source_path=source_path,
+        recording_start=recording_start,
+    )
+
+
+@router.post(
+    "/room/attach-recording/json",
+    response_model=schemas.RoomRecordingAttachResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def attach_room_recording_json(
+    payload: schemas.RoomRecordingAttachJSONRequest,
+    user: Annotated[CurrentUser, Depends(require_role("organizer"))],
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+):
+    """Attach a continuous room recording submitted as a JSON payload."""
+    return await _attach_room_recording_impl(
+        user=user,
+        db=db,
+        storage=storage,
+        room=payload.room,
+        event_id=payload.event_id,
+        video_url=payload.video_url,
+        relative_key=payload.relative_key,
+        source_path=payload.source_path,
+        recording_start=payload.recording_start,
+    )
+
+
+async def _attach_room_recording_impl(
+    *,
+    user: CurrentUser,
+    db: Session,
+    storage: StorageBackend,
+    room: str | None = None,
+    event_id: int | None = None,
+    file: UploadFile | None = None,
+    video_url: str | None = None,
+    relative_key: str | None = None,
+    source_path: str | None = None,
+    recording_start: datetime | None = None,
+):
+    """Shared room-recording attachment workflow for both request encodings."""
 
     if not room or not room.strip():
         raise HTTPException(

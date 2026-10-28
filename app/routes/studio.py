@@ -23,7 +23,11 @@ from app.config import get_setting, settings
 from app.db import get_db
 from app.queue import light_queue
 from app.routes.auth import _get_authenticated_user_from_cookie
-from app.routes.talks import _cancel_talk_jobs, attach_room_recording
+from app.routes.talks import (
+    _cancel_talk_jobs,
+    attach_room_recording,
+    attach_room_recording_json,
+)
 from app.security import SSOTokenPayload, decode_sso_token
 from app.storage import StorageBackend, get_storage_backend
 from app.tasks import job_waveform
@@ -1247,6 +1251,15 @@ def delete_studio_event(
 router.add_api_route(
     "/room/attach-recording",
     attach_room_recording,
+    methods=["POST"],
+    response_model=schemas.RoomRecordingAttachResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+
+router.add_api_route(
+    "/room/attach-recording/json",
+    attach_room_recording_json,
     methods=["POST"],
     response_model=schemas.RoomRecordingAttachResponse,
     status_code=status.HTTP_200_OK,

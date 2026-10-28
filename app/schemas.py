@@ -529,6 +529,15 @@ class RoomRecordingAttachResponse(BaseModel):
     recording_duration_seconds: float | None = None
 
 
+class RoomRecordingAttachJSONRequest(BaseModel):
+    room: str | None = None
+    event_id: int | None = None
+    video_url: str | None = None
+    relative_key: str | None = None
+    source_path: str | None = None
+    recording_start: datetime | None = None
+
+
 class SystemSettingOption(BaseModel):
     value: str
     label: str
