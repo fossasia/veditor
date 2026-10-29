@@ -1,14 +1,15 @@
 import pytest
 
+from app.consts import TalkStatus
 from app.states import TRANSITIONS, InvalidTransitionError, advance
 
 
 class DummyTalk:
-    def __init__(self, status):
+    def __init__(self, status: str) -> None:
         self.status = status
 
 
-def test_advance_legal_transitions():
+def test_advance_legal_transitions() -> None:
     for current_state, next_states in TRANSITIONS.items():
         for next_state in next_states:
             talk = DummyTalk(current_state)
@@ -17,7 +18,7 @@ def test_advance_legal_transitions():
             assert talk.status == next_state
 
 
-def test_advance_updates_talk_updated_at():
+def test_advance_updates_talk_updated_at() -> None:
     talk = DummyTalk("waiting_for_files")
     assert not hasattr(talk, "updated_at")
     advance(talk, "detecting")
@@ -26,14 +27,14 @@ def test_advance_updates_talk_updated_at():
     assert talk.updated_at.tzinfo is not None
 
     # Also test transition to terminal 'done' from valid predecessor 'uploading'
-    talk.status = "uploading"
+    talk.status = TalkStatus.UPLOADING
     prev_time = talk.updated_at
     advance(talk, "done")
-    assert talk.status == "done"
+    assert talk.status == TalkStatus.DONE
     assert talk.updated_at >= prev_time
 
 
-def test_advance_illegal_transitions():
+def test_advance_illegal_transitions() -> None:
     # Test at least one illegal transition per state
     illegal_moves = {
         "waiting_for_files": "cutting",
@@ -63,7 +64,7 @@ def test_advance_illegal_transitions():
         assert talk.status == current_state  # State should not mutate
 
 
-def test_phase4_happy_path():
+def test_phase4_happy_path() -> None:
     """Full happy path: waiting_for_files → detecting → pending_approval → pending_bounds → cutting → generating_previews → preview."""
     talk = DummyTalk("waiting_for_files")
     for state in (
@@ -78,25 +79,25 @@ def test_phase4_happy_path():
         assert talk.status == state
 
 
-def test_pending_approval_to_rejected():
+def test_pending_approval_to_rejected() -> None:
     talk = DummyTalk("pending_approval")
     advance(talk, "rejected")
-    assert talk.status == "rejected"
+    assert talk.status == TalkStatus.REJECTED
 
 
-def test_rejected_is_terminal():
+def test_rejected_is_terminal() -> None:
     talk = DummyTalk("rejected")
     with pytest.raises(InvalidTransitionError):
         advance(talk, "waiting_for_files")
 
 
-def test_explicit_paths_per_acceptance_criteria():
+def test_explicit_paths_per_acceptance_criteria() -> None:
     # preview → needs_work → cutting (Phase 5+ loop — still wired, just not built yet)
     talk = DummyTalk("preview")
     advance(talk, "needs_work")
-    assert talk.status == "needs_work"
+    assert talk.status == TalkStatus.NEEDS_WORK
     advance(talk, "cutting")
-    assert talk.status == "cutting"
+    assert talk.status == TalkStatus.CUTTING
 
     # preview → pending_bounds (used by needs_work)
     talk_reset = DummyTalk("preview")

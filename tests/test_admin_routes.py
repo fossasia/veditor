@@ -1,8 +1,11 @@
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Executable, delete, func, select, update
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import CurrentUser, hash_api_key
@@ -13,19 +16,19 @@ from app.security import create_access_token, create_session_token, hash_passwor
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 
-@pytest.fixture(scope="module", autouse=True)
-def setup_database():
+@pytest.fixture(scope="module")
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
 def _create_test_user(
-    db, email: str, role: str = "user", is_active: bool = True
+    db: Session, email: str, role: str = "user", is_active: bool = True
 ) -> models.User:
     user = models.User(
         email=email,
@@ -40,7 +43,7 @@ def _create_test_user(
     return user
 
 
-def test_admin_routes_unauthenticated(client: TestClient):
+def test_admin_routes_unauthenticated(client: TestClient, setup_database: None) -> None:
     # GET /admin/users
     res = client.get("/admin/users")
     assert res.status_code == 401
@@ -62,7 +65,9 @@ def test_admin_routes_unauthenticated(client: TestClient):
     assert res.status_code == 401
 
 
-def test_admin_routes_forbidden_for_non_admin(client: TestClient, db_session):
+def test_admin_routes_forbidden_for_non_admin(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     regular_user = _create_test_user(db_session, "regular@admin-test.com", role="user")
     token = create_session_token(regular_user.id, regular_user.role)
     client.cookies.set("veditor_session", token)
@@ -93,7 +98,9 @@ def test_admin_routes_forbidden_for_non_admin(client: TestClient, db_session):
     assert res.status_code == 403
 
 
-def test_admin_users_list_success_and_pagination(client: TestClient, db_session):
+def test_admin_users_list_success_and_pagination(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin1@admin-test.com", role="admin")
     u1 = _create_test_user(db_session, "alpha@admin-test.com", role="user")
     u2 = _create_test_user(db_session, "beta@admin-test.com", role="organizer")
@@ -101,10 +108,10 @@ def test_admin_users_list_success_and_pagination(client: TestClient, db_session)
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
-    earlier_count = (
-        db_session.query(models.User)
-        .filter(models.User.id < min(admin_user.id, u1.id, u2.id))
-        .count()
+    earlier_count = db_session.scalar(
+        select(func.count())
+        .select_from(models.User)
+        .where(models.User.id < min(admin_user.id, u1.id, u2.id))
     )
     res = client.get(f"/admin/users?skip={earlier_count}&limit=10")
     assert res.status_code == 200
@@ -132,7 +139,9 @@ def test_admin_users_list_success_and_pagination(client: TestClient, db_session)
     assert res_invalid_skip.status_code == 422
 
 
-def test_admin_routes_reject_api_key(client: TestClient, db_session):
+def test_admin_routes_reject_api_key(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     client_obj = models.Client(
         hashed_key=hash_api_key("test-admin-api-key"),
         event_ids=[],
@@ -162,7 +171,9 @@ def test_admin_routes_reject_api_key(client: TestClient, db_session):
     assert res.json()["detail"] == "Operation requires a human administrator"
 
 
-def test_promote_user_not_found(client: TestClient, db_session):
+def test_promote_user_not_found(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_p1@admin-test.com", role="admin")
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -172,7 +183,9 @@ def test_promote_user_not_found(client: TestClient, db_session):
     assert res.json()["detail"] == "User not found"
 
 
-def test_promote_user_invalid_role_payload(client: TestClient, db_session):
+def test_promote_user_invalid_role_payload(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_p2@admin-test.com", role="admin")
     target_user = _create_test_user(db_session, "target_p2@admin-test.com", role="user")
 
@@ -186,7 +199,9 @@ def test_promote_user_invalid_role_payload(client: TestClient, db_session):
     assert res.status_code == 422
 
 
-def test_promote_rejects_admin_role(client: TestClient, db_session):
+def test_promote_rejects_admin_role(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_p_rej@admin-test.com", role="admin"
     )
@@ -201,7 +216,9 @@ def test_promote_rejects_admin_role(client: TestClient, db_session):
     assert res.status_code == 422
 
 
-def test_promote_user_success(client: TestClient, db_session):
+def test_promote_user_success(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_p3@admin-test.com", role="admin")
     target_user = _create_test_user(db_session, "target_p3@admin-test.com", role="user")
 
@@ -228,20 +245,23 @@ def test_promote_user_success(client: TestClient, db_session):
     assert target_user.role == "user"
 
 
-def test_promote_guard_cannot_demote_last_admin(client: TestClient, db_session):
+def test_promote_guard_cannot_demote_last_admin(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     # Ensure only 1 active admin exists during the test without deleting pre-existing admins
-    existing_admin_ids = []
+    existing_admin_ids: Sequence[int] = []
     try:
-        existing_admin_ids = [
-            uid
-            for (uid,) in db_session.query(models.User.id)
-            .filter(models.User.role == "admin", models.User.is_active.is_(True))
-            .all()
-        ]
+        existing_admin_ids = db_session.scalars(
+            select(models.User.id).where(
+                models.User.role == "admin", models.User.is_active.is_(True)
+            )
+        ).all()
         if existing_admin_ids:
-            db_session.query(models.User).filter(
-                models.User.id.in_(existing_admin_ids)
-            ).update({"is_active": False}, synchronize_session=False)
+            db_session.execute(
+                update(models.User)
+                .where(models.User.id.in_(existing_admin_ids))
+                .values(is_active=False)
+            )
             db_session.commit()
 
         admin_user = _create_test_user(
@@ -261,15 +281,17 @@ def test_promote_guard_cannot_demote_last_admin(client: TestClient, db_session):
         )
     finally:
         if existing_admin_ids:
-            db_session.query(models.User).filter(
-                models.User.id.in_(existing_admin_ids)
-            ).update({"is_active": True}, synchronize_session=False)
+            db_session.execute(
+                update(models.User)
+                .where(models.User.id.in_(existing_admin_ids))
+                .values(is_active=True)
+            )
             db_session.commit()
 
 
 def test_promote_demote_admin_allowed_if_another_admin_exists(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin1 = _create_test_user(db_session, "admin_a@admin-test.com", role="admin")
     admin2 = _create_test_user(db_session, "admin_b@admin-test.com", role="admin")
 
@@ -285,7 +307,9 @@ def test_promote_demote_admin_allowed_if_another_admin_exists(
     assert admin2.role == "organizer"
 
 
-def test_deactivate_self_prevented(client: TestClient, db_session):
+def test_deactivate_self_prevented(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "self_deact@admin-test.com", role="admin"
     )
@@ -297,7 +321,9 @@ def test_deactivate_self_prevented(client: TestClient, db_session):
     assert res.json()["detail"] == "Cannot deactivate your own account"
 
 
-def test_deactivate_user_not_found(client: TestClient, db_session):
+def test_deactivate_user_not_found(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_d1@admin-test.com", role="admin")
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -307,22 +333,25 @@ def test_deactivate_user_not_found(client: TestClient, db_session):
     assert res.json()["detail"] == "User not found"
 
 
-def test_deactivate_guard_cannot_deactivate_last_admin(client: TestClient, db_session):
+def test_deactivate_guard_cannot_deactivate_last_admin(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     # Ensure only 1 active admin exists during the test without deleting pre-existing admins
     from app.auth import get_current_user
 
-    existing_admin_ids = []
+    existing_admin_ids: Sequence[int] = []
     try:
-        existing_admin_ids = [
-            uid
-            for (uid,) in db_session.query(models.User.id)
-            .filter(models.User.role == "admin", models.User.is_active.is_(True))
-            .all()
-        ]
+        existing_admin_ids = db_session.scalars(
+            select(models.User.id).where(
+                models.User.role == "admin", models.User.is_active.is_(True)
+            )
+        ).all()
         if existing_admin_ids:
-            db_session.query(models.User).filter(
-                models.User.id.in_(existing_admin_ids)
-            ).update({"is_active": False}, synchronize_session=False)
+            db_session.execute(
+                update(models.User)
+                .where(models.User.id.in_(existing_admin_ids))
+                .values(is_active=False)
+            )
             db_session.commit()
 
         sole_admin = _create_test_user(
@@ -338,13 +367,17 @@ def test_deactivate_guard_cannot_deactivate_last_admin(client: TestClient, db_se
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         if existing_admin_ids:
-            db_session.query(models.User).filter(
-                models.User.id.in_(existing_admin_ids)
-            ).update({"is_active": True}, synchronize_session=False)
+            db_session.execute(
+                update(models.User)
+                .where(models.User.id.in_(existing_admin_ids))
+                .values(is_active=True)
+            )
             db_session.commit()
 
 
-def test_deactivate_user_success(client: TestClient, db_session):
+def test_deactivate_user_success(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_d2@admin-test.com", role="admin")
     target_user = _create_test_user(db_session, "target_d2@admin-test.com", role="user")
 
@@ -359,7 +392,9 @@ def test_deactivate_user_success(client: TestClient, db_session):
     assert target_user.is_active is False
 
 
-def test_deactivate_admin_when_another_admin_exists(client: TestClient, db_session):
+def test_deactivate_admin_when_another_admin_exists(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin1 = _create_test_user(db_session, "admin_x@admin-test.com", role="admin")
     admin2 = _create_test_user(db_session, "admin_y@admin-test.com", role="admin")
 
@@ -375,8 +410,8 @@ def test_deactivate_admin_when_another_admin_exists(client: TestClient, db_sessi
 
 
 def test_deactivated_user_immediate_session_and_login_rejection(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_deact_mgr@admin-test.com", role="admin"
     )
@@ -468,26 +503,26 @@ def test_deactivated_user_immediate_session_and_login_rejection(
     assert res_token_post.json()["detail"] == "Invalid credentials"
 
 
-def test_concurrent_admin_demotion_prevents_zero_admins():
+def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) -> None:
     import threading
 
     other_admin_ids = []
     with SessionLocal() as s:
-        s.query(models.User).filter(
-            models.User.email.like("%@concurrent-test.com")
-        ).delete()
-        other_admins = (
-            s.query(models.User)
-            .filter(
+        s.execute(
+            delete(models.User).where(models.User.email.like("%@concurrent-test.com"))
+        )
+        other_admins = s.scalars(
+            select(models.User).where(
                 models.User.role == "admin",
                 ~models.User.email.like("%@concurrent-test.com"),
             )
-            .all()
-        )
+        ).all()
         other_admin_ids = [u.id for u in other_admins]
         if other_admin_ids:
-            s.query(models.User).filter(models.User.id.in_(other_admin_ids)).update(
-                {"role": "organizer"}, synchronize_session=False
+            s.execute(
+                update(models.User)
+                .where(models.User.id.in_(other_admin_ids))
+                .values(role="organizer")
             )
         s.commit()
         admin1 = models.User(
@@ -512,7 +547,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins():
 
         results = []
 
-        def demote_request(token, target_id):
+        def demote_request(token: str, target_id: int) -> None:
             t_client = TestClient(app)
             t_client.cookies.set("veditor_session", token)
             res = t_client.post(
@@ -533,67 +568,52 @@ def test_concurrent_admin_demotion_prevents_zero_admins():
         assert any(code in (400, 403) for code in status_codes)
 
         with SessionLocal() as s:
-            remaining_admins = (
-                s.query(models.User)
-                .filter(
+            remaining_admins = s.scalars(
+                select(models.User).where(
                     models.User.email.like("%@concurrent-test.com"),
                     models.User.role == "admin",
                     models.User.is_active.is_(True),
                 )
-                .all()
-            )
+            ).all()
             assert len(remaining_admins) == 1
     finally:
         with SessionLocal() as s:
-            s.query(models.User).filter(
-                models.User.email.like("%@concurrent-test.com")
-            ).delete()
+            s.execute(
+                delete(models.User).where(
+                    models.User.email.like("%@concurrent-test.com")
+                )
+            )
             if other_admin_ids:
-                s.query(models.User).filter(models.User.id.in_(other_admin_ids)).update(
-                    {"role": "admin"}, synchronize_session=False
+                s.execute(
+                    update(models.User)
+                    .where(models.User.id.in_(other_admin_ids))
+                    .values(role="admin")
                 )
             s.commit()
 
 
-def test_admin_events_list_empty(client: TestClient, db_session):
+def test_admin_events_list_empty(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_e1@admin-test.com", role="admin")
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
     class EmptyDbSession:
-        def __getattr__(self, name):
+        def __getattr__(self, name: str) -> object:
             return getattr(db_session, name)
 
-        def query(self, *args, **kwargs):
-            if args and args[0] is models.User:
-                return db_session.query(*args, **kwargs)
+        def scalar(self, *args: Executable, **kwargs: object) -> object:
+            stmt = cast("Executable", args[0] if args else kwargs.get("statement"))
+            return db_session.scalar(stmt)
 
-            class QueryMock:
-                def outerjoin(self, *a, **kw):
-                    return self
+        def scalars(self, *args: Executable, **kwargs: object) -> object:
+            stmt = cast("Executable", args[0] if args else kwargs.get("statement"))
+            return db_session.scalars(stmt).all()
 
-                def group_by(self, *a, **kw):
-                    return self
-
-                def order_by(self, *a, **kw):
-                    return self
-
-                def offset(self, *a, **kw):
-                    return self
-
-                def limit(self, *a, **kw):
-                    return self
-
-                def scalar(self):
-                    return 0
-
-                def first(self):
-                    return None
-
-                def all(self):
-                    return []
-
-            return QueryMock()
+        def execute(self, *args: Executable, **kwargs: object) -> object:
+            stmt = cast("Executable", args[0] if args else kwargs.get("statement"))
+            return db_session.execute(stmt)
 
     app.dependency_overrides[get_db] = lambda: EmptyDbSession()
     try:
@@ -607,7 +627,9 @@ def test_admin_events_list_empty(client: TestClient, db_session):
         app.dependency_overrides[get_db] = lambda: db_session
 
 
-def test_admin_events_list_and_aggregation(client: TestClient, db_session):
+def test_admin_events_list_and_aggregation(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_e2@admin-test.com", role="admin")
     creator_user = _create_test_user(
         db_session, "creator@admin-test.com", role="organizer"
@@ -702,7 +724,9 @@ def test_admin_events_list_and_aggregation(client: TestClient, db_session):
     assert f"/admin/events/{event2.id}" in html
 
 
-def test_admin_event_detail_not_found(client: TestClient, db_session):
+def test_admin_event_detail_not_found(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_e3@admin-test.com", role="admin")
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -712,7 +736,9 @@ def test_admin_event_detail_not_found(client: TestClient, db_session):
     assert res.json()["detail"] == "Event not found"
 
 
-def test_admin_event_detail_success(client: TestClient, db_session):
+def test_admin_event_detail_success(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_e4@admin-test.com", role="admin")
     creator_user = _create_test_user(
         db_session, "creator2@admin-test.com", role="organizer"
@@ -773,7 +799,9 @@ def test_admin_event_detail_success(client: TestClient, db_session):
     assert f"/studio/talks/{talk2.id}?from=admin" in html
 
 
-def test_admin_studio_editor_bypass(client: TestClient, db_session):
+def test_admin_studio_editor_bypass(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_e5@admin-test.com", role="admin")
     other_organizer = _create_test_user(
         db_session, "other_org@admin-test.com", role="organizer"
@@ -808,7 +836,9 @@ def test_admin_studio_editor_bypass(client: TestClient, db_session):
     assert "Auditorium" in res.text
 
 
-def test_admin_event_detail_empty_talks(client: TestClient, db_session):
+def test_admin_event_detail_empty_talks(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_empty_talks@admin-test.com", role="admin"
     )
@@ -834,7 +864,9 @@ def test_admin_event_detail_empty_talks(client: TestClient, db_session):
     assert "This event does not have any talks scheduled or imported yet." in res.text
 
 
-def test_admin_events_pagination(client: TestClient, db_session):
+def test_admin_events_pagination(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(db_session, "admin_pag@admin-test.com", role="admin")
     creator_user = _create_test_user(
         db_session, "creator_pag@admin-test.com", role="organizer"
@@ -887,7 +919,9 @@ def test_admin_events_pagination(client: TestClient, db_session):
     assert res_bad_limit_zero.status_code == 422
 
 
-def test_admin_settings_unauthenticated(client: TestClient):
+def test_admin_settings_unauthenticated(
+    client: TestClient, setup_database: None
+) -> None:
     res = client.get("/admin/settings")
     assert res.status_code == 401
 
@@ -898,7 +932,9 @@ def test_admin_settings_unauthenticated(client: TestClient):
     assert res.status_code == 401
 
 
-def test_admin_settings_forbidden_for_non_admin(client: TestClient, db_session):
+def test_admin_settings_forbidden_for_non_admin(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     user = _create_test_user(db_session, "user_settings@admin-test.com", role="user")
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
@@ -913,7 +949,9 @@ def test_admin_settings_forbidden_for_non_admin(client: TestClient, db_session):
     assert res.status_code == 403
 
 
-def test_admin_settings_rejects_api_key(client: TestClient, db_session):
+def test_admin_settings_rejects_api_key(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     client_rec = models.Client(hashed_key=hash_api_key("test_api_key"), event_ids=[1])
     db_session.add(client_rec)
     db_session.commit()
@@ -922,7 +960,9 @@ def test_admin_settings_rejects_api_key(client: TestClient, db_session):
     assert res.status_code == 403
 
 
-def test_admin_settings_get_html(client: TestClient, db_session):
+def test_admin_settings_get_html(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_get_settings@admin-test.com", role="admin"
     )
@@ -940,7 +980,9 @@ def test_admin_settings_get_html(client: TestClient, db_session):
     assert "Save Changes" in res.text
 
 
-def test_admin_settings_post_form_bulk(client: TestClient, db_session):
+def test_admin_settings_post_form_bulk(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_post_bulk@admin-test.com", role="admin"
     )
@@ -962,32 +1004,36 @@ def test_admin_settings_post_form_bulk(client: TestClient, db_session):
     assert "/admin/settings?status=saved" in res.headers.get("location", "")
 
     # Check all are stored
-    row_tol = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="detect_duration_tolerance_seconds")
-        .first()
+    row_tol = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "detect_duration_tolerance_seconds"
+        )
     )
+    assert row_tol is not None
     assert row_tol.value == "600.0"
 
-    row_lufs = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="loudness_target_lufs")
-        .first()
+    row_lufs = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "loudness_target_lufs"
+        )
     )
+    assert row_lufs is not None
     assert row_lufs.value == "-14.0"
 
-    row_prev = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="default_preview_preset")
-        .first()
+    row_prev = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "default_preview_preset"
+        )
     )
+    assert row_prev is not None
     assert row_prev.value == "big_video"
 
-    row_trans = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="default_transcode_preset")
-        .first()
+    row_trans = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "default_transcode_preset"
+        )
     )
+    assert row_trans is not None
     assert row_trans.value == "720p"
 
     # Now submit action="reset_all"
@@ -1000,11 +1046,13 @@ def test_admin_settings_post_form_bulk(client: TestClient, db_session):
     assert "/admin/settings?status=reset" in res.headers.get("location", "")
 
     db_session.expire_all()
-    count = db_session.query(models.SystemSetting).count()
+    count = db_session.scalar(select(func.count()).select_from(models.SystemSetting))
     assert count == 0
 
 
-def test_admin_settings_api_get(client: TestClient, db_session):
+def test_admin_settings_api_get(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_api_settings@admin-test.com", role="admin"
     )
@@ -1021,7 +1069,9 @@ def test_admin_settings_api_get(client: TestClient, db_session):
     assert len(data[0]["options"]) > 0
 
 
-def test_admin_settings_post_form_and_reset(client: TestClient, db_session):
+def test_admin_settings_post_form_and_reset(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_post_settings@admin-test.com", role="admin"
     )
@@ -1038,10 +1088,10 @@ def test_admin_settings_post_form_and_reset(client: TestClient, db_session):
     assert "/admin/settings?status=saved" in res.headers.get("location", "")
 
     # Check DB was updated
-    row = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="detect_duration_tolerance_seconds")
-        .first()
+    row = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "detect_duration_tolerance_seconds"
+        )
     )
     assert row is not None
     assert row.value == "240.0"
@@ -1055,15 +1105,17 @@ def test_admin_settings_post_form_and_reset(client: TestClient, db_session):
     assert "/admin/settings?status=reset" in res.headers.get("location", "")
 
     db_session.expire_all()
-    row = (
-        db_session.query(models.SystemSetting)
-        .filter_by(key="detect_duration_tolerance_seconds")
-        .first()
+    row = db_session.scalar(
+        select(models.SystemSetting).where(
+            models.SystemSetting.key == "detect_duration_tolerance_seconds"
+        )
     )
     assert row is None
 
 
-def test_admin_settings_post_json(client: TestClient, db_session):
+def test_admin_settings_post_json(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_post_json@admin-test.com", role="admin"
     )
@@ -1097,7 +1149,9 @@ def test_admin_settings_post_json(client: TestClient, db_session):
     assert res.json()["status"] == "ok"
 
 
-def test_admin_settings_post_invalid_validation(client: TestClient, db_session):
+def test_admin_settings_post_invalid_validation(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_invalid_val@admin-test.com", role="admin"
     )
@@ -1119,7 +1173,9 @@ def test_admin_settings_post_invalid_validation(client: TestClient, db_session):
     assert res.status_code == 400
 
 
-def test_admin_settings_post_forbidden_secret(client: TestClient, db_session):
+def test_admin_settings_post_forbidden_secret(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_secret_mod@admin-test.com", role="admin"
     )
@@ -1148,7 +1204,9 @@ def test_admin_settings_post_forbidden_secret(client: TestClient, db_session):
     assert res.status_code == 400
 
 
-def test_admin_settings_post_malformed_payloads(client: TestClient, db_session):
+def test_admin_settings_post_malformed_payloads(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_malformed@admin-test.com", role="admin"
     )
@@ -1175,8 +1233,8 @@ def test_admin_settings_post_malformed_payloads(client: TestClient, db_session):
 
 
 def test_admin_settings_excluded_keys_hidden_from_listing(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_hidden_keys@admin-test.com", role="admin"
     )
@@ -1200,7 +1258,9 @@ def test_admin_settings_excluded_keys_hidden_from_listing(
     assert "session_secret" not in keys
 
 
-def test_admin_dashboard_overview_configuration_summary(client: TestClient, db_session):
+def test_admin_dashboard_overview_configuration_summary(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin = _create_test_user(
         db_session, "admin_overview_summary@admin-test.com", role="admin"
     )
@@ -1217,7 +1277,9 @@ def test_admin_dashboard_overview_configuration_summary(client: TestClient, db_s
     assert "admin-summary-panel" in res.text
 
 
-def test_admin_users_html_view_rendering(client: TestClient, db_session):
+def test_admin_users_html_view_rendering(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_ui_user@admin-test.com", role="admin"
     )
@@ -1313,7 +1375,9 @@ def test_admin_users_html_view_rendering(client: TestClient, db_session):
     assert '<script src="/static/js/admin_users.js"></script>' in html
 
 
-def test_admin_users_search_filter_html_and_json(client: TestClient, db_session):
+def test_admin_users_search_filter_html_and_json(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_search_mgr@admin-test.com", role="admin"
     )
@@ -1343,7 +1407,9 @@ def test_admin_users_search_filter_html_and_json(client: TestClient, db_session)
     assert 'matching "findme_special"' in html
 
 
-def test_admin_users_search_empty_state(client: TestClient, db_session):
+def test_admin_users_search_empty_state(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_search_empty@admin-test.com", role="admin"
     )
@@ -1366,7 +1432,9 @@ def test_admin_users_search_empty_state(client: TestClient, db_session):
     assert "Clear search filter" in html
 
 
-def test_activate_user_endpoint_success(client: TestClient, db_session):
+def test_activate_user_endpoint_success(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_act_mgr@admin-test.com", role="admin"
     )
@@ -1388,7 +1456,9 @@ def test_activate_user_endpoint_success(client: TestClient, db_session):
     assert inactive_user.is_active is True
 
 
-def test_activate_user_not_found(client: TestClient, db_session):
+def test_activate_user_not_found(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_act_nf@admin-test.com", role="admin"
     )
@@ -1400,7 +1470,9 @@ def test_activate_user_not_found(client: TestClient, db_session):
     assert res.json()["detail"] == "User not found"
 
 
-def test_promote_demote_to_user_role(client: TestClient, db_session):
+def test_promote_demote_to_user_role(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_demote_mgr@admin-test.com", role="admin"
     )
@@ -1420,7 +1492,9 @@ def test_promote_demote_to_user_role(client: TestClient, db_session):
     assert target_user.role == "user"
 
 
-def test_promote_rejects_speaker_role(client: TestClient, db_session):
+def test_promote_rejects_speaker_role(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_no_spk@admin-test.com", role="admin"
     )
@@ -1438,7 +1512,9 @@ def test_promote_rejects_speaker_role(client: TestClient, db_session):
     assert res.status_code == 422
 
 
-def test_admin_users_role_alias_endpoint(client: TestClient, db_session):
+def test_admin_users_role_alias_endpoint(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_alias@admin-test.com", role="admin"
     )
@@ -1458,7 +1534,9 @@ def test_admin_users_role_alias_endpoint(client: TestClient, db_session):
     assert target_user.role == "organizer"
 
 
-def test_admin_nav_includes_users_link(client: TestClient, db_session):
+def test_admin_nav_includes_users_link(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_nav_test@admin-test.com", role="admin"
     )
@@ -1477,7 +1555,9 @@ def test_admin_nav_includes_users_link(client: TestClient, db_session):
     assert 'href="/admin/users"' in res_events.text
 
 
-def test_admin_users_search_wildcard_escaping(client: TestClient, db_session):
+def test_admin_users_search_wildcard_escaping(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_escape_test@admin-test.com", role="admin"
     )
@@ -1501,7 +1581,9 @@ def test_admin_users_search_wildcard_escaping(client: TestClient, db_session):
     assert res_pct.json() == []
 
 
-def test_admin_users_pagination_url_encoding(client: TestClient, db_session):
+def test_admin_users_pagination_url_encoding(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_urlenc@admin-test.com", role="admin"
     )
@@ -1538,7 +1620,9 @@ def test_admin_users_pagination_url_encoding(client: TestClient, db_session):
     assert "search=%2Bspecial" in html_page2
 
 
-def test_admin_users_html_skip_out_of_range_raises_404(client: TestClient, db_session):
+def test_admin_users_html_skip_out_of_range_raises_404(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     admin_user = _create_test_user(
         db_session, "admin_skip_test@admin-test.com", role="admin"
     )
@@ -1568,7 +1652,9 @@ def test_admin_users_html_skip_out_of_range_raises_404(client: TestClient, db_se
 # ---------------------------------------------------------------------------
 
 
-def test_request_organizer_role_success(client: TestClient, db_session):
+def test_request_organizer_role_success(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Standard user can submit an organizer request."""
     user = _create_test_user(db_session, "req_org_1@admin-test.com", role="user")
     token = create_session_token(user.id, user.role)
@@ -1588,7 +1674,9 @@ def test_request_organizer_role_success(client: TestClient, db_session):
     assert user.organizer_requested is True
 
 
-def test_request_organizer_role_idempotency_rejected(client: TestClient, db_session):
+def test_request_organizer_role_idempotency_rejected(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Cannot submit a second organizer request when one is already pending."""
     user = _create_test_user(db_session, "req_org_2@admin-test.com", role="user")
     user.organizer_requested = True
@@ -1602,7 +1690,9 @@ def test_request_organizer_role_idempotency_rejected(client: TestClient, db_sess
     assert "already pending" in res.json()["detail"]
 
 
-def test_request_organizer_role_rejected_for_organizer(client: TestClient, db_session):
+def test_request_organizer_role_rejected_for_organizer(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Organizers cannot submit a request (they already have access)."""
     user = _create_test_user(db_session, "req_org_3@admin-test.com", role="organizer")
     token = create_session_token(user.id, user.role)
@@ -1613,14 +1703,18 @@ def test_request_organizer_role_rejected_for_organizer(client: TestClient, db_se
     assert "Only standard users" in res.json()["detail"]
 
 
-def test_request_organizer_role_unauthenticated(client: TestClient):
+def test_request_organizer_role_unauthenticated(
+    client: TestClient, setup_database: None
+) -> None:
     """Unauthenticated requests are rejected."""
     client.cookies.clear()
     res = client.post("/users/request-organizer", json={})
     assert res.status_code == 401
 
 
-def test_request_organizer_role_sso_rejected(client: TestClient):
+def test_request_organizer_role_sso_rejected(
+    client: TestClient, setup_database: None
+) -> None:
     """SSO sessions are forbidden from requesting organizer access."""
     from app.security import create_sso_token
 
@@ -1643,7 +1737,9 @@ def test_request_organizer_role_sso_rejected(client: TestClient):
     assert "SSO sessions cannot request organizer access" in res_hdr.json()["detail"]
 
 
-def test_request_organizer_optional_note_empty_string(client: TestClient, db_session):
+def test_request_organizer_optional_note_empty_string(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Empty note is treated as None."""
     user = _create_test_user(db_session, "req_org_4@admin-test.com", role="user")
     token = create_session_token(user.id, user.role)
@@ -1656,8 +1752,8 @@ def test_request_organizer_optional_note_empty_string(client: TestClient, db_ses
 
 
 def test_request_organizer_note_exceeding_max_length_rejected(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Note exceeding 500 characters is rejected with 422 Unprocessable Entity."""
     user = _create_test_user(db_session, "req_org_len@admin-test.com", role="user")
     token = create_session_token(user.id, user.role)
@@ -1667,7 +1763,9 @@ def test_request_organizer_note_exceeding_max_length_rejected(
     assert res.status_code == 422
 
 
-def test_admin_approve_clears_pending_request(client: TestClient, db_session):
+def test_admin_approve_clears_pending_request(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Admin promoting a user to organizer clears the pending request flag."""
     admin = _create_test_user(db_session, "admin_appv@admin-test.com", role="admin")
     user = _create_test_user(db_session, "req_org_5@admin-test.com", role="user")
@@ -1690,8 +1788,8 @@ def test_admin_approve_clears_pending_request(client: TestClient, db_session):
 
 
 def test_admin_demotion_does_not_clear_already_false_request(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Demoting a user (no pending request) doesn't error."""
     admin = _create_test_user(db_session, "admin_dem@admin-test.com", role="admin")
     user = _create_test_user(db_session, "req_org_6@admin-test.com", role="organizer")
@@ -1704,7 +1802,9 @@ def test_admin_demotion_does_not_clear_already_false_request(
     assert res.json()["role"] == "user"
 
 
-def test_admin_users_pending_requests_filter(client: TestClient, db_session):
+def test_admin_users_pending_requests_filter(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
     """Admin can filter user list by pending organizer requests."""
     admin = _create_test_user(db_session, "admin_filter@admin-test.com", role="admin")
     user_pending = _create_test_user(

@@ -10,7 +10,7 @@ import redis.exceptions
 from scripts.run_worker import main
 
 
-def test_eager_import_tasks_rationale():
+def test_eager_import_tasks_rationale() -> None:
     """Verify that scripts/run_worker.py imports app.tasks inside worker boot
 
     rather than at module top-level to prevent pre-fork socket leaks.
@@ -37,13 +37,13 @@ def test_eager_import_tasks_rationale():
 
     # Verify app.tasks is imported inside the file (e.g. inside _run_single_worker)
     all_imports = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
+    for walk_node in ast.walk(tree):
+        if isinstance(walk_node, ast.Import):
+            for alias in walk_node.names:
                 all_imports.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            for alias in node.names:
+        elif isinstance(walk_node, ast.ImportFrom):
+            module = walk_node.module or ""
+            for alias in walk_node.names:
                 all_imports.append(f"{module}.{alias.name}" if module else alias.name)
 
     assert any(
@@ -53,7 +53,9 @@ def test_eager_import_tasks_rationale():
 
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.Worker")
-def test_worker_default_queues(mock_worker_cls, mock_redis_from_url):
+def test_worker_default_queues(
+    mock_worker_cls: MagicMock, mock_redis_from_url: MagicMock
+) -> None:
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis
     mock_worker = MagicMock()
@@ -70,7 +72,9 @@ def test_worker_default_queues(mock_worker_cls, mock_redis_from_url):
 
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.Worker")
-def test_worker_explicit_queues(mock_worker_cls, mock_redis_from_url):
+def test_worker_explicit_queues(
+    mock_worker_cls: MagicMock, mock_redis_from_url: MagicMock
+) -> None:
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis
     mock_worker = MagicMock()
@@ -90,7 +94,9 @@ def test_worker_explicit_queues(mock_worker_cls, mock_redis_from_url):
 
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.Worker")
-def test_worker_burst_and_name_flags(mock_worker_cls, mock_redis_from_url):
+def test_worker_burst_and_name_flags(
+    mock_worker_cls: MagicMock, mock_redis_from_url: MagicMock
+) -> None:
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis
     mock_worker = MagicMock()
@@ -107,8 +113,10 @@ def test_worker_burst_and_name_flags(mock_worker_cls, mock_redis_from_url):
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.Worker")
 def test_worker_with_scheduler_flag(
-    mock_worker_cls, mock_redis_from_url, mock_register_sweep
-):
+    mock_worker_cls: MagicMock,
+    mock_redis_from_url: MagicMock,
+    mock_register_sweep: MagicMock,
+) -> None:
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis
     mock_worker = MagicMock()
@@ -121,7 +129,9 @@ def test_worker_with_scheduler_flag(
 
 
 @patch("scripts.run_worker.redis.from_url")
-def test_worker_redis_connection_error_fast_fail(mock_redis_from_url, capsys):
+def test_worker_redis_connection_error_fast_fail(
+    mock_redis_from_url: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
     mock_redis = MagicMock()
     mock_redis.ping.side_effect = redis.exceptions.ConnectionError(
         "Connection refused by Redis server"
@@ -139,7 +149,7 @@ def test_worker_redis_connection_error_fast_fail(mock_redis_from_url, capsys):
     assert "Connection refused" in captured.err
 
 
-def test_worker_redis_url_unset_fast_fail(capsys):
+def test_worker_redis_url_unset_fast_fail(capsys: pytest.CaptureFixture[str]) -> None:
     with patch("scripts.run_worker.settings.redis_url", ""):
         with pytest.raises(SystemExit) as exc_info:
             main(["light"])
@@ -149,7 +159,7 @@ def test_worker_redis_url_unset_fast_fail(capsys):
         assert "Error: REDIS_URL is unset." in captured.err
 
 
-def test_worker_cli_help():
+def test_worker_cli_help() -> None:
     result = subprocess.run(
         [sys.executable, "scripts/run_worker.py", "--help"],
         capture_output=True,
@@ -163,7 +173,9 @@ def test_worker_cli_help():
 
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.multiprocessing.get_context")
-def test_worker_concurrency_spawns_processes(mock_get_context, mock_redis_from_url):
+def test_worker_concurrency_spawns_processes(
+    mock_get_context: MagicMock, mock_redis_from_url: MagicMock
+) -> None:
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis
     mock_ctx = MagicMock()
@@ -184,7 +196,9 @@ def test_worker_concurrency_spawns_processes(mock_get_context, mock_redis_from_u
 @patch("scripts.run_worker.redis.from_url")
 @patch("scripts.run_worker.Worker")
 @patch("app.db.engine.dispose")
-def test_run_single_worker(mock_dispose, mock_worker_cls, mock_redis_from_url):
+def test_run_single_worker(
+    mock_dispose: MagicMock, mock_worker_cls: MagicMock, mock_redis_from_url: MagicMock
+) -> None:
     from scripts.run_worker import _run_single_worker
 
     mock_redis = MagicMock()
@@ -207,15 +221,18 @@ def test_run_single_worker(mock_dispose, mock_worker_cls, mock_redis_from_url):
 @patch("scripts.run_worker.Worker")
 @patch("app.db.engine.dispose")
 def test_worker_nice_flag(
-    mock_dispose, mock_worker_cls, mock_redis_from_url, mock_os_nice
-):
+    mock_dispose: MagicMock,
+    mock_worker_cls: MagicMock,
+    mock_redis_from_url: MagicMock,
+    mock_os_nice: MagicMock,
+) -> None:
     main(["light", "--nice", "10", "--burst"])
     mock_os_nice.assert_called_once_with(10)
     mock_worker = mock_worker_cls.return_value
     mock_worker.work.assert_called_once_with(burst=True)
 
 
-def test_run_single_worker_shows_app_info_logs():
+def test_run_single_worker_shows_app_info_logs() -> None:
     """INFO logs from app modules, such as the dev-mode verification link, must
     appear in the worker output (#315)."""
     code = """
@@ -248,7 +265,7 @@ assert not logging.getLogger("sqlalchemy.engine").isEnabledFor(logging.INFO)
     assert "verify link: http://localhost/verify-email" in result.stderr
 
 
-def test_run_single_worker_does_not_duplicate_app_logs():
+def test_run_single_worker_does_not_duplicate_app_logs() -> None:
     """With a root handler already installed (e.g. by a log forwarder), app
     records must be written once, not once per handler."""
     code = """

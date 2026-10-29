@@ -18,21 +18,21 @@ def _inspect_stream_durations(path: Path | str) -> tuple[float, float]:
         v_dur = 0.0
         a_dur = 0.0
         if container.streams.video:
-            s = container.streams.video[0]
-            if s.duration and s.time_base:
-                v_dur = float(s.duration * s.time_base)
+            v_stream = container.streams.video[0]
+            if v_stream.duration and v_stream.time_base:
+                v_dur = float(v_stream.duration * v_stream.time_base)
             elif container.duration:
                 v_dur = float(container.duration / av.time_base)
         if container.streams.audio:
-            s = container.streams.audio[0]
-            if s.duration and s.time_base:
-                a_dur = float(s.duration * s.time_base)
+            a_stream = container.streams.audio[0]
+            if a_stream.duration and a_stream.time_base:
+                a_dur = float(a_stream.duration * a_stream.time_base)
             elif container.duration:
                 a_dur = float(container.duration / av.time_base)
         return v_dur, a_dur
 
 
-def test_generate_intro_clip_basic(tmp_path: Path):
+def test_generate_intro_clip_basic(tmp_path: Path) -> None:
     """Verify basic intro clip generation with default audio chime and stream sync."""
     output_clip = tmp_path / "intro_basic.mp4"
 
@@ -65,7 +65,7 @@ def test_generate_intro_clip_basic(tmp_path: Path):
     assert abs(v_dur - a_dur) <= 0.2
 
 
-def test_generate_intro_clip_with_logo_and_jingle(tmp_path: Path):
+def test_generate_intro_clip_with_logo_and_jingle(tmp_path: Path) -> None:
     """Verify intro clip generation with composited logo and external audio jingle."""
     logo_path = tmp_path / "event_logo.png"
     logo_img = Image.new("RGBA", (150, 80), (0, 0, 0, 0))
@@ -105,7 +105,7 @@ def test_generate_intro_clip_with_logo_and_jingle(tmp_path: Path):
     assert abs(info.duration - 2.5) <= 0.5
 
 
-def test_generate_intro_with_48khz_jingle(tmp_path: Path):
+def test_generate_intro_with_48khz_jingle(tmp_path: Path) -> None:
     """Verify external 48 kHz broadcast audio jingle resamples cleanly to 44.1 kHz."""
     jingle_48k = generate_clip(
         2.0,
@@ -130,10 +130,11 @@ def test_generate_intro_with_48khz_jingle(tmp_path: Path):
 
     info = open_and_inspect(output_clip)
     assert info.has_audio is True
+    assert info.duration is not None
     assert abs(info.duration - 2.0) <= 0.5
 
 
-def test_generate_intro_clip_metadata_dict(tmp_path: Path):
+def test_generate_intro_clip_metadata_dict(tmp_path: Path) -> None:
     """Verify talk_metadata dictionary ingestion and empty path tolerance."""
     output_clip = tmp_path / "intro_dict.mp4"
 
@@ -158,7 +159,7 @@ def test_generate_intro_clip_metadata_dict(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_generate_intro_clip_small_resolution(tmp_path: Path):
+def test_generate_intro_clip_small_resolution(tmp_path: Path) -> None:
     """Verify small custom resolution clamps font sizes without raising ImageFont ValueError."""
     output_clip = tmp_path / "intro_small.mp4"
 
@@ -174,7 +175,7 @@ def test_generate_intro_clip_small_resolution(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_generate_intro_clip_invalid_arguments(tmp_path: Path):
+def test_generate_intro_clip_invalid_arguments(tmp_path: Path) -> None:
     """Verify error handling on invalid parameters."""
     output_clip = tmp_path / "invalid.mp4"
 

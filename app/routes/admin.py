@@ -4,10 +4,18 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from rq import Worker
-from sqlalchemy import case, func, text
+from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
@@ -24,8 +32,11 @@ from app.config import (
     SettingDefinition,
     settings,
 )
+from app.consts import AuthRole, TalkStatus
 from app.db import get_db
+from app.models import User
 from app.queue import redis_conn
+from app.schemas import SystemSettingRead, UserRead
 from app.storage import StorageBackend, get_storage_backend
 from app.ui.templating import templates
 
@@ -75,7 +86,7 @@ def _is_setting_overridden(
 
 
 def _get_all_settings_data(db: Session) -> list[schemas.SystemSettingRead]:
-    db_rows = {s.key: s for s in db.query(models.SystemSetting).all()}
+    db_rows = {s.key: s for s in db.scalars(select(models.SystemSetting))}
     results: list[schemas.SystemSettingRead] = []
 
     for def_key, defn in SYSTEM_SETTING_DEFINITIONS.items():
@@ -109,7 +120,7 @@ def admin_dashboard(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> HTMLResponse:
     db_status = "Down"
     try:
         db.execute(text("SELECT 1"))
@@ -166,7 +177,7 @@ def admin_dashboard(
     )
 
 
-@router.get("/users")
+@router.get("/users", response_model=None)
 def list_users(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
@@ -178,24 +189,24 @@ def list_users(
     q: str | None = Query(None),
     email: str | None = Query(None),
     pending: bool | None = Query(None),
-):
+) -> Response | list[UserRead]:
     search_term = (search or q or email or "").strip()
-    query = db.query(models.User)
     pending_filter = pending is True or request.query_params.get("pending") in (
         "true",
         "1",
     )
+    filters = []
     if pending_filter:
-        query = query.filter(models.User.organizer_requested.is_(True))
+        filters.append(models.User.organizer_requested.is_(True))
     if search_term:
         escaped_search = (
             search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         )
-        query = query.filter(
-            models.User.email.ilike(f"%{escaped_search}%", escape="\\")
-        )
+        filters.append(models.User.email.ilike(f"%{escaped_search}%", escape="\\"))
 
-    total_users = query.count()
+    total_users = (
+        db.scalar(select(func.count()).select_from(models.User).where(*filters)) or 0
+    )
     total_pages = max(1, (total_users + limit - 1) // limit) if total_users > 0 else 1
 
     accept = request.headers.get("accept", "")
@@ -223,24 +234,36 @@ def list_users(
             detail="Page not found",
         )
 
-    users = query.order_by(models.User.id.asc()).offset(offset).limit(limit).all()
+    users = list(
+        db.scalars(
+            select(models.User)
+            .where(*filters)
+            .order_by(models.User.id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+    )
 
     if wants_html:
-        macro_row = db.query(
-            func.count(models.User.id).label("total_users"),
-            func.count(case((models.User.is_active.is_(True), 1))).label(
-                "active_users"
-            ),
-            func.count(case((models.User.is_active.is_(False), 1))).label(
-                "inactive_users"
-            ),
-            func.count(case((models.User.role == "admin", 1))).label("admin_users"),
-            func.count(case((models.User.role == "organizer", 1))).label(
-                "organizer_users"
-            ),
-            func.count(case((models.User.organizer_requested.is_(True), 1))).label(
-                "pending_requests"
-            ),
+        macro_row = db.execute(
+            select(
+                func.count(models.User.id).label("total_users"),
+                func.count(case((models.User.is_active.is_(True), 1))).label(
+                    "active_users"
+                ),
+                func.count(case((models.User.is_active.is_(False), 1))).label(
+                    "inactive_users"
+                ),
+                func.count(case((models.User.role == AuthRole.ADMIN, 1))).label(
+                    "admin_users"
+                ),
+                func.count(case((models.User.role == AuthRole.ORGANIZER, 1))).label(
+                    "organizer_users"
+                ),
+                func.count(case((models.User.organizer_requested.is_(True), 1))).label(
+                    "pending_requests"
+                ),
+            )
         ).first()
 
         macro_stats = {
@@ -290,9 +313,9 @@ def promote_user(
     id: int,
     payload: schemas.UserPromoteRequest,
     db: Annotated[Session, Depends(get_db)],
-):
-    target = (
-        db.query(models.User).filter(models.User.id == id).with_for_update().first()
+) -> User:
+    target = db.scalar(
+        select(models.User).where(models.User.id == id).with_for_update()
     )
     if not target:
         raise HTTPException(
@@ -301,17 +324,21 @@ def promote_user(
         )
 
     db.refresh(target)
-    if target.role == "admin" and target.is_active and payload.role != "admin":
+    if (
+        target.role == AuthRole.ADMIN
+        and target.is_active
+        and payload.role != AuthRole.ADMIN
+    ):
         admin_ids = lock_active_admins(db)
         db.refresh(target)
-        if target.role == "admin" and target.is_active and len(admin_ids) <= 1:
+        if target.role == AuthRole.ADMIN and target.is_active and len(admin_ids) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot demote user; operation would leave zero active administrators",
             )
 
     target.role = payload.role
-    if payload.role == "organizer" and target.organizer_requested:
+    if payload.role == AuthRole.ORGANIZER and target.organizer_requested:
         target.organizer_requested = False
         target.organizer_request_note = None
     db.commit()
@@ -323,8 +350,8 @@ def promote_user(
 def activate_user(
     id: int,
     db: Annotated[Session, Depends(get_db)],
-):
-    target = db.query(models.User).filter(models.User.id == id).first()
+) -> User:
+    target = db.scalar(select(models.User).where(models.User.id == id))
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -342,24 +369,24 @@ def deactivate_user(
     id: int,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> User:
     if current_user.user_id is not None and current_user.user_id == id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot deactivate your own account",
         )
 
-    target = db.query(models.User).filter(models.User.id == id).first()
+    target = db.scalar(select(models.User).where(models.User.id == id))
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
 
-    if target.role == "admin" and target.is_active:
+    if target.role == AuthRole.ADMIN and target.is_active:
         admin_ids = lock_active_admins(db)
         db.refresh(target)
-        if target.role == "admin" and target.is_active and len(admin_ids) <= 1:
+        if target.role == AuthRole.ADMIN and target.is_active and len(admin_ids) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot deactivate the last active administrator",
@@ -438,7 +465,7 @@ def get_settings_page(
     db: Annotated[Session, Depends(get_db)],
     status_msg: str | None = Query(None, alias="status"),
     error_msg: str | None = Query(None, alias="error"),
-):
+) -> HTMLResponse:
     settings_list = _get_all_settings_data(db)
     return templates.TemplateResponse(
         request,
@@ -452,18 +479,18 @@ def get_settings_page(
 
 
 PROCESSING_STATUSES = (
-    "detecting",
-    "cutting",
-    "generating_previews",
-    "assembling",
-    "transcoding",
-    "uploading",
+    TalkStatus.DETECTING,
+    TalkStatus.CUTTING,
+    TalkStatus.GENERATING_PREVIEWS,
+    TalkStatus.ASSEMBLING,
+    TalkStatus.TRANSCODING,
+    TalkStatus.UPLOADING,
 )
 PENDING_STATUSES = (
-    "pending_approval",
-    "pending_bounds",
-    "needs_work",
-    "pending_intro_outro",
+    TalkStatus.PENDING_APPROVAL,
+    TalkStatus.PENDING_BOUNDS,
+    TalkStatus.NEEDS_WORK,
+    TalkStatus.PENDING_INTRO_OUTRO,
 )
 
 
@@ -473,17 +500,28 @@ def admin_events(
     db: Annotated[Session, Depends(get_db)],
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-):
-    total_events = db.query(func.count(models.Event.id)).scalar() or 0
-    macro_row = db.query(
-        func.count(models.Talk.id).label("total_talks"),
-        func.count(case((models.Talk.status == "done", 1))).label("total_done"),
-        func.count(case((models.Talk.status.in_(["broken", "rejected"]), 1))).label(
-            "total_broken"
-        ),
-        func.count(case((models.Talk.status.in_(PROCESSING_STATUSES), 1))).label(
-            "total_processing"
-        ),
+) -> HTMLResponse:
+    total_events = db.scalar(select(func.count()).select_from(models.Event)) or 0
+    macro_row = db.execute(
+        select(
+            func.count(models.Talk.id).label("total_talks"),
+            func.count(case((models.Talk.status == TalkStatus.DONE, 1))).label(
+                "total_done"
+            ),
+            func.count(
+                case(
+                    (
+                        models.Talk.status.in_(
+                            [TalkStatus.BROKEN, TalkStatus.REJECTED]
+                        ),
+                        1,
+                    )
+                )
+            ).label("total_broken"),
+            func.count(case((models.Talk.status.in_(PROCESSING_STATUSES), 1))).label(
+                "total_processing"
+            ),
+        )
     ).first()
 
     macro_stats = {
@@ -503,27 +541,36 @@ def admin_events(
         )
     offset = (page - 1) * limit
 
-    rows = (
-        db.query(
+    rows = db.execute(
+        select(
             models.Event.id,
             models.Event.name,
             models.Event.created_by_user_id,
             models.User.email.label("creator_email"),
             func.count(models.Talk.id).label("total_talks"),
-            func.count(case((models.Talk.status == "done", 1))).label("done_count"),
-            func.count(case((models.Talk.status.in_(["broken", "rejected"]), 1))).label(
-                "broken_count"
+            func.count(case((models.Talk.status == TalkStatus.DONE, 1))).label(
+                "done_count"
             ),
+            func.count(
+                case(
+                    (
+                        models.Talk.status.in_(
+                            [TalkStatus.BROKEN, TalkStatus.REJECTED]
+                        ),
+                        1,
+                    )
+                )
+            ).label("broken_count"),
             func.count(case((models.Talk.status.in_(PROCESSING_STATUSES), 1))).label(
                 "processing_count"
             ),
             func.count(case((models.Talk.status.in_(PENDING_STATUSES), 1))).label(
                 "pending_count"
             ),
-            func.count(case((models.Talk.status == "preview", 1))).label(
+            func.count(case((models.Talk.status == TalkStatus.PREVIEW, 1))).label(
                 "preview_count"
             ),
-            func.count(case((models.Talk.status == "waiting_for_files", 1))).label(
+            func.count(case((models.Talk.status == TalkStatus.WAITING_FILES, 1))).label(
                 "waiting_count"
             ),
         )
@@ -538,8 +585,7 @@ def admin_events(
         .order_by(models.Event.id.desc())
         .offset(offset)
         .limit(limit)
-        .all()
-    )
+    ).all()
 
     events = [
         {
@@ -576,7 +622,9 @@ def admin_events(
 
 
 @router.get("/api/settings", response_model=list[schemas.SystemSettingRead])
-def list_api_settings(db: Annotated[Session, Depends(get_db)]):
+def list_api_settings(
+    db: Annotated[Session, Depends(get_db)],
+) -> list[SystemSettingRead]:
     return _get_all_settings_data(db)
 
 
@@ -619,11 +667,11 @@ def _upsert_setting(
     return setting
 
 
-@router.post("/settings")
+@router.post("/settings", response_model=None)
 async def update_setting(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Response | SystemSettingRead:
     if "application/json" in request.headers.get("content-type", ""):
         try:
             payload = await request.json()
@@ -659,9 +707,11 @@ async def update_setting(
 
     form = await request.form()
     if form.get("action") == "reset_all":
-        db.query(models.SystemSetting).filter(
-            models.SystemSetting.key.in_(SYSTEM_SETTING_DEFINITIONS.keys())
-        ).delete(synchronize_session=False)
+        db.execute(
+            delete(models.SystemSetting).where(
+                models.SystemSetting.key.in_(SYSTEM_SETTING_DEFINITIONS.keys())
+            )
+        )
         db.commit()
         return RedirectResponse(
             url="/admin/settings?status=reset",
@@ -669,11 +719,12 @@ async def update_setting(
         )
 
     if "key" in form:
+        form_description = form.get("description")
         _upsert_setting(
             db,
             str(form.get("key") or ""),
             str(form.get("value") or ""),
-            form.get("description"),
+            form_description if isinstance(form_description, str) else None,
         )
         return RedirectResponse(
             url="/admin/settings?status=saved",
@@ -684,7 +735,7 @@ async def update_setting(
         if def_key in form:
             val = str(form.get(def_key)).strip()
             _validate_system_setting(def_key, val)
-            setting = db.get(models.SystemSetting, def_key)
+            existing_setting = db.get(models.SystemSetting, def_key)
             try:
                 is_default = (
                     float(val) == float(defn.default_value)
@@ -695,11 +746,11 @@ async def update_setting(
                 is_default = False
 
             if is_default:
-                if setting:
-                    db.delete(setting)
-            elif setting:
-                setting.value = val
-                setting.updated_at = datetime.now(UTC)
+                if existing_setting:
+                    db.delete(existing_setting)
+            elif existing_setting:
+                existing_setting.value = val
+                existing_setting.updated_at = datetime.now(UTC)
             else:
                 db.add(
                     models.SystemSetting(
@@ -717,12 +768,12 @@ async def update_setting(
     )
 
 
-@router.post("/settings/{key}/reset")
+@router.post("/settings/{key}/reset", response_model=None)
 async def reset_setting(
     key: str,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Response | dict[str, str]:
     key = key.strip().lower()
     setting = db.get(models.SystemSetting, key)
     if setting:
@@ -744,12 +795,11 @@ def admin_event_detail(
     request: Request,
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
-):
-    event = (
-        db.query(models.Event)
+) -> HTMLResponse:
+    event = db.scalar(
+        select(models.Event)
         .options(selectinload(models.Event.created_by_user))
-        .filter(models.Event.id == event_id)
-        .first()
+        .where(models.Event.id == event_id)
     )
     if not event:
         raise HTTPException(
@@ -757,26 +807,27 @@ def admin_event_detail(
             detail="Event not found",
         )
 
-    talks = (
-        db.query(models.Talk)
-        .filter(models.Talk.event_id == event_id)
-        .order_by(models.Talk.start.asc(), models.Talk.id.asc())
-        .all()
+    talks = list(
+        db.scalars(
+            select(models.Talk)
+            .where(models.Talk.event_id == event_id)
+            .order_by(models.Talk.start.asc(), models.Talk.id.asc())
+        )
     )
 
     counts = Counter(t.status for t in talks)
     total = len(talks)
-    done_count = counts["done"]
+    done_count = counts[TalkStatus.DONE]
     progress_pct = round((done_count / total) * 100, 1) if total > 0 else 0
 
     event_stats = {
         "total": total,
         "done": done_count,
-        "broken": counts["broken"] + counts["rejected"],
+        "broken": counts[TalkStatus.BROKEN] + counts[TalkStatus.REJECTED],
         "processing": sum(counts[s] for s in PROCESSING_STATUSES),
         "pending": sum(counts[s] for s in PENDING_STATUSES),
-        "preview": counts["preview"],
-        "waiting": counts["waiting_for_files"],
+        "preview": counts[TalkStatus.PREVIEW],
+        "waiting": counts[TalkStatus.WAITING_FILES],
     }
 
     return templates.TemplateResponse(

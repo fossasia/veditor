@@ -9,7 +9,7 @@ from tests.conftest import (
 )
 
 
-def test_generate_outro_clip_basic(tmp_path: Path):
+def test_generate_outro_clip_basic(tmp_path: Path) -> None:
     """Verify outro clip generation with branding, links, and audio chime."""
     output_clip = tmp_path / "outro.mp4"
 
@@ -34,7 +34,7 @@ def test_generate_outro_clip_basic(tmp_path: Path):
     assert abs(info.duration - 3.0) <= 0.5
 
 
-def test_generate_outro_clip_metadata_dict(tmp_path: Path):
+def test_generate_outro_clip_metadata_dict(tmp_path: Path) -> None:
     """Verify outro clip generation with talk_metadata dict."""
     output_clip = tmp_path / "outro_dict.mp4"
 
@@ -56,7 +56,7 @@ def test_generate_outro_clip_metadata_dict(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_generate_outro_clip_small_resolution(tmp_path: Path):
+def test_generate_outro_clip_small_resolution(tmp_path: Path) -> None:
     """Verify outro clip on small resolution clamps font sizes gracefully."""
     output_clip = tmp_path / "outro_small.mp4"
 
@@ -73,7 +73,7 @@ def test_generate_outro_clip_small_resolution(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_generate_outro_clip_invalid_arguments(tmp_path: Path):
+def test_generate_outro_clip_invalid_arguments(tmp_path: Path) -> None:
     """Verify error handling on invalid outro arguments."""
     output_clip = tmp_path / "invalid_outro.mp4"
 

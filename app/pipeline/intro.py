@@ -18,7 +18,9 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 
-def _get_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+def _get_font(
+    size: int, bold: bool = False
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Loads a scalable TrueType font with graceful fallback and clamped size."""
     clamped_size = max(1, size)
     font_candidates = (
@@ -39,7 +41,7 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 def _wrap_text_to_width(
     text: str,
-    font: ImageFont.ImageFont,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_pixel_width: int,
     draw: ImageDraw.ImageDraw,
 ) -> str:
@@ -364,7 +366,7 @@ def generate_intro_clip(
 
         # Derive target resolution from talk/video metadata
         if "resolution" in talk_metadata:
-            resolution = tuple(talk_metadata["resolution"])  # type: ignore
+            resolution = tuple(talk_metadata["resolution"])
         elif "width" in talk_metadata and "height" in talk_metadata:
             resolution = (int(talk_metadata["width"]), int(talk_metadata["height"]))
         elif "video_metadata" in talk_metadata and isinstance(
@@ -372,7 +374,7 @@ def generate_intro_clip(
         ):
             vm = talk_metadata["video_metadata"]
             if "resolution" in vm:
-                resolution = tuple(vm["resolution"])  # type: ignore
+                resolution = tuple(vm["resolution"])
             elif "width" in vm and "height" in vm:
                 resolution = (int(vm["width"]), int(vm["height"]))
 

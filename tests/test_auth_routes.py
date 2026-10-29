@@ -1,6 +1,9 @@
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.db import Base, engine
@@ -16,17 +19,17 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
-def test_get_login_unauthenticated(client: TestClient):
+def test_get_login_unauthenticated(client: TestClient) -> None:
     response = client.get("/login")
     assert response.status_code == 200
     assert "Sign In" in response.text
@@ -34,7 +37,9 @@ def test_get_login_unauthenticated(client: TestClient):
     assert '<input type="password"' in response.text
 
 
-def test_get_login_already_authenticated(client: TestClient, db_session):
+def test_get_login_already_authenticated(
+    client: TestClient, db_session: Session
+) -> None:
     user = models.User(
         email="auth_user@test.com",
         hashed_password=hash_password("password123"),
@@ -52,7 +57,7 @@ def test_get_login_already_authenticated(client: TestClient, db_session):
     assert response.headers["location"] == "/studio"
 
 
-def test_post_login_success(client: TestClient, db_session):
+def test_post_login_success(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="login_success@test.com",
         hashed_password=hash_password("Secret12345!"),
@@ -73,7 +78,9 @@ def test_post_login_success(client: TestClient, db_session):
     assert "veditor_session" in response.cookies
 
 
-def test_post_login_case_insensitive_email(client: TestClient, db_session):
+def test_post_login_case_insensitive_email(
+    client: TestClient, db_session: Session
+) -> None:
     user = models.User(
         email="case_test@test.com",
         hashed_password=hash_password("Secret12345!"),
@@ -93,7 +100,7 @@ def test_post_login_case_insensitive_email(client: TestClient, db_session):
     assert response.headers["location"] == "/studio"
 
 
-def test_post_login_invalid_password(client: TestClient, db_session):
+def test_post_login_invalid_password(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="wrong_pass@test.com",
         hashed_password=hash_password("correct-password"),
@@ -112,7 +119,7 @@ def test_post_login_invalid_password(client: TestClient, db_session):
     assert "wrong_pass@test.com" in response.text
 
 
-def test_post_login_inactive_user(client: TestClient, db_session):
+def test_post_login_inactive_user(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="inactive@test.com",
         hashed_password=hash_password("password123"),
@@ -130,7 +137,7 @@ def test_post_login_inactive_user(client: TestClient, db_session):
     assert "Invalid email or password" in response.text
 
 
-def test_post_login_unknown_user(client: TestClient):
+def test_post_login_unknown_user(client: TestClient) -> None:
     response = client.post(
         "/login",
         data={"email": "nonexistent@test.com", "password": "password123"},
@@ -139,20 +146,22 @@ def test_post_login_unknown_user(client: TestClient):
     assert "Invalid email or password" in response.text
 
 
-def test_post_login_missing_fields(client: TestClient):
+def test_post_login_missing_fields(client: TestClient) -> None:
     response = client.post("/login", data={"email": "", "password": ""})
     assert response.status_code == 400
     assert "Invalid email or password" in response.text
 
 
-def test_get_signup_unauthenticated(client: TestClient):
+def test_get_signup_unauthenticated(client: TestClient) -> None:
     response = client.get("/signup")
     assert response.status_code == 200
     assert "Create Account" in response.text
     assert "password_confirm" in response.text
 
 
-def test_get_signup_already_authenticated(client: TestClient, db_session):
+def test_get_signup_already_authenticated(
+    client: TestClient, db_session: Session
+) -> None:
     user = models.User(
         email="signup_auth@test.com",
         hashed_password=hash_password("password123"),
@@ -182,7 +191,7 @@ def test_get_signup_already_authenticated(client: TestClient, db_session):
     assert res_unsafe.headers["location"] == "/studio"
 
 
-def test_post_signup_validation_errors(client: TestClient):
+def test_post_signup_validation_errors(client: TestClient) -> None:
     # Invalid email regex
     res = client.post(
         "/signup",
@@ -244,7 +253,7 @@ def test_post_signup_validation_errors(client: TestClient):
     assert "match" in res.text.lower()
 
 
-def test_post_signup_duplicate_email(client: TestClient, db_session):
+def test_post_signup_duplicate_email(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="dup_user@test.com",
         hashed_password=hash_password("password123"),
@@ -266,7 +275,7 @@ def test_post_signup_duplicate_email(client: TestClient, db_session):
     assert "already exists" in res.text.lower()
 
 
-def test_post_signup_creates_user_role(client: TestClient, db_session):
+def test_post_signup_creates_user_role(client: TestClient, db_session: Session) -> None:
     res = client.post(
         "/signup",
         data={
@@ -280,10 +289,8 @@ def test_post_signup_creates_user_role(client: TestClient, db_session):
     assert res.headers["location"].startswith("/verify-email/pending?email=")
     assert "veditor_session" not in res.cookies
 
-    user = (
-        db_session.query(models.User)
-        .filter(models.User.email == "first_user@test.com")
-        .first()
+    user = db_session.scalar(
+        select(models.User).where(models.User.email == "first_user@test.com")
     )
     assert user is not None
     assert user.role == "user"
@@ -291,7 +298,10 @@ def test_post_signup_creates_user_role(client: TestClient, db_session):
     assert verify_password("userpassword123", user.hashed_password)
 
 
-def test_post_signup_subsequent_user_becomes_user(client: TestClient, db_session):
+def test_post_signup_subsequent_user_becomes_user(
+    client: TestClient,
+    db_session: Session,
+) -> None:
     # Ensure at least one user exists
     first = models.User(
         email="existing_admin@test.com",
@@ -315,17 +325,15 @@ def test_post_signup_subsequent_user_becomes_user(client: TestClient, db_session
     assert res.headers["location"].startswith("/verify-email/pending?email=")
     assert "veditor_session" not in res.cookies
 
-    user = (
-        db_session.query(models.User)
-        .filter(models.User.email == "second_user@test.com")
-        .first()
+    user = db_session.scalar(
+        select(models.User).where(models.User.email == "second_user@test.com")
     )
     assert user is not None
     assert user.role == "user"
     assert user.is_verified is False
 
 
-def test_logout_post_and_get(client: TestClient):
+def test_logout_post_and_get(client: TestClient) -> None:
     client.cookies.set("veditor_session", "dummy-session-token")
 
     # POST /logout
@@ -339,7 +347,7 @@ def test_logout_post_and_get(client: TestClient):
     assert res_get.headers["location"] == "/login"
 
 
-def test_api_auth_token_json_success(client: TestClient, db_session):
+def test_api_auth_token_json_success(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="api_user@test.com",
         hashed_password=hash_password("api_pass123"),
@@ -374,7 +382,7 @@ def test_api_auth_token_json_success(client: TestClient, db_session):
     assert res_user.status_code == 200
 
 
-def test_api_auth_token_form_success(client: TestClient, db_session):
+def test_api_auth_token_form_success(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="form_user@test.com",
         hashed_password=hash_password("form_pass123"),
@@ -395,7 +403,9 @@ def test_api_auth_token_form_success(client: TestClient, db_session):
     assert data["token_type"] == "bearer"
 
 
-def test_api_auth_token_invalid_credentials(client: TestClient, db_session):
+def test_api_auth_token_invalid_credentials(
+    client: TestClient, db_session: Session
+) -> None:
     user = models.User(
         email="token_invalid@test.com",
         hashed_password=hash_password("correct-password"),
@@ -432,10 +442,12 @@ def test_api_auth_token_invalid_credentials(client: TestClient, db_session):
     assert res_unknown.headers["www-authenticate"] == "Bearer"
 
 
-def test_api_auth_token_fallback_handles_runtime_error(client: TestClient, monkeypatch):
+def test_api_auth_token_fallback_handles_runtime_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from starlette.requests import Request
 
-    async def mock_json(self):
+    async def mock_json(self: Request) -> None:
         raise RuntimeError("Stream consumed")
 
     monkeypatch.setattr(Request, "json", mock_json)
@@ -448,7 +460,9 @@ def test_api_auth_token_fallback_handles_runtime_error(client: TestClient, monke
     assert res.headers["www-authenticate"] == "Bearer"
 
 
-def test_templating_auth_context_processor(client: TestClient, db_session):
+def test_templating_auth_context_processor(
+    client: TestClient, db_session: Session
+) -> None:
     user = models.User(
         email="context_user@test.com",
         hashed_password=hash_password("password123"),
@@ -472,7 +486,7 @@ def test_templating_auth_context_processor(client: TestClient, db_session):
     assert "modal-api-key" not in res.text
 
 
-def test_templating_unauthenticated_navbar(client: TestClient):
+def test_templating_unauthenticated_navbar(client: TestClient) -> None:
     # Unauthenticated studio access shows Log in and Sign up, without API key badge or modal
     res = client.get("/studio")
     assert res.status_code == 200
@@ -483,7 +497,10 @@ def test_templating_unauthenticated_navbar(client: TestClient):
     assert "modal-api-key" not in res.text
 
 
-def test_post_signup_always_defaults_to_user_role(client: TestClient, db_session):
+def test_post_signup_always_defaults_to_user_role(
+    client: TestClient,
+    db_session: Session,
+) -> None:
     res = client.post(
         "/signup",
         data={
@@ -498,10 +515,8 @@ def test_post_signup_always_defaults_to_user_role(client: TestClient, db_session
     assert res.headers["location"].startswith("/verify-email/pending?email=")
     assert "veditor_session" not in res.cookies
 
-    user = (
-        db_session.query(models.User)
-        .filter(models.User.email == "organizer_signup@test.com")
-        .first()
+    user = db_session.scalar(
+        select(models.User).where(models.User.email == "organizer_signup@test.com")
     )
     assert user is not None
     assert user.role == "user"

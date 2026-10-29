@@ -14,7 +14,7 @@ from tests.conftest import (
 )
 
 
-def test_generates_standard_clip(tmp_path: Path):
+def test_generates_standard_clip(tmp_path: Path) -> None:
     path = generate_clip(0.5, pattern="gradient", output_dir=tmp_path)
 
     info = open_and_inspect(path)
@@ -28,12 +28,12 @@ def test_generates_standard_clip(tmp_path: Path):
     assert_playable(path)
 
 
-def test_generate_clip_requires_at_least_one_stream(tmp_path: Path):
+def test_generate_clip_requires_at_least_one_stream(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="generate_clip requires at least one stream"):
         generate_clip(0.5, has_video=False, has_audio=False, output_dir=tmp_path)
 
 
-def test_generate_clip_rejects_non_positive_duration(tmp_path: Path):
+def test_generate_clip_rejects_non_positive_duration(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="duration_s must be greater than zero"):
         generate_clip(0, pattern="gradient", output_dir=tmp_path)
 
@@ -41,12 +41,12 @@ def test_generate_clip_rejects_non_positive_duration(tmp_path: Path):
         generate_clip(-1.0, pattern="gradient", output_dir=tmp_path)
 
 
-def test_generate_clip_rejects_unknown_video_pattern(tmp_path: Path):
+def test_generate_clip_rejects_unknown_video_pattern(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported video pattern: unknown-pattern"):
         generate_clip(0.5, pattern="unknown-pattern", output_dir=tmp_path)
 
 
-def test_generate_clip_rejects_unknown_audio_waveform(tmp_path: Path):
+def test_generate_clip_rejects_unknown_audio_waveform(tmp_path: Path) -> None:
     with pytest.raises(
         ValueError, match="Unsupported audio waveform: unknown-waveform"
     ):
@@ -58,7 +58,7 @@ def test_generate_clip_rejects_unknown_audio_waveform(tmp_path: Path):
         )
 
 
-def test_generates_video_only_clip(tmp_path: Path):
+def test_generates_video_only_clip(tmp_path: Path) -> None:
     path = generate_clip(
         0.25,
         has_audio=False,
@@ -74,7 +74,7 @@ def test_generates_video_only_clip(tmp_path: Path):
     assert_playable(path)
 
 
-def test_generates_audio_only_clip(tmp_path: Path):
+def test_generates_audio_only_clip(tmp_path: Path) -> None:
     path = generate_clip(
         0.25,
         has_video=False,
@@ -90,14 +90,14 @@ def test_generates_audio_only_clip(tmp_path: Path):
     assert_playable(path)
 
 
-def test_corrupt_clip_fails_playback(tmp_path: Path):
+def test_corrupt_clip_fails_playback(tmp_path: Path) -> None:
     path = generate_corrupt_clip(output_dir=tmp_path)
 
     with pytest.raises(av.FFmpegError):
         assert_playable(path)
 
 
-def test_generates_mismatched_duration_clip(tmp_path: Path):
+def test_generates_mismatched_duration_clip(tmp_path: Path) -> None:
     scheduled_start = datetime(2026, 3, 20, 9, 0, tzinfo=UTC)
     scheduled_end = scheduled_start + timedelta(seconds=0.5)
 
@@ -117,7 +117,7 @@ def test_generates_mismatched_duration_clip(tmp_path: Path):
         assert_duration_close(scheduled_clip, mismatched_clip, tolerance_seconds=0.1)
 
 
-def test_assert_duration_close_within_tolerance(tmp_path: Path):
+def test_assert_duration_close_within_tolerance(tmp_path: Path) -> None:
     scheduled_start = datetime(2026, 3, 20, 9, 0, tzinfo=UTC)
     scheduled_end = scheduled_start + timedelta(seconds=0.5)
 
@@ -132,7 +132,7 @@ def test_assert_duration_close_within_tolerance(tmp_path: Path):
     assert_duration_close(scheduled_clip, within_tolerance_clip, tolerance_seconds=0.1)
 
 
-def test_tests_directory_contains_no_binary_media_assets():
+def test_tests_directory_contains_no_binary_media_assets() -> None:
     tests_dir = Path(__file__).parent
     media_suffixes = {".avi", ".m4a", ".mkv", ".mov", ".mp3", ".mp4", ".ogg", ".wav"}
 

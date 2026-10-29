@@ -6,6 +6,7 @@ from typing import Any
 import jinja2
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import models
@@ -100,10 +101,8 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
                     gen = res if hasattr(res, "__next__") else None
                     db = next(gen) if gen is not None else res
                     try:
-                        candidate = (
-                            db.query(models.User)
-                            .filter(models.User.id == user_id)
-                            .first()
+                        candidate = db.scalar(
+                            select(models.User).where(models.User.id == user_id)
                         )
                         if (
                             candidate is not None

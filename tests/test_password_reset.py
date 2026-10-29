@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
 
 from app import models
 from app.config import settings
@@ -29,7 +30,7 @@ from app.tasks import job_send_password_reset_email
 # ── Token Tests ─────────────────────────────────────────────────────────────
 
 
-def test_password_reset_token_lifecycle():
+def test_password_reset_token_lifecycle() -> None:
     pwh = hash_password("OldPassword123!")
     token = create_password_reset_token(
         user_id=42,
@@ -49,7 +50,7 @@ def test_password_reset_token_lifecycle():
     assert verify_password_reset_token(payload, pwh) is True
 
 
-def test_password_reset_token_invalidates_on_password_change():
+def test_password_reset_token_invalidates_on_password_change() -> None:
     pwh_old = hash_password("OldPassword123!")
     token = create_password_reset_token(
         user_id=42,
@@ -65,7 +66,7 @@ def test_password_reset_token_invalidates_on_password_change():
     assert verify_password_reset_token(payload, pwh_new) is False
 
 
-def test_password_reset_token_expired():
+def test_password_reset_token_expired() -> None:
     pwh = hash_password("OldPassword123!")
     token = create_password_reset_token(
         user_id=42, email="user@example.com", password_hash=pwh, expires_in_hours=1
@@ -79,7 +80,7 @@ def test_password_reset_token_expired():
         assert payload is None
 
 
-def test_password_reset_token_tampered():
+def test_password_reset_token_tampered() -> None:
     pwh = hash_password("OldPassword123!")
     token = create_password_reset_token(
         user_id=42, email="user@example.com", password_hash=pwh
@@ -90,14 +91,14 @@ def test_password_reset_token_tampered():
     assert decode_password_reset_token(None) is None  # type: ignore[arg-type]
 
 
-def test_password_reset_token_rejects_wrong_type():
+def test_password_reset_token_rejects_wrong_type() -> None:
     access_token = create_access_token(
         user_id=42, email="user@example.com", role="user"
     )
     assert decode_password_reset_token(access_token) is None
 
 
-def test_password_reset_token_rejects_malformed_claims():
+def test_password_reset_token_rejects_malformed_claims() -> None:
     import jwt
 
     from app.security import get_session_secret
@@ -139,7 +140,7 @@ def test_password_reset_token_rejects_malformed_claims():
 # ── Email Service & Background Job Tests ────────────────────────────────────
 
 
-def test_send_password_reset_email_dev_mode(caplog):
+def test_send_password_reset_email_dev_mode(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
     with patch.object(settings, "smtp_host", ""), caplog.at_level(logging.INFO):
@@ -152,7 +153,7 @@ def test_send_password_reset_email_dev_mode(caplog):
         assert reset_url in caplog.text
 
 
-def test_send_password_reset_email_prod_mode_unset_smtp():
+def test_send_password_reset_email_prod_mode_unset_smtp() -> None:
     with (
         patch.object(settings, "environment", "production"),
         patch.object(settings, "smtp_host", ""),
@@ -164,7 +165,7 @@ def test_send_password_reset_email_prod_mode_unset_smtp():
         assert result is False
 
 
-def test_job_send_password_reset_email():
+def test_job_send_password_reset_email() -> None:
     db = SessionLocal()
     unique_email = f"reset_job_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -234,7 +235,7 @@ def test_job_send_password_reset_email():
         ):
             job_send_password_reset_email(user.email)
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
@@ -242,7 +243,7 @@ def test_job_send_password_reset_email():
 # ── Route Integration Tests ─────────────────────────────────────────────────
 
 
-def test_login_page_renders_forgot_password_link():
+def test_login_page_renders_forgot_password_link() -> None:
     client = TestClient(app)
     resp = client.get("/login")
     assert resp.status_code == 200
@@ -250,14 +251,14 @@ def test_login_page_renders_forgot_password_link():
     assert "Forgot password?" in resp.text
 
 
-def test_login_page_renders_reset_success_notice():
+def test_login_page_renders_reset_success_notice() -> None:
     client = TestClient(app)
     resp = client.get("/login?reset=success")
     assert resp.status_code == 200
     assert "Your password has been reset successfully" in resp.text
 
 
-def test_forgot_password_page_renders():
+def test_forgot_password_page_renders() -> None:
     client = TestClient(app)
     resp = client.get("/forgot-password")
     assert resp.status_code == 200
@@ -265,7 +266,7 @@ def test_forgot_password_page_renders():
     assert 'action="/forgot-password"' in resp.text
 
 
-def test_forgot_password_page_redirects_authenticated_user():
+def test_forgot_password_page_redirects_authenticated_user() -> None:
     db = SessionLocal()
     unique_email = f"auth_user_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -290,19 +291,19 @@ def test_forgot_password_page_redirects_authenticated_user():
         assert resp.status_code == 302
         assert resp.headers["location"] == "/studio"
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_forgot_password_invalid_email():
+def test_forgot_password_invalid_email() -> None:
     client = TestClient(app)
     resp = client.post("/forgot-password", data={"email": "invalid-email"})
     assert resp.status_code == 400
     assert "Please enter a valid email address." in resp.text
 
 
-def test_forgot_password_anti_enumeration():
+def test_forgot_password_anti_enumeration() -> None:
     db = SessionLocal()
     unique_email = f"existing_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -377,14 +378,14 @@ def test_forgot_password_anti_enumeration():
         ]:
             assert marker not in norm_exist.lower()
     finally:
-        db.query(models.User).filter(
-            models.User.id.in_([user.id, inactive_user.id])
-        ).delete(synchronize_session=False)
+        db.execute(
+            delete(models.User).where(models.User.id.in_([user.id, inactive_user.id]))
+        )
         db.commit()
         db.close()
 
 
-def test_forgot_password_retry_consistency_on_enqueue_failure():
+def test_forgot_password_retry_consistency_on_enqueue_failure() -> None:
     """Enqueue failure clears rate-limit key equally for existing and unknown accounts."""
     db = SessionLocal()
     unique_email = f"retry_exist_{uuid.uuid4().hex[:6]}@example.com"
@@ -426,12 +427,12 @@ def test_forgot_password_retry_consistency_on_enqueue_failure():
             resp4 = client.post("/forgot-password", data={"email": nonexistent})
             assert resp4.status_code == 200
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_forgot_password_rate_limiting():
+def test_forgot_password_rate_limiting() -> None:
     client = TestClient(app)
     email = f"ratelimit_{uuid.uuid4().hex[:6]}@example.com"
 
@@ -444,7 +445,7 @@ def test_forgot_password_rate_limiting():
         assert "Please wait" in resp2.text
 
 
-def test_forgot_password_redis_down_fails_closed():
+def test_forgot_password_redis_down_fails_closed() -> None:
     client = TestClient(app)
     email = f"redisdown_{uuid.uuid4().hex[:6]}@example.com"
 
@@ -457,7 +458,7 @@ def test_forgot_password_redis_down_fails_closed():
         assert "temporarily unavailable" in resp.text
 
 
-def test_reset_password_scanner_safe_get():
+def test_reset_password_scanner_safe_get() -> None:
     db = SessionLocal()
     unique_email = f"scanner_{uuid.uuid4().hex[:6]}@example.com"
     initial_pwh = hash_password("InitialPass123!")
@@ -486,12 +487,12 @@ def test_reset_password_scanner_safe_get():
         db.refresh(user)
         assert user.hashed_password == initial_pwh
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_reset_password_page_invalid_tokens():
+def test_reset_password_page_invalid_tokens() -> None:
     client = TestClient(app)
 
     # Missing token
@@ -505,7 +506,7 @@ def test_reset_password_page_invalid_tokens():
     assert "Password reset link is invalid or has expired" in resp_tampered.text
 
 
-def test_reset_password_submit_success_and_single_use():
+def test_reset_password_submit_success_and_single_use() -> None:
     db = SessionLocal()
     unique_email = f"reset_full_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -554,12 +555,12 @@ def test_reset_password_submit_success_and_single_use():
         assert resp_reuse.status_code == 400
         assert "invalid, expired, or has already been used" in resp_reuse.text
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_reset_password_validation_errors():
+def test_reset_password_validation_errors() -> None:
     db = SessionLocal()
     unique_email = f"valid_user_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -606,12 +607,12 @@ def test_reset_password_validation_errors():
         assert resp_mismatch.status_code == 400
         assert "Passwords do not match" in resp_mismatch.text
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_reset_password_verifies_unverified_account():
+def test_reset_password_verifies_unverified_account() -> None:
     db = SessionLocal()
     unique_email = f"unverified_reset_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -644,12 +645,12 @@ def test_reset_password_verifies_unverified_account():
         assert user.is_verified is True
         assert user.verified_at is not None
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_reset_password_rejects_deactivated_account():
+def test_reset_password_rejects_deactivated_account() -> None:
     db = SessionLocal()
     unique_email = f"deactivated_{uuid.uuid4().hex[:6]}@example.com"
     user = models.User(
@@ -682,12 +683,12 @@ def test_reset_password_rejects_deactivated_account():
         assert resp.status_code == 400
         assert "invalid, expired, or has already been used" in resp.text
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_password_reset_revokes_existing_sessions():
+def test_password_reset_revokes_existing_sessions() -> None:
     """Resetting password revokes older sessions across all devices."""
     db = SessionLocal()
     unique_email = f"session_revoke_{uuid.uuid4().hex[:6]}@example.com"
@@ -790,7 +791,9 @@ def test_password_reset_revokes_existing_sessions():
         # Evaluated with unreadable revocation state: must be rejected
         assert (
             verify_session_token_not_revoked(
-                legacy_payload, user.hashed_password, session_revoked_at="invalid-date"
+                legacy_payload,
+                user.hashed_password,
+                session_revoked_at="invalid-date",  # type: ignore[arg-type]
             )
             is False
         )
@@ -808,12 +811,12 @@ def test_password_reset_revokes_existing_sessions():
         resp_new = client.get("/studio", follow_redirects=False)
         assert resp_new.status_code == 200
     finally:
-        db.query(models.User).filter(models.User.id == user.id).delete()
+        db.execute(delete(models.User).where(models.User.id == user.id))
         db.commit()
         db.close()
 
 
-def test_password_reset_error_page_renders_configured_expiry():
+def test_password_reset_error_page_renders_configured_expiry() -> None:
     """Error page displays the configured lifetime rather than a hardcoded 1 hour."""
     client = TestClient(app)
     with patch.object(settings, "password_reset_expire_hours", 3):

@@ -101,7 +101,7 @@ def _failed(reason: str) -> DetectResult:
     )
 
 
-def container_duration_seconds(container) -> float | None:
+def container_duration_seconds(container: av.container.InputContainer) -> float | None:
     if container.duration is not None and container.duration > 0:
         return container.duration / av.time_base
 

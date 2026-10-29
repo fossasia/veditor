@@ -1,11 +1,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.auth import get_client
 from app.db import get_db
+from app.models import Job
 
 router = APIRouter(
     prefix="/jobs",
@@ -19,7 +21,7 @@ def get_job(
     job_id: int,
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Job:
     """
     Retrieves job status and metadata for polling clients.
 
@@ -30,7 +32,7 @@ def get_job(
     Returns 404 if the job does not exist or the job's talk is not authorized
     under caller's event_ids.
     """
-    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    job = db.scalar(select(models.Job).where(models.Job.id == job_id))
     if (
         not job
         or not job.talk

@@ -1,9 +1,11 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -15,13 +17,13 @@ from app.security import create_access_token, create_session_token, hash_passwor
 
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
@@ -33,7 +35,7 @@ if not any(
     @app.get("/events/{event_id}")
     def get_event_endpoint(
         event: Annotated[models.Event, Depends(require_event_access())],
-    ):
+    ) -> dict[str, object]:
         return {
             "id": event.id,
             "name": event.name,
@@ -43,7 +45,7 @@ if not any(
 
 def test_complete_user_lifecycle_and_pipeline_auth(
     client: TestClient, db_session: Session
-):
+) -> None:
     """
     End-to-end integration test covering complete user lifecycle and pipeline authentication/authorization:
     a) Public registration: POST /signup creates user with role="user"
@@ -75,10 +77,8 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     assert signup_resp.status_code == 303
     client.cookies.clear()
 
-    user1 = (
-        db_session.query(models.User)
-        .filter(models.User.email == "user1@pipeline-test.com")
-        .first()
+    user1 = db_session.scalar(
+        select(models.User).where(models.User.email == "user1@pipeline-test.com")
     )
     assert user1 is not None
     assert user1.email == "user1@pipeline-test.com"
@@ -89,10 +89,8 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     # b) Initial admin assignment: Provision admin via create_admin
     # -------------------------------------------------------------------------
     create_admin(db_session, "root_admin@test.com", "SecretPass123!")
-    admin = (
-        db_session.query(models.User)
-        .filter(models.User.email == "root_admin@test.com")
-        .first()
+    admin = db_session.scalar(
+        select(models.User).where(models.User.email == "root_admin@test.com")
     )
     assert admin is not None
     assert admin.email == "root_admin@test.com"
@@ -104,10 +102,10 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     # -------------------------------------------------------------------------
     admin_token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", admin_token)
-    earlier_count = (
-        db_session.query(models.User)
-        .filter(models.User.id < min(user1.id, admin.id))
-        .count()
+    earlier_count = db_session.scalar(
+        select(func.count())
+        .select_from(models.User)
+        .where(models.User.id < min(user1.id, admin.id))
     )
     list_resp = client.get(f"/admin/users?skip={earlier_count}")
     client.cookies.clear()

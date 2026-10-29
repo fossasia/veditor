@@ -28,11 +28,11 @@ def _measure_audio_rms_db(path: Path | str) -> float:
                     arr = arr.astype(np.float64)
                 samples.append(arr.flatten())
         data = np.concatenate(samples)
-        rms = np.sqrt(np.mean(data**2))
+        rms = np.sqrt(np.mean(np.asarray(data, dtype=np.float64) ** 2))
         return float(20 * np.log10(rms + 1e-12))
 
 
-def test_normalize_moves_loudness_towards_target(tmp_path: Path):
+def test_normalize_moves_loudness_towards_target(tmp_path: Path) -> None:
     """Verify that normalizing an audio tone produces a valid, playable clip with measured loudness."""
     source_clip = generate_clip(3.0, audio_waveform="tone", output_dir=tmp_path)
     output_clip = tmp_path / "normalized.mp4"
@@ -67,7 +67,7 @@ def _count_video_packets(path: Path | str) -> int:
         return sum(1 for packet in container.demux(container.streams.video[0]))
 
 
-def test_normalize_preserves_video_stream(tmp_path: Path):
+def test_normalize_preserves_video_stream(tmp_path: Path) -> None:
     """Verify that video stream properties and frame count are preserved without corruption."""
     source_clip = generate_clip(
         3.0,
@@ -97,7 +97,7 @@ def test_normalize_preserves_video_stream(tmp_path: Path):
     assert _count_video_packets(output_clip) == _count_video_packets(source_clip)
 
 
-def test_normalize_audio_only(tmp_path: Path):
+def test_normalize_audio_only(tmp_path: Path) -> None:
     """Verify that audio-only files (has_video=False) normalize correctly."""
     source_clip = generate_clip(
         3.0,
@@ -123,7 +123,7 @@ def test_normalize_audio_only(tmp_path: Path):
     assert info.has_audio is True
 
 
-def test_normalize_no_audio_stream_raises(tmp_path: Path):
+def test_normalize_no_audio_stream_raises(tmp_path: Path) -> None:
     """Verify ValueError is raised if the input media has no audio stream."""
     source_clip = generate_clip(
         2.0, has_video=True, has_audio=False, output_dir=tmp_path
@@ -134,7 +134,7 @@ def test_normalize_no_audio_stream_raises(tmp_path: Path):
         normalize(source_clip, output_clip)
 
 
-def test_normalize_invalid_arguments(tmp_path: Path):
+def test_normalize_invalid_arguments(tmp_path: Path) -> None:
     """Verify FileNotFoundError and ValueError on invalid inputs including NaN/inf."""
     valid_clip = generate_clip(2.0, output_dir=tmp_path)
     output_clip = tmp_path / "out.mp4"
@@ -161,8 +161,8 @@ def test_normalize_invalid_arguments(tmp_path: Path):
         normalize(valid_clip, valid_clip)
 
 
-def test_rescale_pts_and_monotonic_dts():
-    """Verify rescale_pts rescales packet timestamps and monkey patches av.Packet."""
+def test_rescale_pts_and_monotonic_dts() -> None:
+    """Verify rescale_pts rescales packet PTS, DTS, duration, and time_base."""
     p = av.Packet()
     p.pts = 100
     p.dts = 50
@@ -173,13 +173,13 @@ def test_rescale_pts_and_monotonic_dts():
     assert p.duration == 200
     assert p.time_base == Fraction(1, 10000)
 
-    # Method call via monkey-patched Packet
-    p.rescale_pts(Fraction(1, 10000), Fraction(1, 20000))
-    assert p.pts == 2000
-    assert p.dts == 1000
+    # Repeated rescale of identical time bases is a no-op for timestamps
+    rescale_pts(p, Fraction(1, 10000), Fraction(1, 10000))
+    assert p.pts == 1000
+    assert p.dts == 500
 
 
-def test_normalize_enforces_monotonic_dts(tmp_path: Path):
+def test_normalize_enforces_monotonic_dts(tmp_path: Path) -> None:
     """Verify that normalized output streams have strictly non-decreasing DTS."""
     source_clip = generate_clip(
         2.0,

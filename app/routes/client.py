@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.auth import get_client
 from app.db import get_db
+from app.schemas import WebhookInfoResponse, WebhookRegisterResponse
 
 router = APIRouter(
     tags=["client"],
@@ -28,26 +29,27 @@ def register_webhook(
     payload: schemas.WebhookRegisterRequest,
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> WebhookRegisterResponse:
     """
     Register or update the client's outbound notification URL and shared secret.
     If secret is not provided in payload, a cryptographically secure random secret is generated.
     """
+    url = payload.url
     secret = (
         payload.secret.strip()
         if payload.secret and payload.secret.strip()
         else secrets.token_urlsafe(32)
     )
 
-    client.webhook_url = payload.url
+    client.webhook_url = url
     client.webhook_secret = secret
     db.commit()
     db.refresh(client)
 
     return schemas.WebhookRegisterResponse(
         status="registered",
-        url=client.webhook_url,
-        secret=client.webhook_secret,
+        url=url,
+        secret=secret,
     )
 
 
@@ -64,7 +66,7 @@ def register_webhook(
 )
 def get_webhook(
     client: Annotated[models.Client, Depends(get_client)],
-):
+) -> WebhookInfoResponse:
     """Retrieve the client's currently registered webhook info."""
     return schemas.WebhookInfoResponse(
         url=client.webhook_url,
@@ -84,7 +86,7 @@ def get_webhook(
 def delete_webhook(
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> None:
     """Clear the client's registered webhook URL and secret."""
     client.webhook_url = None
     client.webhook_secret = None

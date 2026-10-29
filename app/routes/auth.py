@@ -5,13 +5,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import update
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.config import settings
+from app.consts import AuthRole
 from app.db import get_db
 from app.queue import light_queue, redis_conn
 from app.security import (
@@ -84,11 +85,9 @@ def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> s
 
 
 def _sync_speaker_role(user: models.User, db: Session, email: str) -> None:
-    if (
-        user.role == "user"
-        and db.query(models.Talk).filter(models.Talk.speaker_email == email).first()
-    ):
-        user.role = "speaker"
+    has_talk = db.scalar(select(models.Talk).where(models.Talk.speaker_email == email))
+    if user.role == AuthRole.USER and has_talk:
+        user.role = AuthRole.SPEAKER
         db.commit()
 
 
@@ -104,7 +103,7 @@ def _get_authenticated_user_from_cookie(
     user_id = payload.get("user_id")
     if not user_id:
         return None
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.scalar(select(models.User).where(models.User.id == user_id))
     if (
         user
         and user.is_active
@@ -120,7 +119,7 @@ def login_page(
     db: Annotated[Session, Depends(get_db)],
     next: str | None = None,
     reset: str | None = None,
-):
+) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
         target = _get_safe_redirect_target(next, default="/studio")
         return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
@@ -141,7 +140,7 @@ def login_submit(
     email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "",
-):
+) -> Response:
     clean_email = email.strip().lower()
     if not clean_email or not password:
         return templates.TemplateResponse(
@@ -156,7 +155,7 @@ def login_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    user = db.query(models.User).filter(models.User.email == clean_email).first()
+    user = db.scalar(select(models.User).where(models.User.email == clean_email))
     target_hash = user.hashed_password if user else _DUMMY_HASH
     valid_password = verify_password(password, target_hash)
 
@@ -214,7 +213,7 @@ def signup_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     next: str = "",
-):
+) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
         target = _get_safe_redirect_target(next, default="/studio")
         return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
@@ -237,7 +236,7 @@ def signup_submit(
     password: Annotated[str, Form()] = "",
     password_confirm: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "",
-):
+) -> Response:
     clean_email = email.strip().lower()
     if len(clean_email) > 255 or not is_valid_email(clean_email):
         return templates.TemplateResponse(
@@ -283,7 +282,7 @@ def signup_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    existing = db.query(models.User).filter(models.User.email == clean_email).first()
+    existing = db.scalar(select(models.User).where(models.User.email == clean_email))
     if existing:
         return templates.TemplateResponse(
             request,
@@ -298,10 +297,10 @@ def signup_submit(
 
     hashed = hash_password(password)
 
-    has_talk = (
-        db.query(models.Talk).filter(models.Talk.speaker_email == clean_email).first()
+    has_talk = db.scalar(
+        select(models.Talk).where(models.Talk.speaker_email == clean_email)
     )
-    user_role = "speaker" if has_talk else "user"
+    user_role = AuthRole.SPEAKER if has_talk else AuthRole.USER
 
     user = models.User(
         email=clean_email,
@@ -360,7 +359,7 @@ def signup_submit(
 
 @router.post("/logout")
 @router.get("/logout")
-def logout(request: Request):
+def logout(request: Request) -> RedirectResponse:
     response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     is_secure = (request.url.scheme == "https") or (
         settings.environment.lower() in ("production", "prod")
@@ -379,7 +378,7 @@ def logout(request: Request):
 async def api_auth_token(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> schemas.TokenResponse:
     content_type = request.headers.get("content-type", "").lower()
     email_or_username = None
     password = None
@@ -416,7 +415,7 @@ async def api_auth_token(
         )
 
     clean_email = str(email_or_username).strip().lower()
-    user = db.query(models.User).filter(models.User.email == clean_email).first()
+    user = db.scalar(select(models.User).where(models.User.email == clean_email))
     target_hash = user.hashed_password if user else _DUMMY_HASH
 
     valid_password = await asyncio.to_thread(
@@ -460,7 +459,7 @@ def verify_email_pending_page(
     email: str = "",
     error: str = "",
     next: str = "",
-):
+) -> HTMLResponse:
     error_msg = None
     if error == "delivery_failed":
         error_msg = (
@@ -484,7 +483,7 @@ def verify_email_confirm_page(
     db: Annotated[Session, Depends(get_db)],
     token: str = "",
     next: str = "",
-):
+) -> HTMLResponse:
     """Render confirmation page for email verification without mutating account state.
 
     Protects against automated email security scanners pre-fetching GET links
@@ -514,7 +513,7 @@ def verify_email_confirm_page(
     user_id = payload.get("user_id")
     token_email = payload.get("email")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.scalar(select(models.User).where(models.User.id == user_id))
     if not user or not user.is_active or user.email != token_email:
         return templates.TemplateResponse(
             request,
@@ -554,7 +553,7 @@ def verify_email_submit(
     db: Annotated[Session, Depends(get_db)],
     token: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "",
-):
+) -> Response:
     """Perform atomic email verification and establish user session upon explicit user action."""
     clean_token = token.strip() or request.query_params.get("token", "").strip()
     if not clean_token:
@@ -580,7 +579,7 @@ def verify_email_submit(
     user_id = payload.get("user_id")
     token_email = payload.get("email")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.scalar(select(models.User).where(models.User.id == user_id))
     if not user or not user.is_active or user.email != token_email:
         return templates.TemplateResponse(
             request,
@@ -592,7 +591,7 @@ def verify_email_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    stmt = (
+    result = db.execute(
         update(models.User)
         .where(
             models.User.id == user.id,
@@ -600,11 +599,12 @@ def verify_email_submit(
             models.User.is_active.is_(True),
         )
         .values(is_verified=True, verified_at=datetime.now(UTC))
+        .returning(models.User.id)
     )
-    result = db.execute(stmt)
+    verified_user_id = result.scalar_one_or_none()
     db.commit()
 
-    if result.rowcount == 0:
+    if verified_user_id is None:
         return templates.TemplateResponse(
             request,
             "verify_email_error.html.jinja",
@@ -614,8 +614,6 @@ def verify_email_submit(
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
-
-    db.refresh(user)
 
     _sync_speaker_role(user, db, user.email)
 
@@ -642,7 +640,7 @@ def verify_email_resend_page(
     request: Request,
     email: str = "",
     next: str = "",
-):
+) -> HTMLResponse:
     safe_next = _get_safe_redirect_target(next) if next else ""
     return templates.TemplateResponse(
         request,
@@ -662,7 +660,7 @@ def verify_email_resend_submit(
     db: Annotated[Session, Depends(get_db)],
     email: Annotated[str, Form()] = "",
     next: Annotated[str, Form()] = "",
-):
+) -> HTMLResponse:
     safe_next = _get_safe_redirect_target(next) if next else ""
     clean_email = email.strip().lower()
     if not clean_email or not is_valid_email(clean_email):
@@ -710,7 +708,7 @@ def verify_email_resend_submit(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    user = db.query(models.User).filter(models.User.email == clean_email).first()
+    user = db.scalar(select(models.User).where(models.User.email == clean_email))
     if user and user.is_active and not user.is_verified:
         token = create_email_verification_token(
             user_id=user.id,
@@ -757,7 +755,7 @@ def request_organizer_role(
     payload: schemas.OrganizerRequestCreate,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> models.User:
     """Allow a standard user to request organizer role elevation."""
     cookie_token = request.cookies.get("veditor_session")
     if (
@@ -774,7 +772,7 @@ def request_organizer_role(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    if user.role != "user":
+    if user.role != AuthRole.USER:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only standard users can request organizer access",
@@ -789,27 +787,26 @@ def request_organizer_role(
     requested_at = datetime.now(UTC)
     note_val = (payload.note or "").strip() or None
 
-    rows_updated = (
-        db.query(models.User)
-        .filter(
+    result = db.execute(
+        update(models.User)
+        .where(
             models.User.id == user.id,
-            models.User.role == "user",
+            models.User.role == AuthRole.USER,
             models.User.organizer_requested.is_(False),
         )
-        .update(
-            {
-                models.User.organizer_requested: True,
-                models.User.organizer_request_note: note_val,
-                models.User.organizer_requested_at: requested_at,
-            },
-            synchronize_session="fetch",
+        .values(
+            organizer_requested=True,
+            organizer_request_note=note_val,
+            organizer_requested_at=requested_at,
         )
+        .returning(models.User.id)
     )
+    rows_updated = result.scalar_one_or_none() is not None
     if not rows_updated:
-        current_db_user = (
-            db.query(models.User).filter(models.User.id == user.id).first()
+        current_db_user = db.scalar(
+            select(models.User).where(models.User.id == user.id)
         )
-        if current_db_user and current_db_user.role != "user":
+        if current_db_user and current_db_user.role != AuthRole.USER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Only standard users can request organizer access",
@@ -828,7 +825,7 @@ def request_organizer_role(
 def forgot_password_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
         return RedirectResponse(url="/studio", status_code=status.HTTP_302_FOUND)
     return templates.TemplateResponse(
@@ -843,7 +840,7 @@ def forgot_password_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     email: Annotated[str, Form()] = "",
-):
+) -> HTMLResponse:
     clean_email = email.strip().lower()
     if not clean_email or not is_valid_email(clean_email):
         return templates.TemplateResponse(
@@ -922,7 +919,7 @@ def reset_password_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     token: str = "",
-):
+) -> HTMLResponse:
     """Render reset password form without mutating account state (scanner-safe)."""
     clean_token = token.strip()
     expire_hours = settings.password_reset_expire_hours
@@ -952,7 +949,7 @@ def reset_password_page(
     user_id = payload.get("user_id")
     token_email = payload.get("email")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.scalar(select(models.User).where(models.User.id == user_id))
     if (
         not user
         or not user.is_active
@@ -987,7 +984,7 @@ def reset_password_submit(
     token: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
     password_confirm: Annotated[str, Form()] = "",
-):
+) -> Response:
     clean_token = token.strip() or request.query_params.get("token", "").strip()
     expire_hours = settings.password_reset_expire_hours
     if not clean_token:
@@ -1016,7 +1013,7 @@ def reset_password_submit(
     user_id = payload.get("user_id")
     token_email = payload.get("email")
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = db.scalar(select(models.User).where(models.User.id == user_id))
     if (
         not user
         or not user.is_active
@@ -1087,11 +1084,12 @@ def reset_password_submit(
             updated_at=now,
             session_revoked_at=now,
         )
+        .returning(models.User.id)
     )
-    result = db.execute(stmt)
+    updated_user_id = db.execute(stmt).scalar_one_or_none()
     db.commit()
 
-    if result.rowcount == 0:
+    if updated_user_id is None:
         return templates.TemplateResponse(
             request,
             "reset_password_error.html.jinja",

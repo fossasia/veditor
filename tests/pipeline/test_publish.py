@@ -12,7 +12,7 @@ from tests.test_storage_boundary import find_storage_violations
 
 def test_publish_stores_at_expected_key_and_returns_url(
     tmp_path: Path, fake_storage: FakeStorageBackend
-):
+) -> None:
     clip = generate_clip(1.0, output_dir=tmp_path)
     expected_key = f"42/final/{clip.name}"
 
@@ -24,7 +24,9 @@ def test_publish_stores_at_expected_key_and_returns_url(
     assert stored_path.read_bytes() == clip.read_bytes()
 
 
-def test_publish_overwrites_cleanly(tmp_path: Path, fake_storage: FakeStorageBackend):
+def test_publish_overwrites_cleanly(
+    tmp_path: Path, fake_storage: FakeStorageBackend
+) -> None:
     v1_dir = tmp_path / "v1"
     v2_dir = tmp_path / "v2"
     v1_dir.mkdir()
@@ -48,7 +50,7 @@ def test_publish_overwrites_cleanly(tmp_path: Path, fake_storage: FakeStorageBac
     assert fake_storage.get(expected_key).read_bytes() == clip_v2.read_bytes()
 
 
-def test_publish_with_local_disk_backend(tmp_path: Path):
+def test_publish_with_local_disk_backend(tmp_path: Path) -> None:
     storage_root = tmp_path / "storage"
     backend = LocalDiskBackend(storage_root)
     clip = generate_clip(1.0, output_dir=tmp_path / "source")
@@ -63,7 +65,7 @@ def test_publish_with_local_disk_backend(tmp_path: Path):
     assert stored_file.read_bytes() == clip.read_bytes()
 
 
-def test_publish_storage_boundary_isolated():
+def test_publish_storage_boundary_isolated() -> None:
     publish_path = (
         Path(__file__).parent.parent.parent / "app" / "pipeline" / "publish.py"
     )
@@ -75,7 +77,7 @@ def test_publish_storage_boundary_isolated():
     )
 
 
-def test_publish_pipeline_imports_isolated():
+def test_publish_pipeline_imports_isolated() -> None:
     publish_path = (
         Path(__file__).parent.parent.parent / "app" / "pipeline" / "publish.py"
     )
@@ -106,13 +108,15 @@ def test_publish_pipeline_imports_isolated():
 
 def test_publish_nonexistent_file_raises_error(
     tmp_path: Path, fake_storage: FakeStorageBackend
-):
+) -> None:
     missing_clip = tmp_path / "nonexistent.mp4"
     with pytest.raises(FileNotFoundError):
         publish(missing_clip, talk_id=42, backend=fake_storage)
 
 
-def test_publish_accepts_str_path(tmp_path: Path, fake_storage: FakeStorageBackend):
+def test_publish_accepts_str_path(
+    tmp_path: Path, fake_storage: FakeStorageBackend
+) -> None:
     clip = generate_clip(1.0, output_dir=tmp_path)
     expected_key = f"42/final/{clip.name}"
 
