@@ -1,5 +1,6 @@
 import math
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -35,7 +36,7 @@ def create_test_video(path: Path) -> Path:
 
 
 @pytest.fixture
-def ingest_root(tmp_path):
+def ingest_root(tmp_path: Path) -> Iterator[Path]:
     root = tmp_path / "ingest"
     root.mkdir()
 
@@ -46,13 +47,13 @@ def ingest_root(tmp_path):
 
 
 @pytest.fixture
-def mock_backend():
+def mock_backend() -> Mock:
     backend = Mock()
     backend.free_bytes.return_value = 1024 * 1024 * 1024 * 100
     return backend
 
 
-def test_schema_validation_exactly_one():
+def test_schema_validation_exactly_one() -> None:
     with pytest.raises(ValidationError):
         RecordingIngestRequest()
 
@@ -64,7 +65,7 @@ def test_schema_validation_exactly_one():
     RecordingIngestRequest(relative_key="b")
 
 
-def test_happy_path_source_path(ingest_root, mock_backend):
+def test_happy_path_source_path(ingest_root: Path, mock_backend: Mock) -> None:
     target = ingest_root / "video.mp4"
     create_test_video(target)
 
@@ -77,7 +78,7 @@ def test_happy_path_source_path(ingest_root, mock_backend):
     )
 
 
-def test_happy_path_relative_key(ingest_root, mock_backend):
+def test_happy_path_relative_key(ingest_root: Path, mock_backend: Mock) -> None:
     target = ingest_root / "subdir" / "video.mp4"
     target.parent.mkdir()
     create_test_video(target)
@@ -91,7 +92,10 @@ def test_happy_path_relative_key(ingest_root, mock_backend):
     )
 
 
-def test_disambiguated_storage_keys_same_basename(ingest_root, mock_backend):
+def test_disambiguated_storage_keys_same_basename(
+    ingest_root: Path,
+    mock_backend: Mock,
+) -> None:
     cam1 = ingest_root / "cam1" / "video.mp4"
     cam2 = ingest_root / "cam2" / "video.mp4"
     cam1.parent.mkdir()
@@ -111,7 +115,7 @@ def test_disambiguated_storage_keys_same_basename(ingest_root, mock_backend):
     assert key1 != key2
 
 
-def test_adversarial_relative_traversal(ingest_root, mock_backend):
+def test_adversarial_relative_traversal(ingest_root: Path, mock_backend: Mock) -> None:
     outside_file = ingest_root.parent / "secret.txt"
     outside_file.touch()
 
@@ -122,7 +126,7 @@ def test_adversarial_relative_traversal(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_absolute_outside(ingest_root, mock_backend):
+def test_adversarial_absolute_outside(ingest_root: Path, mock_backend: Mock) -> None:
     outside_file = ingest_root.parent / "secret.txt"
     if not outside_file.exists():
         outside_file.touch()
@@ -134,7 +138,7 @@ def test_adversarial_absolute_outside(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_symlink_to_outside(ingest_root, mock_backend):
+def test_adversarial_symlink_to_outside(ingest_root: Path, mock_backend: Mock) -> None:
     outside_file = ingest_root.parent / "secret.txt"
     if not outside_file.exists():
         outside_file.touch()
@@ -155,7 +159,7 @@ def test_adversarial_symlink_to_outside(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_chained_symlinks(ingest_root, mock_backend):
+def test_adversarial_chained_symlinks(ingest_root: Path, mock_backend: Mock) -> None:
     outside_file = ingest_root.parent / "secret.txt"
     if not outside_file.exists():
         outside_file.touch()
@@ -173,7 +177,10 @@ def test_adversarial_chained_symlinks(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_trailing_slash_double_slash(ingest_root, mock_backend):
+def test_adversarial_trailing_slash_double_slash(
+    ingest_root: Path,
+    mock_backend: Mock,
+) -> None:
     target = ingest_root / "subdir" / "video.mp4"
     target.parent.mkdir(exist_ok=True)
     create_test_video(target)
@@ -191,7 +198,9 @@ def test_adversarial_trailing_slash_double_slash(ingest_root, mock_backend):
     assert mock_backend.put.call_count == 1
 
 
-def test_adversarial_url_encoded_traversal(ingest_root, mock_backend):
+def test_adversarial_url_encoded_traversal(
+    ingest_root: Path, mock_backend: Mock
+) -> None:
     # pathlib doesn't automatically url-decode, so %2e%2e%2f will be treated as literal filename.
     # If the file doesn't exist, it rejects.
     # Just verify that injecting it doesn't bypass checks.
@@ -201,14 +210,14 @@ def test_adversarial_url_encoded_traversal(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_null_byte_injection(ingest_root, mock_backend):
+def test_adversarial_null_byte_injection(ingest_root: Path, mock_backend: Mock) -> None:
     payload = RecordingIngestRequest(relative_key="video.mp4\0")
     with pytest.raises(IngestPathRejectedError):
         stage_recording(1, payload, mock_backend)
     mock_backend.put.assert_not_called()
 
 
-def test_adversarial_prefix_collision(tmp_path, mock_backend):
+def test_adversarial_prefix_collision(tmp_path: Path, mock_backend: Mock) -> None:
     ingest_root = tmp_path / "ingest"
     ingest_root.mkdir()
 
@@ -230,21 +239,25 @@ def test_adversarial_prefix_collision(tmp_path, mock_backend):
         settings.ingest_roots = original_roots
 
 
-def test_source_path_rejects_relative_path(ingest_root, mock_backend):
+def test_source_path_rejects_relative_path(
+    ingest_root: Path, mock_backend: Mock
+) -> None:
     payload = RecordingIngestRequest(source_path="relative/path.mp4")
     with pytest.raises(IngestPathRejectedError):
         stage_recording(1, payload, mock_backend)
     mock_backend.put.assert_not_called()
 
 
-def test_relative_key_rejects_absolute_path(ingest_root, mock_backend):
+def test_relative_key_rejects_absolute_path(
+    ingest_root: Path, mock_backend: Mock
+) -> None:
     payload = RecordingIngestRequest(relative_key="/absolute/path.mp4")
     with pytest.raises(IngestPathRejectedError):
         stage_recording(1, payload, mock_backend)
     mock_backend.put.assert_not_called()
 
 
-def test_empty_ingest_roots_rejects_all(tmp_path, mock_backend):
+def test_empty_ingest_roots_rejects_all(tmp_path: Path, mock_backend: Mock) -> None:
     original_roots = settings.ingest_roots
     settings.ingest_roots = []
 
@@ -264,7 +277,7 @@ def test_empty_ingest_roots_rejects_all(tmp_path, mock_backend):
         settings.ingest_roots = original_roots
 
 
-def test_ingest_directory_rejected(ingest_root, mock_backend):
+def test_ingest_directory_rejected(ingest_root: Path, mock_backend: Mock) -> None:
     target_dir = ingest_root / "subdir"
     target_dir.mkdir(exist_ok=True)
 
@@ -278,7 +291,7 @@ def test_ingest_directory_rejected(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_settings_ingest_roots_validation(tmp_path):
+def test_settings_ingest_roots_validation(tmp_path: Path) -> None:
     from app.config import Settings
 
     abs_path = tmp_path / "recordings"
@@ -289,7 +302,7 @@ def test_settings_ingest_roots_validation(tmp_path):
         Settings(ingest_roots=["relative/recordings"])
 
 
-def test_non_media_file_rejected(ingest_root, mock_backend):
+def test_non_media_file_rejected(ingest_root: Path, mock_backend: Mock) -> None:
     text_file = ingest_root / "document.txt"
     text_file.write_text("Hello, World!")
 
@@ -300,7 +313,7 @@ def test_non_media_file_rejected(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_audio_only_file_rejected(ingest_root, mock_backend):
+def test_audio_only_file_rejected(ingest_root: Path, mock_backend: Mock) -> None:
     audio_file = ingest_root / "audio.mp3"
     container = av.open(str(audio_file), mode="w")
     container.add_stream("mp3")
@@ -313,7 +326,10 @@ def test_audio_only_file_rejected(ingest_root, mock_backend):
     mock_backend.put.assert_not_called()
 
 
-def test_stage_recording_insufficient_storage_rejected(ingest_root, mock_backend):
+def test_stage_recording_insufficient_storage_rejected(
+    ingest_root: Path,
+    mock_backend: Mock,
+) -> None:
     target = ingest_root / "video.mp4"
     create_test_video(target)
     file_size = target.stat().st_size
@@ -334,7 +350,10 @@ def test_stage_recording_insufficient_storage_rejected(ingest_root, mock_backend
     mock_backend.put.assert_not_called()
 
 
-def test_stage_recording_custom_disk_guard_multiplier(ingest_root, mock_backend):
+def test_stage_recording_custom_disk_guard_multiplier(
+    ingest_root: Path,
+    mock_backend: Mock,
+) -> None:
     target = ingest_root / "video.mp4"
     create_test_video(target)
     file_size = target.stat().st_size
@@ -363,7 +382,7 @@ def test_stage_recording_custom_disk_guard_multiplier(ingest_root, mock_backend)
         settings.disk_guard_multiplier = original_multiplier
 
 
-def test_disk_guard_multiplier_validation():
+def test_disk_guard_multiplier_validation() -> None:
     from app.config import Settings
 
     with pytest.raises(ValidationError):
@@ -382,7 +401,9 @@ def test_disk_guard_multiplier_validation():
     assert s.disk_guard_multiplier == 2.5
 
 
-def test_stage_recording_decimal_precision(ingest_root, mock_backend):
+def test_stage_recording_decimal_precision(
+    ingest_root: Path, mock_backend: Mock
+) -> None:
     """Verify that fractional multipliers such as 1.1 do not suffer from float inaccuracies."""
     target = ingest_root / "video.mp4"
     create_test_video(target)
@@ -409,7 +430,10 @@ def test_stage_recording_decimal_precision(ingest_root, mock_backend):
         settings.disk_guard_multiplier = original_multiplier
 
 
-def test_stage_recording_extreme_multiplier_no_overflow(ingest_root, mock_backend):
+def test_stage_recording_extreme_multiplier_no_overflow(
+    ingest_root: Path,
+    mock_backend: Mock,
+) -> None:
     """Verify that extreme float multipliers (e.g. 1e308) do not cause OverflowError and raise InsufficientStorageError."""
     target = ingest_root / "video.mp4"
     create_test_video(target)
@@ -430,8 +454,11 @@ def test_stage_recording_extreme_multiplier_no_overflow(ingest_root, mock_backen
 
 
 def test_stage_custom_clip_rejects_unscoped_shared_staging_path(
-    ingest_root, mock_backend, tmp_path, monkeypatch
-):
+    ingest_root: Path,
+    mock_backend: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     shared_staging = tmp_path / "veditor_staging"
     shared_staging.mkdir()
     unauthorized = shared_staging / "unscoped.mp4"
@@ -444,13 +471,16 @@ def test_stage_custom_clip_rejects_unscoped_shared_staging_path(
     mock_backend.put.assert_not_called()
 
 
-def test_get_upload_staging_dir_with_ingest_roots(ingest_root):
+def test_get_upload_staging_dir_with_ingest_roots(ingest_root: Path) -> None:
     staging_dir = get_upload_staging_dir()
     assert staging_dir == ingest_root.resolve()
     assert staging_dir.is_dir()
 
 
-def test_get_upload_staging_dir_without_ingest_roots(monkeypatch, tmp_path):
+def test_get_upload_staging_dir_without_ingest_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr(settings, "ingest_roots", [])
     monkeypatch.setattr("app.ingest.tempfile.gettempdir", lambda: str(tmp_path))
     staging_dir = get_upload_staging_dir()
@@ -458,7 +488,9 @@ def test_get_upload_staging_dir_without_ingest_roots(monkeypatch, tmp_path):
     assert staging_dir.is_dir()
 
 
-def test_get_bumper_staging_dir_nests_under_upload_staging_dir(ingest_root):
+def test_get_bumper_staging_dir_nests_under_upload_staging_dir(
+    ingest_root: Path,
+) -> None:
     bumper_dir = get_bumper_staging_dir()
     assert bumper_dir == ingest_root.resolve() / "bumpers"
     assert bumper_dir.is_dir()

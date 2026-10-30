@@ -91,8 +91,9 @@ def handle_approve(
         dispatch_assembly(talk.id, cut_key)
     except Exception:
         advance(talk, "broken")
-        log_key = f"{talk.id}/logs/assembly.log" if storage else None
-        if log_key:
+        log_key: str | None = None
+        if storage is not None:
+            log_key = f"{talk.id}/logs/assembly.log"
             try:
                 storage.put(log_key, traceback.format_exc().encode("utf-8"))
             except Exception as log_err:  # noqa: BLE001

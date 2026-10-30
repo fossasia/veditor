@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import any_
+from sqlalchemy import any_, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -31,35 +31,31 @@ def get_candidate_clients(
     """Find all clients configured to receive webhooks for event_id or matching client_id."""
     bind = db.get_bind()
     if bind is not None and bind.dialect.name == "postgresql":
-        candidates = (
-            db.query(models.Client)
-            .filter(
+        candidates = db.scalars(
+            select(models.Client).where(
                 (
                     (any_(models.Client.event_ids) == event_id)
                     | (models.Client.is_platform.is_(True))
                 ),
                 models.Client.webhook_url.is_not(None),
             )
-            .all()
-        )
+        ).all()
     else:
         # Dialect fallback (e.g. SQLite tests without postgres ARRAY support)
-        candidates = (
-            db.query(models.Client).filter(models.Client.webhook_url.is_not(None)).all()
-        )
+        candidates = db.scalars(
+            select(models.Client).where(models.Client.webhook_url.is_not(None))
+        ).all()
 
     candidates = [c for c in candidates if _matches_event(c, event_id)]
 
     seen_ids = {c.id for c in candidates}
 
     if client_id and client_id not in seen_ids:
-        client_record = (
-            db.query(models.Client)
-            .filter(
+        client_record = db.scalar(
+            select(models.Client).where(
                 models.Client.id == client_id,
                 models.Client.webhook_url.is_not(None),
             )
-            .first()
         )
         if client_record and _matches_event(client_record, event_id):
             candidates.append(client_record)

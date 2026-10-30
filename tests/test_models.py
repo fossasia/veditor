@@ -1,9 +1,10 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db import Base
@@ -15,12 +16,12 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 
 @pytest.fixture(scope="module")
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
-def test_create_event_and_talk_relationships(db_session):
+def test_create_event_and_talk_relationships(db_session: Session) -> None:
     event = Event(name="FOSSASIA 2026")
     db_session.add(event)
     db_session.flush()
@@ -64,7 +65,7 @@ def test_create_event_and_talk_relationships(db_session):
     assert review.created_at is not None
 
 
-def test_required_fields_enforced(db_session):
+def test_required_fields_enforced(db_session: Session) -> None:
     # Event missing name
     with pytest.raises(IntegrityError):
         event = Event()
@@ -88,7 +89,7 @@ def test_required_fields_enforced(db_session):
     db_session.rollback()
 
 
-def test_client_model(db_session):
+def test_client_model(db_session: Session) -> None:
     client = Client(hashed_key="hash123", event_ids=[1, 2, 3])
     db_session.add(client)
     db_session.flush()
@@ -98,7 +99,7 @@ def test_client_model(db_session):
     assert client.event_ids == [1, 2, 3]
 
 
-def test_talk_unique_constraint_enforced(db_session):
+def test_talk_unique_constraint_enforced(db_session: Session) -> None:
     event = Event(name="Unique Test Event")
     db_session.add(event)
     db_session.flush()
@@ -129,7 +130,7 @@ def test_talk_unique_constraint_enforced(db_session):
     db_session.rollback()
 
 
-def test_event_retention_overrides_persistence(db_session):
+def test_event_retention_overrides_persistence(db_session: Session) -> None:
     event = Event(
         name="Retention Test Event",
         retention_overrides={"final_retention_days": 45, "extra": "data"},
@@ -141,7 +142,7 @@ def test_event_retention_overrides_persistence(db_session):
     assert event.retention_overrides == {"final_retention_days": 45, "extra": "data"}
 
     db_session.expire_all()
-    reloaded = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded is not None
     assert reloaded.retention_overrides == {"final_retention_days": 45, "extra": "data"}
 
@@ -150,7 +151,7 @@ def test_event_retention_overrides_persistence(db_session):
     db_session.flush()
 
     db_session.expire_all()
-    reloaded_again = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded_again = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded_again is not None
     assert reloaded_again.retention_overrides == {
         "final_retention_days": 60,
@@ -165,7 +166,7 @@ def test_event_retention_overrides_persistence(db_session):
     db_session.flush()
 
     db_session.expire_all()
-    reloaded_third = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded_third = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded_third is not None
     assert reloaded_third.retention_overrides == {
         "final_retention_days": 90,
@@ -175,7 +176,7 @@ def test_event_retention_overrides_persistence(db_session):
     }
 
 
-def test_user_model_and_relationships(db_session):
+def test_user_model_and_relationships(db_session: Session) -> None:
     user = User(email="testuser@example.com", hashed_password="argon2_hash_val")
     db_session.add(user)
     db_session.flush()
@@ -212,7 +213,7 @@ def test_user_model_and_relationships(db_session):
     assert review in user.reviews
 
 
-def test_user_email_unique_enforced(db_session):
+def test_user_email_unique_enforced(db_session: Session) -> None:
     u1 = User(email="duplicate@example.com", hashed_password="hash1")
     db_session.add(u1)
     db_session.flush()
@@ -224,7 +225,7 @@ def test_user_email_unique_enforced(db_session):
     db_session.rollback()
 
 
-def test_user_role_constraint_enforced(db_session):
+def test_user_role_constraint_enforced(db_session: Session) -> None:
     for role in ("user", "organizer", "admin", "speaker"):
         u = User(email=f"{role}@example.com", hashed_password="pw", role=role)
         db_session.add(u)
@@ -239,7 +240,7 @@ def test_user_role_constraint_enforced(db_session):
     db_session.rollback()
 
 
-def test_talk_speaker_email_normalization():
+def test_talk_speaker_email_normalization() -> None:
     talk = Talk(speaker_email="  Speaker.Name@Example.COM  ")
     assert talk.speaker_email == "speaker.name@example.com"
 

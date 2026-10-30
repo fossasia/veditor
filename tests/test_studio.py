@@ -1,29 +1,33 @@
 import json
 import re
 import uuid
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
 from app.config import settings
+from app.consts import TalkStatus
 from app.main import app
 from app.security import create_session_token, create_sso_token
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
-from tests.conftest import generate_clip
+from tests.conftest import FakeStorageBackend, generate_clip
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
 @pytest.fixture
-def temp_storage(tmp_path):
+def temp_storage(tmp_path: Path) -> Iterator[LocalDiskBackend]:
     storage = LocalDiskBackend(tmp_path)
     app.dependency_overrides[get_storage_backend] = lambda: storage
     try:
@@ -32,13 +36,13 @@ def temp_storage(tmp_path):
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_root_redirect(client: TestClient):
+def test_root_redirect(client: TestClient) -> None:
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "/studio"
 
 
-def test_static_assets(client: TestClient):
+def test_static_assets(client: TestClient) -> None:
     css = client.get("/static/css/app.css")
     assert css.status_code == 200
     assert "text/css" in css.headers.get("content-type", "")
@@ -68,7 +72,7 @@ def test_static_assets(client: TestClient):
     assert theme_js.status_code == 200
 
 
-def test_templates_have_no_inline_css_or_js():
+def test_templates_have_no_inline_css_or_js() -> None:
     templates_dir = Path(__file__).parent.parent / "app" / "ui" / "templates"
     assert templates_dir.is_dir()
 
@@ -101,7 +105,7 @@ def test_templates_have_no_inline_css_or_js():
             )
 
 
-def test_dashboard_page(client: TestClient, db_session):
+def test_dashboard_page(client: TestClient, db_session: Session) -> None:
     event = models.Event(name="Test Studio Dashboard Event")
     db_session.add(event)
     db_session.commit()
@@ -130,7 +134,7 @@ def test_dashboard_page(client: TestClient, db_session):
     assert "Auditorium" in response.text
 
 
-def test_talk_studio_page(client: TestClient, db_session):
+def test_talk_studio_page(client: TestClient, db_session: Session) -> None:
     event = models.Event(name="Test Studio Page Event")
     db_session.add(event)
     db_session.commit()
@@ -191,7 +195,9 @@ def test_talk_studio_page(client: TestClient, db_session):
     assert "Gate 2" not in response.text
 
 
-def test_talk_studio_human_session_user_access(client: TestClient, db_session):
+def test_talk_studio_human_session_user_access(
+    client: TestClient, db_session: Session
+) -> None:
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
@@ -264,7 +270,7 @@ def test_talk_studio_human_session_user_access(client: TestClient, db_session):
     assert res_other.status_code == 404
 
 
-def test_talk_studio_not_found(client: TestClient, db_session):
+def test_talk_studio_not_found(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -282,7 +288,12 @@ def test_talk_studio_not_found(client: TestClient, db_session):
     assert response.status_code == 404
 
 
-def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
+def test_media_serving(
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -349,7 +360,7 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
         assert client.get("/studio/media/999999/final/final.mp4").status_code == 404
 
         # Completed talk final media is publicly accessible without authentication
-        talk.status = "done"
+        talk.status = TalkStatus.DONE
         db_session.commit()
         temp_storage.put(f"{talk.id}/final/final.mp4", clip)
         public_resp = client.get(f"/studio/media/{talk.id}/final/final.mp4")
@@ -359,7 +370,12 @@ def test_media_serving(client: TestClient, db_session, temp_storage, tmp_path):
         clip.unlink(missing_ok=True)
 
 
-def test_talk_waveform_endpoint(client: TestClient, db_session, temp_storage, tmp_path):
+def test_talk_waveform_endpoint(
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name=f"Waveform Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -448,7 +464,7 @@ def test_talk_waveform_endpoint(client: TestClient, db_session, temp_storage, tm
         clip.unlink(missing_ok=True)
 
 
-def test_talk_patch_metadata(client: TestClient, db_session):
+def test_talk_patch_metadata(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -484,7 +500,7 @@ def test_talk_patch_metadata(client: TestClient, db_session):
     assert data["room"] == "Room B"
 
 
-def test_talk_delete_single(client: TestClient, db_session):
+def test_talk_delete_single(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -517,11 +533,11 @@ def test_talk_delete_single(client: TestClient, db_session):
 
     # Verify talk is deleted
     assert (
-        db_session.query(models.Talk).filter(models.Talk.id == talk.id).first() is None
+        db_session.scalar(select(models.Talk).where(models.Talk.id == talk.id)) is None
     )
 
 
-def test_talk_bulk_delete(client: TestClient, db_session):
+def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -564,7 +580,12 @@ def test_talk_bulk_delete(client: TestClient, db_session):
     assert res.json()["deleted_count"] == 2
 
 
-def test_talk_upload_recording(client: TestClient, db_session, temp_storage, tmp_path):
+def test_talk_upload_recording(
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -631,8 +652,12 @@ def test_talk_upload_recording(client: TestClient, db_session, temp_storage, tmp
 
 
 def test_talk_upload_recording_with_ingest_roots(
-    client: TestClient, db_session, temp_storage, tmp_path, monkeypatch
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ingest_dir = tmp_path / "custom_ingest"
     ingest_dir.mkdir()
     monkeypatch.setattr(settings, "ingest_roots", [ingest_dir])
@@ -688,15 +713,15 @@ def test_talk_upload_recording_with_ingest_roots(
                 Path(call.args[2]).unlink(missing_ok=True)
 
 
-def test_import_schedule_json_list(client: TestClient, db_session):
+def test_import_schedule_json_list(client: TestClient, db_session: Session) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     test_event_id = 98765
-    db_session.query(models.Talk).filter(models.Talk.event_id == test_event_id).delete()
-    db_session.query(models.Event).filter(models.Event.id == test_event_id).delete()
+    db_session.execute(delete(models.Talk).where(models.Talk.event_id == test_event_id))
+    db_session.execute(delete(models.Event).where(models.Event.id == test_event_id))
     db_session.commit()
 
     schedule_payload = [
@@ -727,7 +752,7 @@ def test_import_schedule_json_list(client: TestClient, db_session):
     assert data["imported_count"] == 2
 
 
-def test_get_talk_jobs_endpoint(client: TestClient, db_session):
+def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -795,8 +820,8 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session):
 
 
 def test_dashboard_and_studio_render_active_job_progress(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -853,8 +878,8 @@ def test_dashboard_and_studio_render_active_job_progress(
 
 
 def test_studio_viewport_loader_states_and_dashboard_clean_status(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     event = models.Event(name=f"Loader Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -931,7 +956,9 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
     assert "player-viewport-loader is-active" not in prev_res.text
 
 
-def test_import_schedule_mm_ss_duration(client: TestClient, db_session):
+def test_import_schedule_mm_ss_duration(
+    client: TestClient, db_session: Session
+) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -953,14 +980,14 @@ def test_import_schedule_mm_ss_duration(client: TestClient, db_session):
     assert data["status"] == "ok"
     assert data["imported_count"] == 1
 
-    talk = (
-        db_session.query(models.Talk).filter(models.Talk.title == "Short Demo").first()
+    talk = db_session.scalar(
+        select(models.Talk).where(models.Talk.title == "Short Demo")
     )
     assert talk is not None
     assert (talk.end - talk.start).total_seconds() == 95.0
 
 
-def test_import_schedule_suffix_units(client: TestClient, db_session):
+def test_import_schedule_suffix_units(client: TestClient, db_session: Session) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -978,14 +1005,14 @@ def test_import_schedule_suffix_units(client: TestClient, db_session):
         headers={"X-API-Key": api_key},
     )
     assert res.status_code == 200
-    talk = db_session.query(models.Talk).filter(models.Talk.title == "30s Clip").first()
+    talk = db_session.scalar(select(models.Talk).where(models.Talk.title == "30s Clip"))
     assert talk is not None
     assert (talk.end - talk.start).total_seconds() == 30.0
 
 
 def test_ui_reject_talk_cleans_up_intermediates(
-    client: TestClient, db_session, fake_storage
-):
+    client: TestClient, db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     """Rejecting a talk in review removes cut/ and preview/ while preserving raw/."""
     event = models.Event(name=f"Reject Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1025,7 +1052,7 @@ def test_ui_reject_talk_cleans_up_intermediates(
         assert res.json()["talk"]["status"] == "pending_bounds"
 
         db_session.refresh(talk)
-        assert talk.status == "pending_bounds"
+        assert talk.status == TalkStatus.PENDING_BOUNDS
 
         assert fake_storage.exists(f"{talk.id}/raw/video.mp4")
         for stage in INTERMEDIATE_STAGES:
@@ -1034,7 +1061,9 @@ def test_ui_reject_talk_cleans_up_intermediates(
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_ui_reject_talk_storage_delete_resilient(client: TestClient, db_session):
+def test_ui_reject_talk_storage_delete_resilient(
+    client: TestClient, db_session: Session
+) -> None:
     """Storage deletion failure on talk rejection does not raise 500."""
     event = models.Event(name=f"Reject Err Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1073,13 +1102,13 @@ def test_ui_reject_talk_storage_delete_resilient(client: TestClient, db_session)
         assert res.json()["talk"]["status"] == "pending_bounds"
 
         db_session.refresh(talk)
-        assert talk.status == "pending_bounds"
+        assert talk.status == TalkStatus.PENDING_BOUNDS
         assert mock_storage.delete.call_count == 5
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_update_talk_validations(client: TestClient, db_session):
+def test_update_talk_validations(client: TestClient, db_session: Session) -> None:
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -1122,7 +1151,9 @@ def test_update_talk_validations(client: TestClient, db_session):
     assert "after start time" in res_bad_interval.json()["detail"]
 
 
-def test_import_schedule_malformed_json_and_size_limit(client: TestClient, db_session):
+def test_import_schedule_malformed_json_and_size_limit(
+    client: TestClient, db_session: Session
+) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -1150,7 +1181,9 @@ def test_import_schedule_malformed_json_and_size_limit(client: TestClient, db_se
     assert res_oversized.status_code == 413
 
 
-def test_import_schedule_duration_validations(client: TestClient, db_session):
+def test_import_schedule_duration_validations(
+    client: TestClient, db_session: Session
+) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -1199,8 +1232,8 @@ def test_import_schedule_duration_validations(client: TestClient, db_session):
 
 
 def test_import_schedule_preserves_event_name_and_atomic(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -1236,13 +1269,13 @@ def test_import_schedule_preserves_event_name_and_atomic(
         headers={"X-API-Key": api_key},
     )
     assert res_fail.status_code == 400
-    failed_ev = (
-        db_session.query(models.Event).filter_by(name="Failed Batch Event").first()
+    failed_ev = db_session.scalar(
+        select(models.Event).where(models.Event.name == "Failed Batch Event")
     )
     assert failed_ev is None
 
 
-def test_import_schedule_end_time_only(client: TestClient, db_session):
+def test_import_schedule_end_time_only(client: TestClient, db_session: Session) -> None:
     api_key = f"import_test_key_{uuid.uuid4().hex}"
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
@@ -1260,13 +1293,17 @@ def test_import_schedule_end_time_only(client: TestClient, db_session):
         headers={"X-API-Key": api_key},
     )
     assert res.status_code == 200
-    talk = db_session.query(models.Talk).filter_by(title="End Only Talk").first()
+    talk = db_session.scalar(
+        select(models.Talk).where(models.Talk.title == "End Only Talk")
+    )
     assert talk is not None
     assert talk.end == datetime.fromisoformat(target_end)
     assert talk.start == talk.end - timedelta(minutes=30)
 
 
-def test_delete_talk_propagates_storage_error(client: TestClient, db_session):
+def test_delete_talk_propagates_storage_error(
+    client: TestClient, db_session: Session
+) -> None:
     """When storage fails during talk deletion, an error is raised and the record is not deleted."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1306,7 +1343,7 @@ def test_delete_talk_propagates_storage_error(client: TestClient, db_session):
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_sidebar_declutter_and_buttons(client: TestClient):
+def test_sidebar_declutter_and_buttons(client: TestClient) -> None:
     """Test sidebar declutter: only Events and Talks, no status filters, toggle button present."""
     response = client.get("/studio")
     assert response.status_code == 200
@@ -1329,7 +1366,7 @@ def test_sidebar_declutter_and_buttons(client: TestClient):
     assert "REST API Docs" not in response.text
 
 
-def test_studio_mode_body_class(client: TestClient, db_session):
+def test_studio_mode_body_class(client: TestClient, db_session: Session) -> None:
     """Test that Studio routes (/studio, /studio/events, /studio/talks/{id}) include is-studio-mode body class."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1371,7 +1408,9 @@ def test_studio_mode_body_class(client: TestClient, db_session):
     assert "is-studio-mode" not in res_login.text
 
 
-def test_studio_dashboard_with_slug_event_id_and_sso_token(client, db_session):
+def test_studio_dashboard_with_slug_event_id_and_sso_token(
+    client: TestClient, db_session: Session
+) -> None:
     event = models.Event(
         name="Slug Conf", source="eventyay", external_id="slug-conf-123"
     )
@@ -1394,7 +1433,9 @@ def test_studio_dashboard_with_slug_event_id_and_sso_token(client, db_session):
     assert "veditor_session" in res.cookies
 
 
-def test_studio_waiting_for_files_no_duplicate_upload(client: TestClient, db_session):
+def test_studio_waiting_for_files_no_duplicate_upload(
+    client: TestClient, db_session: Session
+) -> None:
     """Test waiting_for_files status notice is shown and duplicate upload button is absent."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1424,7 +1465,9 @@ def test_studio_waiting_for_files_no_duplicate_upload(client: TestClient, db_ses
     assert "btn-upload-recording" not in res.text
 
 
-def test_studio_pending_approval_clean_gate1(client: TestClient, db_session):
+def test_studio_pending_approval_clean_gate1(
+    client: TestClient, db_session: Session
+) -> None:
     """Test Gate 1 pending_approval has clean buttons without notes textarea."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1455,7 +1498,9 @@ def test_studio_pending_approval_clean_gate1(client: TestClient, db_session):
     assert "review-notes-input" not in res.text
 
 
-def test_studio_review_notes_present_for_preview(client: TestClient, db_session):
+def test_studio_review_notes_present_for_preview(
+    client: TestClient, db_session: Session
+) -> None:
     """Test notes field is present for preview and needs_work review states."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1489,7 +1534,7 @@ def test_studio_review_notes_present_for_preview(client: TestClient, db_session)
     assert "preview-help-popover" in res.text
 
     # Verify pending_bounds also renders review-notes-input, timestamps card, and 'Submit Timestamps'
-    talk.status = "pending_bounds"
+    talk.status = TalkStatus.PENDING_BOUNDS
     talk.cut_start = 15.0
     talk.cut_end = 90.0
     db_session.commit()
@@ -1506,7 +1551,9 @@ def test_studio_review_notes_present_for_preview(client: TestClient, db_session)
     assert "00:01:30.00" in res_bounds.text
 
 
-def test_studio_milestones_role_visibility(client: TestClient, db_session):
+def test_studio_milestones_role_visibility(
+    client: TestClient, db_session: Session
+) -> None:
     """Test milestones stepper is rendered in studio while recent jobs section is omitted."""
     from app.security import create_session_token, create_sso_token, hash_password
 
@@ -1599,8 +1646,8 @@ def test_studio_milestones_role_visibility(client: TestClient, db_session):
 
 
 def test_studio_organizer_bumper_studio_in_pending_intro_outro(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Test organizer Intro & Outro bumper studio card is rendered in pending_intro_outro."""
     from app.security import create_session_token, create_sso_token, hash_password
 
@@ -1674,7 +1721,9 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     client.cookies.delete("veditor_session")
 
 
-def test_studio_minimizable_sidebar_controls(client: TestClient, db_session):
+def test_studio_minimizable_sidebar_controls(
+    client: TestClient, db_session: Session
+) -> None:
     """Test right panel minimize and restore button controls exist in DOM."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1706,8 +1755,11 @@ def test_studio_minimizable_sidebar_controls(client: TestClient, db_session):
 
 
 def test_studio_done_talk_download_actions(
-    client: TestClient, db_session, temp_storage, make_clip
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    make_clip: Callable[..., Path],
+) -> None:
     """Test studio provides prominent download action when talk is published and complete."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1766,7 +1818,9 @@ def test_studio_done_talk_download_actions(
         clip.unlink(missing_ok=True)
 
 
-def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
+def test_studio_speaker_timeline_omits_bumpers(
+    client: TestClient, db_session: Session
+) -> None:
     """When viewed with a speaker token, studio scrubber omits INTRO/OUTRO and enables speaker mode."""
     event = models.Event(name=f"Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -1802,7 +1856,9 @@ def test_studio_speaker_timeline_omits_bumpers(client: TestClient, db_session):
     assert 'id="timeline-track"' in res.text
 
 
-def test_studio_organizer_timeline_omits_bumpers(client: TestClient, db_session):
+def test_studio_organizer_timeline_omits_bumpers(
+    client: TestClient, db_session: Session
+) -> None:
     """When viewed by an organizer, studio scrubber also omits INTRO and OUTRO bumper blocks from timeline."""
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -1845,7 +1901,9 @@ def test_studio_organizer_timeline_omits_bumpers(client: TestClient, db_session)
     assert 'id="timeline-track"' in res.text
 
 
-def test_studio_upload_pending_state_hides_timeline(client: TestClient, db_session):
+def test_studio_upload_pending_state_hides_timeline(
+    client: TestClient, db_session: Session
+) -> None:
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
@@ -1947,8 +2005,8 @@ def test_studio_upload_pending_state_hides_timeline(client: TestClient, db_sessi
 
 
 def test_talk_studio_offset_aware_start_normalizes_to_utc(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     from datetime import timezone
 
     event = models.Event(name=f"TZ Event {uuid.uuid4().hex}")
@@ -1987,7 +2045,9 @@ def test_talk_studio_offset_aware_start_normalizes_to_utc(
     assert "(45m)" in res.text
 
 
-def test_talk_studio_duration_with_seconds_remainder(client: TestClient, db_session):
+def test_talk_studio_duration_with_seconds_remainder(
+    client: TestClient, db_session: Session
+) -> None:
     event = models.Event(name=f"Remainder Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
@@ -2020,7 +2080,9 @@ def test_talk_studio_duration_with_seconds_remainder(client: TestClient, db_sess
     assert "(1m 30s)" in res.text
 
 
-def test_user_menu_accessibility_attributes(client: TestClient, db_session):
+def test_user_menu_accessibility_attributes(
+    client: TestClient, db_session: Session
+) -> None:
     from app.security import create_session_token
 
     user = models.User(
@@ -2044,8 +2106,11 @@ def test_user_menu_accessibility_attributes(client: TestClient, db_session):
 
 
 def test_talk_studio_media_source_selector_and_download(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     from tests.conftest import generate_clip
 
     event = models.Event(name=f"Media Event {uuid.uuid4().hex}")
@@ -2101,7 +2166,9 @@ def test_talk_studio_media_source_selector_and_download(
         clip.unlink(missing_ok=True)
 
 
-def test_talk_studio_speaker_mode_body_class(client: TestClient, db_session):
+def test_talk_studio_speaker_mode_body_class(
+    client: TestClient, db_session: Session
+) -> None:
     from app.security import create_session_token
 
     org_user = models.User(
@@ -2181,7 +2248,9 @@ def test_talk_studio_speaker_mode_body_class(client: TestClient, db_session):
     assert "is-speaker" in res_sso_spk.text
 
 
-def test_talk_studio_speaker_preview_quality_notice(client: TestClient, db_session):
+def test_talk_studio_speaker_preview_quality_notice(
+    client: TestClient, db_session: Session
+) -> None:
     """Test low-quality preview notice is displayed when viewing preview in speaker mode."""
     from app.security import create_session_token
 
@@ -2241,7 +2310,7 @@ def test_talk_studio_speaker_preview_quality_notice(client: TestClient, db_sessi
     assert 'id="preview-quality-notice"' not in res_org.text
 
 
-def test_dashboard_role_visibility(client: TestClient, db_session):
+def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> None:
     """Verify speaker and user roles cannot see management and delete buttons on dashboard."""
     from app.security import create_session_token
 
@@ -2332,8 +2401,8 @@ def test_dashboard_role_visibility(client: TestClient, db_session):
 
 
 def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Verify Reset to Raw modal is present and extra-step btn-retry is absent in studio UI."""
     from app.security import create_session_token
 
@@ -2387,7 +2456,9 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     assert "Retry Talk Lifecycle" not in res.text
 
 
-def test_dashboard_speaker_email_case_insensitivity(client: TestClient, db_session):
+def test_dashboard_speaker_email_case_insensitivity(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify that speaker dashboard queries match talks case-insensitively while respecting event_id."""
     from app.security import create_session_token
 
@@ -2468,7 +2539,9 @@ def test_dashboard_speaker_email_case_insensitivity(client: TestClient, db_sessi
     assert "Unrelated Other Talk" not in res_event1.text
 
 
-def test_talk_jobs_log_path_gated_for_speakers(client: TestClient, db_session):
+def test_talk_jobs_log_path_gated_for_speakers(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify speakers can view talk jobs status and progress but never log_path, preserving it for organizer/admin."""
     from app.security import create_session_token
 
@@ -2556,8 +2629,8 @@ def test_talk_jobs_log_path_gated_for_speakers(client: TestClient, db_session):
 
 
 def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Verify event-scoped speaker SSO tokens only view and access assigned talks in the event."""
     from app.security import create_sso_token
 
@@ -2646,8 +2719,11 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
 
 
 def test_attach_room_recording_multi_talk(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     user = models.User(
         email="org@example.com",
         hashed_password="hash",
@@ -2748,8 +2824,11 @@ def test_attach_room_recording_multi_talk(
 
 
 def test_attach_room_recording_with_recording_start_filter(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Filter Event")
     db_session.add(event)
     db_session.commit()
@@ -2810,8 +2889,11 @@ def test_attach_room_recording_with_recording_start_filter(
 
 
 def test_attach_room_recording_no_waiting_talks_conflict(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Conflict Event")
     db_session.add(event)
     db_session.commit()
@@ -2852,8 +2934,12 @@ def test_attach_room_recording_no_waiting_talks_conflict(
 
 
 def test_attach_room_recording_from_ingest_roots(
-    client: TestClient, db_session, temp_storage, tmp_path, monkeypatch
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ingest_dir = tmp_path / "ingest_root"
     ingest_dir.mkdir()
     monkeypatch.setattr("app.config.settings.ingest_roots", [ingest_dir])
@@ -2897,10 +2983,12 @@ def test_attach_room_recording_from_ingest_roots(
         assert clip.is_file()
 
         db_session.refresh(talk)
-        assert talk.status == "detecting"
+        assert talk.status == TalkStatus.DETECTING
 
 
-def test_attach_room_recording_unauthorized(client: TestClient, db_session):
+def test_attach_room_recording_unauthorized(
+    client: TestClient, db_session: Session
+) -> None:
     res = client.post(
         "/talks/room/attach-recording",
         data={"room": "Hall 1"},
@@ -2909,8 +2997,11 @@ def test_attach_room_recording_unauthorized(client: TestClient, db_session):
 
 
 def test_attach_room_recording_studio_alias(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Alias Event")
     db_session.add(event)
     db_session.commit()
@@ -2947,7 +3038,9 @@ def test_attach_room_recording_studio_alias(
         clip.unlink(missing_ok=True)
 
 
-def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
+def test_link_or_copy_fallback_preserves_source_for_multiple_talks(
+    tmp_path: Path,
+) -> None:
     from app.storage import LocalDiskBackend
 
     storage = LocalDiskBackend(data_dir=tmp_path / "storage")
@@ -2977,8 +3070,11 @@ def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
 
 
 def test_attach_room_recording_sso_discovery_without_event_id(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     from app.auth import CurrentUser, get_current_user
     from app.main import app
 
@@ -3024,8 +3120,11 @@ def test_attach_room_recording_sso_discovery_without_event_id(
 
 
 def test_attach_room_recording_staging_failure_cleans_up(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Rollback Event")
     db_session.add(event)
     db_session.commit()
@@ -3060,7 +3159,7 @@ def test_attach_room_recording_staging_failure_cleans_up(
     call_count = 0
     real_link_or_copy = temp_storage.link_or_copy
 
-    def mock_link_or_copy(key, source):
+    def mock_link_or_copy(key: str, source: Path) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 2:
@@ -3092,8 +3191,11 @@ def test_attach_room_recording_staging_failure_cleans_up(
 
 
 def test_attach_room_recording_platform_client_discovery_without_event_id(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     from app.auth import CurrentUser, get_current_user
     from app.main import app
 
@@ -3140,8 +3242,11 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
 
 
 def test_attach_room_recording_staging_failure_restores_existing_raw(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     import pytest
 
     event = models.Event(name="Restore Event")
@@ -3182,7 +3287,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     real_link_or_copy = temp_storage.link_or_copy
     calls = []
 
-    def mock_link_or_copy(key, source):
+    def mock_link_or_copy(key: str, source: Path) -> None:
         calls.append(key)
         # Fail when staging talk 2
         if key == f"{t2_id}/raw/raw.mp4":
@@ -3217,8 +3322,11 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
 
 
 def test_attach_room_recording_talk_starts_before_recording(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Overlap Event")
     db_session.add(event)
     db_session.commit()
@@ -3274,8 +3382,11 @@ def test_attach_room_recording_talk_starts_before_recording(
 
 
 def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     event = models.Event(name="Window Exclude Event")
     db_session.add(event)
     db_session.commit()
@@ -3338,8 +3449,11 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
 
 
 def test_attach_room_recording_enqueue_failure_marks_talks_broken(
-    client: TestClient, db_session, temp_storage, tmp_path
-):
+    client: TestClient,
+    db_session: Session,
+    temp_storage: LocalDiskBackend,
+    tmp_path: Path,
+) -> None:
     from redis.exceptions import RedisError
 
     from app.auth import CurrentUser, get_current_user
@@ -3390,13 +3504,15 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
             assert "Detection queue is unavailable" in res.json()["detail"]
 
             db_session.refresh(talk)
-            assert talk.status == "broken"
+            assert talk.status == TalkStatus.BROKEN
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         clip.unlink(missing_ok=True)
 
 
-def test_sso_organizer_management_controls_visible(client, db_session):
+def test_sso_organizer_management_controls_visible(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify organizers arriving via SSO have full access to management buttons while speakers do not."""
     import uuid
 
@@ -3464,8 +3580,8 @@ def test_sso_organizer_management_controls_visible(client, db_session):
 
 
 def test_attach_room_recording_with_video_url(
-    client: TestClient, db_session, temp_storage
-):
+    client: TestClient, db_session: Session, temp_storage: LocalDiskBackend
+) -> None:
     import uuid
     from datetime import UTC, datetime, timedelta
     from unittest.mock import patch
@@ -3538,8 +3654,8 @@ def test_attach_room_recording_with_video_url(
 
 
 def test_attach_room_recording_with_video_url_multipart(
-    client: TestClient, db_session, temp_storage
-):
+    client: TestClient, db_session: Session, temp_storage: LocalDiskBackend
+) -> None:
     import uuid
     from datetime import UTC, datetime, timedelta
     from unittest.mock import patch
@@ -3591,8 +3707,8 @@ def test_attach_room_recording_with_video_url_multipart(
 
 
 def test_attach_room_recording_url_and_source_validations(
-    client: TestClient, db_session, tmp_path
-):
+    client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
     import uuid
     from datetime import UTC, datetime, timedelta
 
@@ -3674,7 +3790,9 @@ def test_attach_room_recording_url_and_source_validations(
         clip.unlink(missing_ok=True)
 
 
-def test_talk_studio_organizer_request_prompt(client: TestClient, db_session):
+def test_talk_studio_organizer_request_prompt(
+    client: TestClient, db_session: Session
+) -> None:
     """Standard user sees organizer request banner and modal in Studio; SSO and organizer do not."""
     user = models.User(
         email=f"std_user_{uuid.uuid4().hex[:8]}@example.com",
@@ -3773,7 +3891,7 @@ def test_talk_studio_organizer_request_prompt(client: TestClient, db_session):
     assert "modal-request-organizer" not in res_sso.text
 
 
-def test_check_talk_access_persists_promoted_speaker_role(db_session):
+def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -> None:
     """Ensure check_talk_access updates models.User record in database upon role promotion."""
     from datetime import UTC, datetime
 
@@ -3813,13 +3931,14 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session):
     assert current_user.role == "speaker"
 
     # Reload directly from database to verify persistence
-    persisted = db_session.query(models.User).filter(models.User.id == user.id).first()
+    persisted = db_session.scalar(select(models.User).where(models.User.id == user.id))
+    assert persisted is not None
     assert persisted.role == "speaker"
 
 
 def test_organizer_dashboard_includes_assigned_speaker_talks(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Ensure an organizer's dashboard displays talks where they are assigned as speaker."""
     from datetime import UTC, datetime
 
@@ -3861,7 +3980,9 @@ def test_organizer_dashboard_includes_assigned_speaker_talks(
     assert "Talk B Speaker Slot" in resp.text
 
 
-def test_studio_handoff_utc_format_and_cooldown_attr(client: TestClient, db_session):
+def test_studio_handoff_utc_format_and_cooldown_attr(
+    client: TestClient, db_session: Session
+) -> None:
     """Ensure handed_off_at is rendered in UTC and button has data-handed-off-at."""
     from datetime import UTC, datetime, timedelta, timezone
 
@@ -3902,7 +4023,9 @@ def test_studio_handoff_utc_format_and_cooldown_attr(client: TestClient, db_sess
     assert "Speaker handoff requested" in resp.text
 
 
-def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_session):
+def test_sso_speaker_view_derived_from_email_match(
+    client: TestClient, db_session: Session
+) -> None:
     """Ensure speaker matching speaker_email gets speaker controls even if role is 'user'."""
     now = datetime.now(UTC)
 
@@ -3953,6 +4076,6 @@ def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_sessio
     assert "Submit Timestamps" in resp2.text
 
 
-def test_talk_speaker_email_index():
+def test_talk_speaker_email_index() -> None:
     """Ensure speaker_email column has an index defined on models.Talk."""
     assert models.Talk.__table__.c.speaker_email.index is True

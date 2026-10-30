@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.datastructures import MutableHeaders
 
 from app.db import get_db
 from app.queue import redis_conn
@@ -74,7 +75,7 @@ def _prefers_html(accept: str | None) -> bool:
     return False
 
 
-def _add_vary_accept(headers: MutableMapping[str, str]) -> None:
+def _add_vary_accept(headers: MutableHeaders | MutableMapping[str, str]) -> None:
     vary_key = next((k for k in headers if k.lower() == "vary"), None)
     if not vary_key:
         headers["Vary"] = "Accept"
@@ -122,18 +123,18 @@ app.include_router(studio.router)
 
 
 @app.get("/", include_in_schema=False)
-def root(request: Request):
+def root(request: Request) -> RedirectResponse:
     root_path = request.scope.get("root_path", "").rstrip("/")
     return RedirectResponse(url=f"{root_path}/studio")
 
 
 @app.get("/favicon.ico", include_in_schema=False)
-def favicon():
+def favicon() -> Response:
     return Response(status_code=204)
 
 
 @app.get("/health")
-def health_check(db: Annotated[Session, Depends(get_db)]):
+def health_check(db: Annotated[Session, Depends(get_db)]) -> dict[str, str]:
     redis_conn.ping()
     db.execute(text("SELECT 1"))
     return {"status": "ok"}

@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import delete, select
 
 from app import models
 from app.config import settings
@@ -54,11 +55,11 @@ def wipe_all_records() -> None:
 
     session = SessionLocal()
     try:
-        session.query(models.Review).delete()
-        session.query(models.Job).delete()
-        session.query(models.Talk).delete()
-        session.query(models.Client).delete()
-        session.query(models.Event).delete()
+        session.execute(delete(models.Review))
+        session.execute(delete(models.Job))
+        session.execute(delete(models.Talk))
+        session.execute(delete(models.Client))
+        session.execute(delete(models.Event))
         session.commit()
     finally:
         session.close()
@@ -70,7 +71,7 @@ def clean_db() -> None:
     wipe_all_records()
 
 
-def run_bootstrap_cli():
+def run_bootstrap_cli() -> tuple[str, int]:
     """Runs the bootstrap CLI to get an Event, Client, and raw API key."""
     # Run the CLI using the current python executable so it runs in the same environment.
     result = subprocess.run(
@@ -104,7 +105,7 @@ def run_bootstrap_cli():
     reason="This test wipes the database; run only against a disposable DB "
     "(see smoke-test.yml, which sets ALLOW_SMOKE_DB_WIPE=1).",
 )
-def test_end_to_end_smoke(clean_db):
+def test_end_to_end_smoke(clean_db: None) -> None:
     # 1. Clean DB is handled by the fixture
 
     # 2. Run bootstrap CLI
@@ -168,11 +169,13 @@ def test_end_to_end_smoke(clean_db):
     for state in states:
         session = SessionLocal()
         try:
-            talk = session.query(models.Talk).filter(models.Talk.id == talk_id).first()
-            assert talk is not None
+            talk_row = session.scalar(
+                select(models.Talk).where(models.Talk.id == talk_id)
+            )
+            assert talk_row is not None
 
             # Advance state and commit
-            talk = advance(talk, state)
+            talk_row = advance(talk_row, state)
             session.commit()
         finally:
             session.close()

@@ -1,252 +1,226 @@
+import io
 import sys
+from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app import models
+from app.auth import hash_api_key
 from app.cli import create_admin, create_client, list_users, main, promote_user
+from app.security import hash_password, verify_password
+from tests.conftest import TestSessionLocal
 
 
-@patch("app.cli.secrets.token_urlsafe")
-@patch("app.cli.hash_api_key")
-def test_create_client_with_new_event(mock_hash, mock_secrets):
-    mock_secrets.return_value = "raw-key"
-    mock_hash.return_value = "hashed-key"
+def _session_factory(db_session: Session) -> Callable[[], Session]:
+    """Return a factory of CLI sessions bound to the test connection."""
 
-    mock_session = MagicMock()
+    def factory() -> Session:
+        return TestSessionLocal(bind=db_session.get_bind())
 
-    # We'll use a side effect to set `id` on the event/client when `refresh` is called
-    def mock_refresh(obj):
-        obj.id = 1
-
-    mock_session.refresh.side_effect = mock_refresh
-
-    create_client(mock_session, event_name="New Event", event_id=None)
-
-    # Check that add was called twice (Event, then Client)
-    assert mock_session.add.call_count == 2
-
-    added_event = mock_session.add.call_args_list[0][0][0]
-    assert isinstance(added_event, models.Event)
-    assert added_event.name == "New Event"
-
-    added_client = mock_session.add.call_args_list[1][0][0]
-    assert isinstance(added_client, models.Client)
-    assert added_client.hashed_key == "hashed-key"
-    assert added_client.event_ids == [1]
+    return factory
 
 
-@patch("app.cli.secrets.token_urlsafe")
-@patch("app.cli.hash_api_key")
-def test_create_client_with_existing_event(mock_hash, mock_secrets):
-    mock_secrets.return_value = "raw-key"
-    mock_hash.return_value = "hashed-key"
-
-    mock_session = MagicMock()
-    mock_event = models.Event(id=2, name="Existing")
-    mock_session.query.return_value.filter.return_value.first.return_value = mock_event
-
-    def mock_refresh(obj):
-        obj.id = 2
-
-    mock_session.refresh.side_effect = mock_refresh
-
-    create_client(mock_session, event_name=None, event_id=2)
-
-    # Should only add Client
-    assert mock_session.add.call_count == 1
-    added_client = mock_session.add.call_args_list[0][0][0]
-    assert isinstance(added_client, models.Client)
-    assert added_client.hashed_key == "hashed-key"
-    assert added_client.event_ids == [2]
+def _create_user(
+    db: Session,
+    *,
+    email: str,
+    role: str = "user",
+    is_active: bool = True,
+    password: str = "validpassword123",
+) -> models.User:
+    user = models.User(
+        email=email,
+        hashed_password=hash_password(password),
+        role=role,
+        is_active=is_active,
+    )
+    db.add(user)
+    db.commit()
+    return user
 
 
-def test_create_client_missing_args():
-    mock_session = MagicMock()
+def _printed_api_key(output: str) -> str:
+    for line in output.splitlines():
+        if line.startswith("API Key: "):
+            return line.removeprefix("API Key: ")
+    raise AssertionError(f"API key not found in output: {output!r}")
+
+
+def test_create_client_with_new_event(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_client(db_session, event_name="New Event", event_id=None)
+
+    db_session.expire_all()
+    event = db_session.scalars(select(models.Event)).one()
+    assert event.name == "New Event"
+
+    client = db_session.scalars(select(models.Client)).one()
+    assert client.event_ids == [event.id]
+    raw_key = _printed_api_key(capsys.readouterr().out)
+    assert client.hashed_key == hash_api_key(raw_key)
+
+
+def test_create_client_with_existing_event(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
+    event = models.Event(name="Existing")
+    db_session.add(event)
+    db_session.commit()
+
+    create_client(db_session, event_name=None, event_id=event.id)
+
+    db_session.expire_all()
+    client = db_session.scalars(select(models.Client)).one()
+    assert client.event_ids == [event.id]
+    raw_key = _printed_api_key(capsys.readouterr().out)
+    assert client.hashed_key == hash_api_key(raw_key)
+
+
+def test_create_client_missing_args(db_session: Session) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        create_client(mock_session, event_name=None, event_id=None)
+        create_client(db_session, event_name=None, event_id=None)
     assert excinfo.value.code == 1
 
 
-def test_create_client_conflicting_args():
-    mock_session = MagicMock()
+def test_create_client_conflicting_args(db_session: Session) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        create_client(mock_session, event_name="A", event_id=1)
+        create_client(db_session, event_name="A", event_id=1)
     assert excinfo.value.code == 1
 
 
-def test_create_client_invalid_event_id():
-    mock_session = MagicMock()
-    mock_session.query.return_value.filter.return_value.first.return_value = None
+def test_create_client_invalid_event_id(db_session: Session) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        create_client(mock_session, event_name=None, event_id=99)
+        create_client(db_session, event_name=None, event_id=99)
     assert excinfo.value.code == 1
+    assert db_session.scalars(select(models.Client)).all() == []
 
 
-@patch("app.cli.create_client")
-@patch("app.cli.SessionLocal")
-def test_cli_main_create_client(mock_session_local, mock_create_client):
+def test_cli_main_create_client(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
     test_args = ["veditor", "admin", "create-client", "--event-name", "Test"]
-    with patch.object(sys, "argv", test_args):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+    ):
         main()
 
-    mock_session_local.assert_called_once()
-    mock_create_client.assert_called_once_with(
-        mock_session_local.return_value, "Test", None
-    )
-    mock_session_local.return_value.close.assert_called_once()
+    db_session.expire_all()
+    event = db_session.scalars(select(models.Event)).one()
+    assert event.name == "Test"
+    client = db_session.scalars(select(models.Client)).one()
+    assert client.event_ids == [event.id]
+    assert "Created Client" in capsys.readouterr().out
 
 
-@patch("app.cli.hash_password")
-def test_create_admin_success(mock_hash_password):
-    mock_hash_password.return_value = "hashed-secret"
-    mock_session = MagicMock()
-    mock_session.query.return_value.filter.return_value.first.return_value = None
+def test_create_admin_success(db_session: Session) -> None:
+    create_admin(db_session, email="Admin@Example.COM", password="validpassword123")
 
-    def mock_refresh(obj):
-        obj.id = 10
-
-    mock_session.refresh.side_effect = mock_refresh
-
-    create_admin(mock_session, email="Admin@Example.COM", password="validpassword123")
-
-    mock_session.add.assert_called_once()
-    user = mock_session.add.call_args[0][0]
-    assert isinstance(user, models.User)
+    db_session.expire_all()
+    user = db_session.scalars(select(models.User)).one()
     assert user.email == "admin@example.com"
     assert user.role == "admin"
     assert user.is_active is True
-    assert user.hashed_password == "hashed-secret"
-    mock_session.commit.assert_called_once()
-    mock_session.refresh.assert_called_once_with(user)
+    assert verify_password("validpassword123", user.hashed_password)
 
 
-def test_create_admin_invalid_email():
-    mock_session = MagicMock()
+def test_create_admin_invalid_email(db_session: Session) -> None:
     with pytest.raises(SystemExit) as exc:
-        create_admin(mock_session, email="invalid-email", password="validpassword123")
+        create_admin(db_session, email="invalid-email", password="validpassword123")
     assert exc.value.code == 1
-    mock_session.add.assert_not_called()
+    assert db_session.scalars(select(models.User)).all() == []
 
 
-def test_create_admin_short_password():
-    mock_session = MagicMock()
+def test_create_admin_short_password(db_session: Session) -> None:
     with pytest.raises(SystemExit) as exc:
-        create_admin(mock_session, email="admin@example.com", password="short")
+        create_admin(db_session, email="admin@example.com", password="short")
     assert exc.value.code == 1
-    mock_session.add.assert_not_called()
+    assert db_session.scalars(select(models.User)).all() == []
 
 
-def test_create_admin_duplicate_email():
-    mock_session = MagicMock()
-    existing_user = models.User(id=1, email="admin@example.com")
-    mock_session.query.return_value.filter.return_value.first.return_value = (
-        existing_user
-    )
+def test_create_admin_duplicate_email(db_session: Session) -> None:
+    _create_user(db_session, email="admin@example.com")
 
     with pytest.raises(SystemExit) as exc:
-        create_admin(
-            mock_session, email="admin@example.com", password="validpassword123"
-        )
+        create_admin(db_session, email="admin@example.com", password="validpassword123")
     assert exc.value.code == 1
-    mock_session.add.assert_not_called()
+    assert db_session.scalars(select(models.User)).all() != []
 
 
-def test_promote_user_success():
-    mock_session = MagicMock()
-    target_user = models.User(
-        id=2, email="user@example.com", role="user", is_active=True
-    )
-    mock_session.query.return_value.filter.return_value.first.return_value = target_user
+def test_promote_user_success(db_session: Session) -> None:
+    user = _create_user(db_session, email="user@example.com", role="user")
 
-    promote_user(mock_session, email="user@example.com", role="organizer")
+    promote_user(db_session, email="user@example.com", role="organizer")
 
-    assert target_user.role == "organizer"
-    mock_session.commit.assert_called_once()
-    mock_session.refresh.assert_called_once_with(target_user)
+    db_session.expire_all()
+    reloaded = db_session.get(models.User, user.id)
+    assert reloaded is not None
+    assert reloaded.role == "organizer"
 
 
-def test_promote_user_not_found():
-    mock_session = MagicMock()
-    mock_session.query.return_value.filter.return_value.first.return_value = None
-
+def test_promote_user_not_found(db_session: Session) -> None:
     with pytest.raises(SystemExit) as exc:
-        promote_user(mock_session, email="missing@example.com", role="admin")
+        promote_user(db_session, email="missing@example.com", role="admin")
     assert exc.value.code == 1
 
 
-def test_promote_user_invalid_role():
-    mock_session = MagicMock()
-    target_user = models.User(
-        id=3, email="user@example.com", role="user", is_active=True
-    )
-    mock_session.query.return_value.filter.return_value.first.return_value = target_user
+def test_promote_user_invalid_role(db_session: Session) -> None:
+    user = _create_user(db_session, email="user@example.com", role="user")
 
     with pytest.raises(SystemExit) as exc:
-        promote_user(mock_session, email="user@example.com", role="superhero")
+        promote_user(db_session, email="user@example.com", role="superhero")
     assert exc.value.code == 1
+    db_session.expire_all()
+    reloaded = db_session.get(models.User, user.id)
+    assert reloaded is not None
+    assert reloaded.role == "user"
 
 
-def test_promote_user_guard_cannot_demote_last_admin():
-    mock_session = MagicMock()
-    admin_user = models.User(
-        id=1, email="admin@example.com", role="admin", is_active=True
-    )
-
-    filter_mock = MagicMock()
-    # First call: find user by email -> admin_user
-    # Second call: active admins query -> [(1,)]
-    filter_mock.first.return_value = admin_user
-    filter_mock.count.return_value = 1
-    filter_mock.order_by.return_value.with_for_update.return_value.all.return_value = [
-        (1,)
-    ]
-    mock_session.query.return_value.filter.return_value = filter_mock
+def test_promote_user_guard_cannot_demote_last_admin(db_session: Session) -> None:
+    user = _create_user(db_session, email="admin@example.com", role="admin")
 
     with pytest.raises(SystemExit) as exc:
-        promote_user(mock_session, email="admin@example.com", role="organizer")
+        promote_user(db_session, email="admin@example.com", role="organizer")
     assert exc.value.code == 1
+    db_session.expire_all()
+    reloaded = db_session.get(models.User, user.id)
+    assert reloaded is not None
+    assert reloaded.role == "admin"
 
 
-def test_promote_user_demote_admin_allowed_with_multiple_admins():
-    mock_session = MagicMock()
-    admin_user = models.User(
-        id=1, email="admin@example.com", role="admin", is_active=True
-    )
+def test_promote_user_demote_admin_allowed_with_multiple_admins(
+    db_session: Session,
+) -> None:
+    _create_user(db_session, email="other-admin@example.com", role="admin")
+    user = _create_user(db_session, email="admin@example.com", role="admin")
 
-    filter_mock = MagicMock()
-    filter_mock.first.return_value = admin_user
-    filter_mock.count.return_value = 2
-    filter_mock.order_by.return_value.with_for_update.return_value.all.return_value = [
-        (1,),
-        (2,),
-    ]
-    mock_session.query.return_value.filter.return_value = filter_mock
+    promote_user(db_session, email="admin@example.com", role="organizer")
 
-    promote_user(mock_session, email="admin@example.com", role="organizer")
-    assert admin_user.role == "organizer"
-    mock_session.commit.assert_called_once()
+    db_session.expire_all()
+    reloaded = db_session.get(models.User, user.id)
+    assert reloaded is not None
+    assert reloaded.role == "organizer"
 
 
-def test_list_users_empty(capsys):
-    mock_session = MagicMock()
-    mock_session.query.return_value.order_by.return_value.all.return_value = []
-
-    list_users(mock_session)
+def test_list_users_empty(
+    capsys: pytest.CaptureFixture[str], db_session: Session
+) -> None:
+    list_users(db_session)
     captured = capsys.readouterr()
     assert "No users found." in captured.out
 
 
-def test_list_users_populated(capsys):
-    mock_session = MagicMock()
-    user1 = models.User(id=1, email="first@example.com", role="admin", is_active=True)
-    user2 = models.User(id=2, email="second@example.com", role="user", is_active=False)
-    mock_session.query.return_value.order_by.return_value.all.return_value = [
-        user1,
-        user2,
-    ]
+def test_list_users_populated(
+    capsys: pytest.CaptureFixture[str], db_session: Session
+) -> None:
+    _create_user(db_session, email="first@example.com", role="admin")
+    _create_user(db_session, email="second@example.com", role="user", is_active=False)
 
-    list_users(mock_session)
+    list_users(db_session)
     captured = capsys.readouterr()
     assert "first@example.com" in captured.out
     assert "admin" in captured.out
@@ -255,9 +229,11 @@ def test_list_users_populated(capsys):
 
 
 @patch("getpass.getpass", return_value="pass123456")
-@patch("app.cli.create_admin")
-@patch("app.cli.SessionLocal")
-def test_cli_main_create_admin(mock_session_local, mock_create_admin, mock_getpass):
+def test_cli_main_create_admin(
+    mock_getpass: MagicMock,
+    db_session: Session,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     test_args = [
         "veditor",
         "admin",
@@ -266,23 +242,23 @@ def test_cli_main_create_admin(mock_session_local, mock_create_admin, mock_getpa
         "admin@example.com",
     ]
     with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
         patch.object(sys, "argv", test_args),
         patch("sys.stdin.isatty", return_value=True),
     ):
         main()
 
-    mock_session_local.assert_called_once()
-    mock_create_admin.assert_called_once_with(
-        mock_session_local.return_value, "admin@example.com", "pass123456"
-    )
-    mock_session_local.return_value.close.assert_called_once()
+    mock_getpass.assert_called_once()
+    db_session.expire_all()
+    user = db_session.scalars(select(models.User)).one()
+    assert user.email == "admin@example.com"
+    assert verify_password("pass123456", user.hashed_password)
+    assert "Created admin user" in capsys.readouterr().out
 
 
-@patch("app.cli.create_admin")
-@patch("app.cli.SessionLocal")
-def test_cli_main_create_admin_piped_stdin(mock_session_local, mock_create_admin):
-    import io
-
+def test_cli_main_create_admin_piped_stdin(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
     test_args = [
         "veditor",
         "admin",
@@ -291,17 +267,24 @@ def test_cli_main_create_admin_piped_stdin(mock_session_local, mock_create_admin
         "admin@example.com",
     ]
     fake_stdin = io.StringIO("pipedpassword123\n")
-    with patch.object(sys, "argv", test_args), patch("sys.stdin", fake_stdin):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+        patch("sys.stdin", fake_stdin),
+    ):
         main()
 
-    mock_create_admin.assert_called_once_with(
-        mock_session_local.return_value, "admin@example.com", "pipedpassword123"
-    )
+    db_session.expire_all()
+    user = db_session.scalars(select(models.User)).one()
+    assert verify_password("pipedpassword123", user.hashed_password)
+    assert "Created admin user" in capsys.readouterr().out
 
 
-@patch("app.cli.promote_user")
-@patch("app.cli.SessionLocal")
-def test_cli_main_promote_user(mock_session_local, mock_promote_user):
+def test_cli_main_promote_user(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
+    user = _create_user(db_session, email="user@example.com", role="user")
+
     test_args = [
         "veditor",
         "admin",
@@ -311,55 +294,70 @@ def test_cli_main_promote_user(mock_session_local, mock_promote_user):
         "--role",
         "organizer",
     ]
-    with patch.object(sys, "argv", test_args):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+    ):
         main()
 
-    mock_session_local.assert_called_once()
-    mock_promote_user.assert_called_once_with(
-        mock_session_local.return_value, "user@example.com", "organizer"
-    )
-    mock_session_local.return_value.close.assert_called_once()
+    db_session.expire_all()
+    reloaded = db_session.get(models.User, user.id)
+    assert reloaded is not None
+    assert reloaded.role == "organizer"
+    assert "Updated user" in capsys.readouterr().out
 
 
-@patch("app.cli.list_users")
-@patch("app.cli.SessionLocal")
-def test_cli_main_list_users(mock_session_local, mock_list_users):
+def test_cli_main_list_users(
+    db_session: Session, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _create_user(db_session, email="listed@example.com", role="user")
+
     test_args = ["veditor", "admin", "list-users"]
-    with patch.object(sys, "argv", test_args):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+    ):
         main()
 
-    mock_session_local.assert_called_once()
-    mock_list_users.assert_called_once_with(mock_session_local.return_value)
-    mock_session_local.return_value.close.assert_called_once()
+    assert "listed@example.com" in capsys.readouterr().out
 
 
 @patch("app.retention.run_retention_sweep")
-@patch("app.cli.SessionLocal")
-def test_cli_main_run_retention_sweep_sync(mock_session_local, mock_sweep, capsys):
+def test_cli_main_run_retention_sweep_sync(
+    mock_sweep: MagicMock,
+    db_session: Session,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     mock_sweep.return_value = [1, 2]
     test_args = ["veditor", "admin", "run-retention-sweep"]
-    with patch.object(sys, "argv", test_args):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+    ):
         main()
 
-    mock_session_local.assert_called_once()
-    mock_sweep.assert_called_once_with(db=mock_session_local.return_value)
-    mock_session_local.return_value.close.assert_called_once()
+    mock_sweep.assert_called_once()
     captured = capsys.readouterr()
     assert "Cleaned 2 talks: [1, 2]" in captured.out
 
 
 @patch("app.retention.enqueue_retention_sweep")
-@patch("app.cli.SessionLocal")
-def test_cli_main_run_retention_sweep_enqueue(mock_session_local, mock_enqueue, capsys):
+def test_cli_main_run_retention_sweep_enqueue(
+    mock_enqueue: MagicMock,
+    db_session: Session,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     mock_job = MagicMock()
     mock_job.id = "job-sweep-123"
     mock_enqueue.return_value = mock_job
 
     test_args = ["veditor", "admin", "run-retention-sweep", "--enqueue"]
-    with patch.object(sys, "argv", test_args):
+    with (
+        patch("app.cli.SessionLocal", side_effect=_session_factory(db_session)),
+        patch.object(sys, "argv", test_args),
+    ):
         main()
 
     mock_enqueue.assert_called_once()
-    mock_session_local.return_value.close.assert_called_once()
     captured = capsys.readouterr()
     assert "Enqueued retention sweep job with ID job-sweep-123" in captured.out

@@ -1,182 +1,126 @@
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import get_client
-from app.db import get_db
+from app.auth import hash_api_key
 from app.main import app
 
 client = TestClient(app)
 
 
-# Mocking database session and the auth dependency
-@patch("app.routes.ops.get_client")
-def test_ops_talks_unauthorized(mock_get_client):
-    # If no api key is provided, the dependency normally raises 401.
-    # But since we are directly hitting the endpoint and overriding deps or not,
-    # Let's test the endpoint without mocking get_client to see it returns 401
+def _create_api_client(
+    db_session: Session, event_ids: list[int], api_key: str = "valid-key"
+) -> models.Client:
+    client_row = models.Client(hashed_key=hash_api_key(api_key), event_ids=event_ids)
+    db_session.add(client_row)
+    db_session.commit()
+    db_session.refresh(client_row)
+    return client_row
+
+
+def _create_event(
+    db_session: Session, event_id: int, name: str = "Event"
+) -> models.Event:
+    event = models.Event(id=event_id, name=name)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+    return event
+
+
+def _create_talk(
+    db_session: Session, event_id: int, title: str = "Test Talk"
+) -> models.Talk:
+    now = datetime.now(UTC)
+    talk = models.Talk(
+        event_id=event_id,
+        title=title,
+        start=now,
+        end=now,
+        status="waiting_for_files",
+    )
+    db_session.add(talk)
+    db_session.commit()
+    db_session.refresh(talk)
+    return talk
+
+
+def _create_job(
+    db_session: Session, talk_id: int, kind: str = "transcode"
+) -> models.Job:
+    job = models.Job(talk_id=talk_id, kind=kind, status="pending", log_path=None)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    return job
+
+
+def test_ops_talks_unauthorized(db_session: Session) -> None:
+    # No API key provided, the dependency raises 401.
     response = client.get("/ops/talks")
     assert response.status_code == 401
 
 
-def test_ops_talks_authorized():
-    mock_db = MagicMock()
+def test_ops_talks_authorized(db_session: Session) -> None:
+    _create_event(db_session, 1)
+    _create_api_client(db_session, event_ids=[1])
+    talk = _create_talk(db_session, event_id=1)
 
-    mock_client = models.Client(id=1, event_ids=[1])
-
-    # Mocking get_client dependency
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    # Mock data
-    mock_talk = models.Talk(
-        id=1,
-        event_id=1,
-        title="Test Talk",
-        room="Room 1",
-        start=datetime.now(UTC),
-        end=datetime.now(UTC),
-        status="waiting_for_files",
-    )
-
-    mock_db.query.return_value.filter.return_value.all.return_value = [mock_talk]
-
-    response = client.get("/ops/talks", headers={"X-API-Key": "valid"})
+    response = client.get("/ops/talks", headers={"X-API-Key": "valid-key"})
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
-    assert data[0]["id"] == 1
+    assert data[0]["id"] == talk.id
     assert data[0]["title"] == "Test Talk"
 
-    app.dependency_overrides.clear()
 
+def test_ops_get_talk_authorized(db_session: Session) -> None:
+    _create_event(db_session, 1)
+    _create_api_client(db_session, event_ids=[1])
+    talk = _create_talk(db_session, event_id=1)
+    job = _create_job(db_session, talk_id=talk.id)
 
-def test_ops_get_talk_authorized():
-    mock_db = MagicMock()
-    mock_client = models.Client(id=1, event_ids=[1])
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    mock_job = models.Job(
-        id=1, talk_id=1, kind="transcode", status="pending", log_path=None
-    )
-
-    mock_talk = models.Talk(
-        id=1,
-        event_id=1,
-        title="Test Talk",
-        room="Room 1",
-        start=datetime.now(UTC),
-        end=datetime.now(UTC),
-        status="waiting_for_files",
-        jobs=[mock_job],
-    )
-
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
-
-    response = client.get("/ops/talks/1", headers={"X-API-Key": "valid"})
+    response = client.get(f"/ops/talks/{talk.id}", headers={"X-API-Key": "valid-key"})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == 1
+    assert data["id"] == talk.id
     assert len(data["jobs"]) == 1
-    assert data["jobs"][0]["id"] == 1
-
-    app.dependency_overrides.clear()
+    assert data["jobs"][0]["id"] == job.id
 
 
-def test_ops_get_talk_unauthorized_event():
-    mock_db = MagicMock()
-    mock_client = models.Client(id=1, event_ids=[2])  # Has access to event 2
+def test_ops_get_talk_unauthorized_event(db_session: Session) -> None:
+    _create_event(db_session, 1)
+    # Client only has access to event 2, talk belongs to event 1.
+    _create_api_client(db_session, event_ids=[2])
+    talk = _create_talk(db_session, event_id=1)
 
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    mock_talk = models.Talk(
-        id=1,
-        event_id=1,  # Talk belongs to event 1
-        title="Test Talk",
-        start=datetime.now(UTC),
-        end=datetime.now(UTC),
-        status="waiting_for_files",
-    )
-
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
-
-    response = client.get("/ops/talks/1", headers={"X-API-Key": "valid"})
+    response = client.get(f"/ops/talks/{talk.id}", headers={"X-API-Key": "valid-key"})
     assert response.status_code == 403
     assert response.json()["detail"] == "Client is not authorized to access this event"
 
-    app.dependency_overrides.clear()
 
+def test_ops_get_job_authorized(db_session: Session) -> None:
+    _create_event(db_session, 1)
+    _create_api_client(db_session, event_ids=[1])
+    talk = _create_talk(db_session, event_id=1)
+    job = _create_job(db_session, talk_id=talk.id)
 
-def test_ops_get_job_authorized():
-    mock_db = MagicMock()
-    mock_client = models.Client(id=1, event_ids=[1])
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    mock_talk = models.Talk(
-        id=1,
-        event_id=1,
-        title="Test Talk",
-        start=datetime.now(UTC),
-        end=datetime.now(UTC),
-        status="waiting_for_files",
-    )
-
-    mock_job = models.Job(
-        id=1,
-        talk_id=1,
-        kind="transcode",
-        status="pending",
-        log_path=None,
-        talk=mock_talk,
-    )
-
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_job
-
-    response = client.get("/ops/jobs/1", headers={"X-API-Key": "valid"})
+    response = client.get(f"/ops/jobs/{job.id}", headers={"X-API-Key": "valid-key"})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == 1
+    assert data["id"] == job.id
     assert data["kind"] == "transcode"
 
-    app.dependency_overrides.clear()
 
+def test_ops_get_job_unauthorized_event(db_session: Session) -> None:
+    _create_event(db_session, 1)
+    # Client only has access to event 2, the job's talk belongs to event 1.
+    _create_api_client(db_session, event_ids=[2])
+    talk = _create_talk(db_session, event_id=1)
+    job = _create_job(db_session, talk_id=talk.id)
 
-def test_ops_get_job_unauthorized_event():
-    mock_db = MagicMock()
-    mock_client = models.Client(id=1, event_ids=[2])  # Access to event 2
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    mock_talk = models.Talk(
-        id=1,
-        event_id=1,  # Talk belongs to event 1
-        title="Test Talk",
-        start=datetime.now(UTC),
-        end=datetime.now(UTC),
-        status="waiting_for_files",
-    )
-
-    mock_job = models.Job(
-        id=1,
-        talk_id=1,
-        kind="transcode",
-        status="pending",
-        log_path=None,
-        talk=mock_talk,
-    )
-
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_job
-
-    response = client.get("/ops/jobs/1", headers={"X-API-Key": "valid"})
+    response = client.get(f"/ops/jobs/{job.id}", headers={"X-API-Key": "valid-key"})
     assert response.status_code == 403
     assert response.json()["detail"] == "Client is not authorized to access this event"
-
-    app.dependency_overrides.clear()

@@ -16,13 +16,13 @@ from tests.conftest import FakeStorageBackend
 
 
 @pytest.fixture(params=["local", "fake"])
-def storage_backend(request, tmp_path: Path) -> StorageBackend:
+def storage_backend(request: pytest.FixtureRequest, tmp_path: Path) -> StorageBackend:
     if request.param == "local":
         return LocalDiskBackend(data_dir=tmp_path)
     return FakeStorageBackend()
 
 
-def test_put_and_get_bytes(storage_backend: StorageBackend):
+def test_put_and_get_bytes(storage_backend: StorageBackend) -> None:
     key = "talk_1/raw/video.mp4"
     content = b"test content"
 
@@ -33,7 +33,7 @@ def test_put_and_get_bytes(storage_backend: StorageBackend):
     assert path.read_bytes() == content
 
 
-def test_put_and_get_file(storage_backend: StorageBackend, tmp_path: Path):
+def test_put_and_get_file(storage_backend: StorageBackend, tmp_path: Path) -> None:
     key = "talk_2/cut/video.mp4"
     content = b"file content"
 
@@ -47,7 +47,7 @@ def test_put_and_get_file(storage_backend: StorageBackend, tmp_path: Path):
     assert path.read_bytes() == content
 
 
-def test_put_from_temp_dir_moves_file(tmp_path: Path):
+def test_put_from_temp_dir_moves_file(tmp_path: Path) -> None:
     storage = LocalDiskBackend(data_dir=tmp_path)
     scratch_file = storage.get_temp_dir() / "scratch.mp4"
     scratch_file.write_bytes(b"scratch content")
@@ -58,7 +58,7 @@ def test_put_from_temp_dir_moves_file(tmp_path: Path):
     assert not scratch_file.exists()
 
 
-def test_put_outside_temp_dir_in_same_parent_copies_file(tmp_path: Path):
+def test_put_outside_temp_dir_in_same_parent_copies_file(tmp_path: Path) -> None:
     storage = LocalDiskBackend(data_dir=tmp_path)
     key = "talk_1/raw/video.mp4"
     target_path = storage._get_path(key)
@@ -74,7 +74,7 @@ def test_put_outside_temp_dir_in_same_parent_copies_file(tmp_path: Path):
     assert source_file.read_bytes() == b"persistent content"
 
 
-def test_put_overwrites_silently(storage_backend: StorageBackend):
+def test_put_overwrites_silently(storage_backend: StorageBackend) -> None:
     key = "talk_1/raw/video.mp4"
 
     storage_backend.put(key, b"old content")
@@ -84,14 +84,14 @@ def test_put_overwrites_silently(storage_backend: StorageBackend):
     assert storage_backend.get(key).read_bytes() == b"new content"
 
 
-def test_get_missing_key_raises(storage_backend: StorageBackend):
+def test_get_missing_key_raises(storage_backend: StorageBackend) -> None:
     with pytest.raises(StorageKeyNotFoundError) as exc_info:
         storage_backend.get("missing/file.mp4")
     assert exc_info.value.key == "missing/file.mp4"
     assert "missing/file.mp4" in str(exc_info.value)
 
 
-def test_delete_idempotent(storage_backend: StorageBackend):
+def test_delete_idempotent(storage_backend: StorageBackend) -> None:
     key = "talk_1/raw/video.mp4"
 
     # Delete missing should not raise
@@ -108,7 +108,7 @@ def test_delete_idempotent(storage_backend: StorageBackend):
     storage_backend.delete(key)
 
 
-def test_url(storage_backend: StorageBackend):
+def test_url(storage_backend: StorageBackend) -> None:
     key = "talk_1/raw/video.mp4"
     storage_backend.put(key, b"content")
 
@@ -120,7 +120,7 @@ def test_url(storage_backend: StorageBackend):
         assert url == f"memory://{key}"
 
 
-def test_free_bytes(storage_backend: StorageBackend, tmp_path: Path):
+def test_free_bytes(storage_backend: StorageBackend, tmp_path: Path) -> None:
     free = storage_backend.free_bytes()
 
     if isinstance(storage_backend, LocalDiskBackend):
@@ -132,7 +132,7 @@ def test_free_bytes(storage_backend: StorageBackend, tmp_path: Path):
         assert free == FakeStorageBackend.DEFAULT_FREE_BYTES
 
 
-def test_put_interrupted_write(tmp_path: Path):
+def test_put_interrupted_write(tmp_path: Path) -> None:
     storage_backend = LocalDiskBackend(data_dir=tmp_path)
     key = "talk_1/raw/large_video.mp4"
     target_path = storage_backend._get_path(key)
@@ -151,13 +151,13 @@ def test_put_interrupted_write(tmp_path: Path):
         assert len(list(target_path.parent.glob("*"))) == 0
 
 
-def test_invalid_key_traversal(tmp_path: Path):
+def test_invalid_key_traversal(tmp_path: Path) -> None:
     storage_backend = LocalDiskBackend(data_dir=tmp_path)
     with pytest.raises(ValueError, match="Invalid key"):
         storage_backend._get_path("../../../etc/passwd")
 
 
-def test_prefix_operations(storage_backend: StorageBackend):
+def test_prefix_operations(storage_backend: StorageBackend) -> None:
     key = "talk_1/raw/video.mp4"
     prefix = "talk_1/raw"
     storage_backend.put(key, b"content")
@@ -176,14 +176,14 @@ def test_prefix_operations(storage_backend: StorageBackend):
         assert not storage_backend._get_path(prefix).exists()
 
 
-def test_fake_set_free_bytes():
+def test_fake_set_free_bytes() -> None:
     fake = FakeStorageBackend()
     assert fake.free_bytes() == FakeStorageBackend.DEFAULT_FREE_BYTES
     fake.set_free_bytes(500)
     assert fake.free_bytes() == 500
 
 
-def test_list_keys(storage_backend: StorageBackend):
+def test_list_keys(storage_backend: StorageBackend) -> None:
     storage_backend.put("talk_1/raw/video1.mp4", b"v1")
     storage_backend.put("talk_1/raw/nested/video2.mp4", b"v2")
     storage_backend.put("talk_1/cut/cut.mp4", b"cut")
@@ -204,7 +204,7 @@ def test_list_keys(storage_backend: StorageBackend):
     assert non_existent == []
 
 
-def test_list_keys_traversal(tmp_path: Path):
+def test_list_keys_traversal(tmp_path: Path) -> None:
     backend = LocalDiskBackend(data_dir=tmp_path)
     with pytest.raises(ValueError, match="Invalid key"):
         backend.list_keys("../../../etc")
@@ -212,7 +212,7 @@ def test_list_keys_traversal(tmp_path: Path):
 
 def test_cleanup_intermediates_purges_intermediates_preserves_raw_and_final(
     storage_backend: StorageBackend,
-):
+) -> None:
     talk_id = 42
     storage_backend.put(f"{talk_id}/raw/video.mp4", b"raw video")
     storage_backend.put(f"{talk_id}/final/final.mp4", b"final video")
@@ -229,7 +229,7 @@ def test_cleanup_intermediates_purges_intermediates_preserves_raw_and_final(
 
 def test_cleanup_intermediates_idempotent_when_stages_not_generated(
     storage_backend: StorageBackend,
-):
+) -> None:
     talk_id = 43
     # Only raw and cut exist; preview, assemble, intro, outro were never generated
     storage_backend.put(f"{talk_id}/raw/video.mp4", b"raw video")
@@ -241,7 +241,7 @@ def test_cleanup_intermediates_idempotent_when_stages_not_generated(
     assert not storage_backend.exists(f"{talk_id}/cut/cut.mp4")
 
 
-def test_cleanup_intermediates_resilient_to_storage_delete_errors():
+def test_cleanup_intermediates_resilient_to_storage_delete_errors() -> None:
     mock_backend = mock.MagicMock(spec=StorageBackend)
     mock_backend.delete.side_effect = RuntimeError("Storage connection failed")
 
@@ -251,8 +251,8 @@ def test_cleanup_intermediates_resilient_to_storage_delete_errors():
 
 
 def test_cleanup_bumpers_resolves_relative_paths_from_staging_parent(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     staging_dir = tmp_path / "bumpers"
     staging_dir.mkdir()
     staged_bumper = staging_dir / "bumper_1_intro_test.mp4"
@@ -266,8 +266,8 @@ def test_cleanup_bumpers_resolves_relative_paths_from_staging_parent(
 
 
 def test_cleanup_bumpers_preserves_absolute_paths_outside_staging(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     staging_dir = tmp_path / "bumpers"
     staging_dir.mkdir()
     external_bumper = tmp_path / "external.mp4"

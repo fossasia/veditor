@@ -42,3 +42,21 @@ class SSOScopeType(StrEnum):
 
     EVENT = "event"
     TALK = "talk"
+
+
+class TalkStatus(StrEnum):
+    WAITING_FILES = "waiting_for_files"
+    DETECTING = "detecting"
+    PENDING_APPROVAL = "pending_approval"
+    PENDING_INTRO_OUTRO = "pending_intro_outro"
+    PENDING_BOUNDS = "pending_bounds"
+    CUTTING = "cutting"
+    GENERATING_PREVIEWS = "generating_previews"
+    PREVIEW = "preview"
+    NEEDS_WORK = "needs_work"
+    ASSEMBLING = "assembling"
+    TRANSCODING = "transcoding"
+    UPLOADING = "uploading"
+    DONE = "done"
+    REJECTED = "rejected"
+    BROKEN = "broken"

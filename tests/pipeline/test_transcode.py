@@ -1,5 +1,8 @@
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import TracebackType
+from typing import Self
 
 import pytest
 
@@ -18,7 +21,7 @@ from tests.conftest import (
 )
 
 
-def test_transcode_default_preset(tmp_path: Path):
+def test_transcode_default_preset(tmp_path: Path) -> None:
     """Verify transcoding with default 1080p preset produces valid, playable output."""
     source_clip = generate_clip(
         3.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -42,7 +45,7 @@ def test_transcode_default_preset(tmp_path: Path):
     assert "aac" in info_out.codec_names
 
 
-def test_transcode_with_preset_scaling(tmp_path: Path):
+def test_transcode_with_preset_scaling(tmp_path: Path) -> None:
     """Verify transcoding with 720p preset respects scaling parameters."""
     source_clip = generate_clip(
         2.0,
@@ -65,7 +68,7 @@ def test_transcode_with_preset_scaling(tmp_path: Path):
     assert info.resolution[1] <= 720
 
 
-def test_transcode_with_480p_scaling(tmp_path: Path):
+def test_transcode_with_480p_scaling(tmp_path: Path) -> None:
     """Verify transcoding with 480p preset respects scaling parameters."""
     source_clip = generate_clip(
         2.0,
@@ -88,7 +91,7 @@ def test_transcode_with_480p_scaling(tmp_path: Path):
     assert info.resolution[1] <= 480
 
 
-def test_transcode_with_1440p_preset(tmp_path: Path):
+def test_transcode_with_1440p_preset(tmp_path: Path) -> None:
     """Verify transcoding with 1440p preset produces valid output."""
     source_clip = generate_clip(
         1.5,
@@ -111,7 +114,7 @@ def test_transcode_with_1440p_preset(tmp_path: Path):
     assert info.resolution[1] <= 1440
 
 
-def test_transcode_progress_callback(tmp_path: Path):
+def test_transcode_progress_callback(tmp_path: Path) -> None:
     """Verify on_progress is called monotonically and ends with 1.0."""
     source_clip = generate_clip(
         4.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -152,7 +155,7 @@ def test_transcode_progress_callback(tmp_path: Path):
     )
 
 
-def test_transcode_audio_only(tmp_path: Path):
+def test_transcode_audio_only(tmp_path: Path) -> None:
     """Verify audio-only media transcodes successfully."""
     source_clip = generate_clip(
         2.0,
@@ -173,7 +176,7 @@ def test_transcode_audio_only(tmp_path: Path):
     assert info.has_audio is True
 
 
-def test_transcode_video_only(tmp_path: Path):
+def test_transcode_video_only(tmp_path: Path) -> None:
     """Verify video-only media transcodes successfully."""
     source_clip = generate_clip(
         2.0, has_video=True, has_audio=False, output_dir=tmp_path
@@ -190,7 +193,7 @@ def test_transcode_video_only(tmp_path: Path):
     assert info.has_audio is False
 
 
-def test_transcode_custom_preset_options(tmp_path: Path):
+def test_transcode_custom_preset_options(tmp_path: Path) -> None:
     """Verify custom TranscodePreset configuration."""
     custom_preset = TranscodePreset(
         name="custom_fast",
@@ -210,7 +213,7 @@ def test_transcode_custom_preset_options(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_transcode_invalid_arguments(tmp_path: Path):
+def test_transcode_invalid_arguments(tmp_path: Path) -> None:
     """Verify FileNotFoundError and error handling for missing files."""
     output_clip = tmp_path / "out.mp4"
 
@@ -218,7 +221,7 @@ def test_transcode_invalid_arguments(tmp_path: Path):
         transcode(tmp_path / "nonexistent.mp4", output_clip)
 
 
-def test_transcode_enforces_yuv420p(tmp_path: Path):
+def test_transcode_enforces_yuv420p(tmp_path: Path) -> None:
     """Verify delivery transcode enforces browser-playable yuv420p pixel format."""
     source_clip = generate_clip(
         2.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -235,7 +238,7 @@ def test_transcode_enforces_yuv420p(tmp_path: Path):
     assert "h264" in info.codec_names
 
 
-def test_transcode_progress_with_offset_start(tmp_path: Path):
+def test_transcode_progress_with_offset_start(tmp_path: Path) -> None:
     """Verify progress events fire across the encode even when source starts with non-zero PTS."""
     source_clip = generate_clip(
         4.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -261,8 +264,8 @@ def test_transcode_progress_with_offset_start(tmp_path: Path):
 
 
 def test_transcode_graceful_fallback_when_duration_unavailable(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Verify transcoding still completes without error when container duration is None."""
     import av
 
@@ -273,30 +276,38 @@ def test_transcode_graceful_fallback_when_duration_unavailable(
 
     progress_events: list[float] = []
 
-    real_open = av.open
+    real_open: Callable[..., av.container.Container] = av.open
 
     class ContainerProxy:
-        def __init__(self, real_container):
+        def __init__(self, real_container: av.container.Container) -> None:
             self._real = real_container
 
         @property
-        def duration(self):
+        def duration(self) -> None:
             return None
 
-        def __getattr__(self, item):
+        def __getattr__(self, item: str) -> object:
             return getattr(self._real, item)
 
-        def __enter__(self):
+        def __enter__(self) -> Self:
             self._real.__enter__()
             return self
 
-        def __exit__(self, exc_type, exc_val, exc_tb):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
             return self._real.__exit__(exc_type, exc_val, exc_tb)
 
-    def mocked_av_open(*args, **kwargs):
+    def mocked_av_open(*args: object, **kwargs: object) -> object:
         container = real_open(*args, **kwargs)
-        if "w" not in kwargs.get("mode", "r") and not str(args[0]).endswith(
-            "transcoded_no_duration.mp4"
+        mode = kwargs.get("mode", "r")
+        if (
+            isinstance(mode, str)
+            and "w" not in mode
+            and not str(args[0]).endswith("transcoded_no_duration.mp4")
         ):
             return ContainerProxy(container)
         return container
@@ -315,7 +326,7 @@ def test_transcode_graceful_fallback_when_duration_unavailable(
     assert progress_events == [1.0]
 
 
-def test_transcode_with_threads(tmp_path: Path):
+def test_transcode_with_threads(tmp_path: Path) -> None:
     """Verify transcoding succeeds with explicit thread limits."""
     source_clip = generate_clip(
         1.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -326,7 +337,7 @@ def test_transcode_with_threads(tmp_path: Path):
     assert_playable(output_clip)
 
 
-def test_transcode_rejects_invalid_threads(tmp_path: Path):
+def test_transcode_rejects_invalid_threads(tmp_path: Path) -> None:
     """Verify that zero or negative threads raise ValueError."""
     source_clip = generate_clip(1.0, output_dir=tmp_path)
     output_clip = tmp_path / "out.mp4"
@@ -347,12 +358,12 @@ def test_transcode_rejects_invalid_threads(tmp_path: Path):
         transcode(source_clip, output_clip, preset=invalid_preset_neg)
 
 
-def test_preset_1080p_default_preset_speed():
+def test_preset_1080p_default_preset_speed() -> None:
     """Verify PRESET_1080P_DEFAULT uses veryfast preset speed."""
     assert PRESET_1080P_DEFAULT.preset_speed == "veryfast"
 
 
-def test_transcode_start_and_end_seconds(tmp_path: Path):
+def test_transcode_start_and_end_seconds(tmp_path: Path) -> None:
     """Verify transcoding with start_seconds and end_seconds windows the output properly."""
     source_clip = generate_clip(
         6.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -377,7 +388,7 @@ def test_transcode_start_and_end_seconds(tmp_path: Path):
     assert abs(info_out.duration - 3.0) <= 0.8
 
 
-def test_transcode_invalid_start_end_bounds(tmp_path: Path):
+def test_transcode_invalid_start_end_bounds(tmp_path: Path) -> None:
     """Verify negative start_seconds and inverted end_seconds raise ValueError."""
     source_clip = generate_clip(2.0, output_dir=tmp_path)
     output_clip = tmp_path / "out.mp4"
@@ -396,7 +407,7 @@ def test_transcode_invalid_start_end_bounds(tmp_path: Path):
         transcode(source_clip, output_clip, start_seconds=2.0, end_seconds=2.0)
 
 
-def test_transcode_unified_intro_outro_loudness(tmp_path: Path):
+def test_transcode_unified_intro_outro_loudness(tmp_path: Path) -> None:
     """Verify single-pass transcode integrates intro, main talk, outro, and loudness."""
     intro_clip = generate_clip(1.0, has_video=True, has_audio=True, output_dir=tmp_path)
     main_clip = generate_clip(2.0, has_video=True, has_audio=True, output_dir=tmp_path)
@@ -424,7 +435,7 @@ def test_transcode_unified_intro_outro_loudness(tmp_path: Path):
     assert "aac" in info.codec_names
 
 
-def test_transcode_resilient_to_corrupt_packet(tmp_path: Path):
+def test_transcode_resilient_to_corrupt_packet(tmp_path: Path) -> None:
     """Verify transcode ignores corrupt/unparseable video packets and completes successfully."""
     from unittest.mock import patch
 
@@ -436,7 +447,9 @@ def test_transcode_resilient_to_corrupt_packet(tmp_path: Path):
     orig_decode = av.packet.Packet.decode
     call_count = [0]
 
-    def faulty_decode(self, *args, **kwargs):
+    def faulty_decode(
+        self: av.packet.Packet, *args: object, **kwargs: object
+    ) -> object:
         call_count[0] += 1
         # Inject an InvalidDataError on the 5th packet to simulate bitstream glitch
         if call_count[0] == 5:

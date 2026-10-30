@@ -1,10 +1,11 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db import Base
@@ -21,18 +22,19 @@ from app.retention import (
     validate_retention_overrides,
 )
 from app.schemas import EventCreate, EventRead
+from tests.conftest import FakeStorageBackend
 
 engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module")
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
-def test_default_retention_policy():
+def test_default_retention_policy() -> None:
     policy = RetentionPolicy()
     assert policy.final_retention_days == DEFAULT_FINAL_RETENTION_DAYS
     assert policy.final_retention_days == 14
@@ -54,7 +56,7 @@ def test_default_retention_policy():
     assert get_retention({}).final_retention_days == 14
 
 
-def test_event_override_final_retention_days():
+def test_event_override_final_retention_days() -> None:
     event_custom = Event(
         name="Custom Event",
         retention_overrides={"final_retention_days": 30},
@@ -75,7 +77,7 @@ def test_event_override_final_retention_days():
     assert get_retention({"final_retention_days": 7}).final_retention_days == 7
 
 
-def test_override_isolation_between_events():
+def test_override_isolation_between_events() -> None:
     event_a = Event(name="A", retention_overrides={"final_retention_days": 7})
     event_b = Event(name="B")
     event_c = Event(name="C", retention_overrides={"final_retention_days": 60})
@@ -85,7 +87,7 @@ def test_override_isolation_between_events():
     assert get_retention(event_c).final_retention_days == 60
 
 
-def test_indefinite_sentinel():
+def test_indefinite_sentinel() -> None:
     event_indefinite = Event(
         name="Archive Event",
         retention_overrides={"final_retention_days": INDEFINITE},
@@ -103,18 +105,18 @@ def test_indefinite_sentinel():
     "invalid_days",
     [-1, -100, 14.5, True, False, "forever", "never", None, [], {}],
 )
-def test_validation_rejects_invalid_final_retention_days(invalid_days):
+def test_validation_rejects_invalid_final_retention_days(invalid_days: object) -> None:
     with pytest.raises(ValueError):
         validate_final_retention_days(invalid_days)
 
     with pytest.raises(ValueError):
-        RetentionPolicy(final_retention_days=invalid_days)
+        RetentionPolicy(final_retention_days=invalid_days)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError):
         validate_retention_overrides({"final_retention_days": invalid_days})
 
 
-def test_validation_rejects_non_dict_overrides():
+def test_validation_rejects_non_dict_overrides() -> None:
     with pytest.raises(TypeError, match="must be a dictionary or None"):
         validate_retention_overrides("not a dict")
 
@@ -122,7 +124,7 @@ def test_validation_rejects_non_dict_overrides():
         validate_retention_overrides([14])
 
 
-def test_model_write_time_validation():
+def test_model_write_time_validation() -> None:
     # Constructor write-time rejection
     with pytest.raises(ValueError):
         Event(name="Bad", retention_overrides={"final_retention_days": -1})
@@ -136,10 +138,10 @@ def test_model_write_time_validation():
         event.retention_overrides = {"final_retention_days": -5}
 
     with pytest.raises((ValueError, TypeError)):
-        event.retention_overrides = "invalid_string"
+        event.retention_overrides = "invalid_string"  # type: ignore[assignment]
 
 
-def test_pydantic_schema_validation():
+def test_pydantic_schema_validation() -> None:
     # Valid schemas
     create_schema = EventCreate(
         name="Conference", retention_overrides={"final_retention_days": 21}
@@ -179,11 +181,12 @@ def test_pydantic_schema_validation():
         )
 
 
-def test_model_in_place_mutation_validation():
+def test_model_in_place_mutation_validation() -> None:
     event = Event(
         name="Mutable Event",
         retention_overrides={"final_retention_days": 14},
     )
+    assert event.retention_overrides is not None
 
     # In-place __setitem__ invalid value raises ValueError
     with pytest.raises(ValueError):
@@ -194,21 +197,22 @@ def test_model_in_place_mutation_validation():
 
     # In-place __setitem__ non-string key raises TypeError
     with pytest.raises(TypeError):
-        event.retention_overrides[123] = 14
+        event.retention_overrides[123] = 14  # type: ignore[index]
 
     # In-place update rejection
     with pytest.raises(ValueError):
         event.retention_overrides.update({"final_retention_days": -10})
 
     with pytest.raises(TypeError):
-        event.retention_overrides.update({456: 30})
+        event.retention_overrides.update({456: 30})  # type: ignore[dict-item]
 
     # In-place setdefault rejection when setting new key with non-string key
     with pytest.raises(TypeError):
-        event.retention_overrides.setdefault(789, 14)
+        event.retention_overrides.setdefault(789, 14)  # type: ignore[call-overload]
 
     # In-place setdefault rejection when setting new invalid final_retention_days
     event_empty = Event(name="Empty Overrides Event", retention_overrides={})
+    assert event_empty.retention_overrides is not None
     with pytest.raises(ValueError):
         event_empty.retention_overrides.setdefault("final_retention_days", -5)
 
@@ -228,7 +232,7 @@ def test_model_in_place_mutation_validation():
         event.retention_overrides |= {"final_retention_days": -20}
 
     with pytest.raises(TypeError):
-        event.retention_overrides |= {999: 10}
+        event.retention_overrides |= {999: 10}  # type: ignore[dict-item]
 
     # In-place |= operator valid mutation succeeds
     event.retention_overrides |= {"final_retention_days": 45, "or_key": "val"}
@@ -236,7 +240,7 @@ def test_model_in_place_mutation_validation():
     assert event.retention_overrides["or_key"] == "val"
 
 
-def test_sparse_overrides_forward_compatibility():
+def test_sparse_overrides_forward_compatibility() -> None:
     sparse_data = {
         "final_retention_days": 30,
         "future_knob": "something_else",
@@ -251,7 +255,7 @@ def test_sparse_overrides_forward_compatibility():
     assert get_retention(event_no_final).final_retention_days == 14
 
 
-def test_validation_rejects_non_string_keys():
+def test_validation_rejects_non_string_keys() -> None:
     with pytest.raises(TypeError, match="must be strings"):
         validate_retention_overrides({123: 14})
 
@@ -259,7 +263,7 @@ def test_validation_rejects_non_string_keys():
         Event(name="Invalid Keys", retention_overrides={123: 14})
 
 
-def test_get_retention_from_talk_model():
+def test_get_retention_from_talk_model() -> None:
     event = Event(name="Conf", retention_overrides={"final_retention_days": 30})
     talk = Talk(title="Keynote", event=event)
     policy = get_retention(talk)
@@ -267,7 +271,9 @@ def test_get_retention_from_talk_model():
     assert policy.is_final_indefinite is False
 
 
-def test_sweep_removes_final_past_default_window(db_session, fake_storage):
+def test_sweep_removes_final_past_default_window(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(name="Default Retention Event")
     db_session.add(event)
     db_session.flush()
@@ -296,7 +302,9 @@ def test_sweep_removes_final_past_default_window(db_session, fake_storage):
     assert fake_storage.exists(raw_key)
 
 
-def test_sweep_preserves_final_within_window(db_session, fake_storage):
+def test_sweep_preserves_final_within_window(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(name="Default Retention Event")
     db_session.add(event)
     db_session.flush()
@@ -322,7 +330,9 @@ def test_sweep_preserves_final_within_window(db_session, fake_storage):
     assert fake_storage.exists(final_key)
 
 
-def test_sweep_honors_custom_override(db_session, fake_storage):
+def test_sweep_honors_custom_override(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     # Event with 30-day retention
     event_30 = Event(
         name="30 Day Event",
@@ -375,7 +385,9 @@ def test_sweep_honors_custom_override(db_session, fake_storage):
     assert not fake_storage.exists(key_7)
 
 
-def test_sweep_honors_indefinite_override(db_session, fake_storage):
+def test_sweep_honors_indefinite_override(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(
         name="Indefinite Event",
         retention_overrides={"final_retention_days": INDEFINITE},
@@ -404,7 +416,9 @@ def test_sweep_honors_indefinite_override(db_session, fake_storage):
     assert fake_storage.exists(final_key)
 
 
-def test_sweep_never_touches_rejected_talks(db_session, fake_storage):
+def test_sweep_never_touches_rejected_talks(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(name="Default Event")
     db_session.add(event)
     db_session.flush()
@@ -430,7 +444,9 @@ def test_sweep_never_touches_rejected_talks(db_session, fake_storage):
     assert fake_storage.exists(final_key)
 
 
-def test_sweep_idempotency_on_already_cleaned_paths(db_session, fake_storage):
+def test_sweep_idempotency_on_already_cleaned_paths(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(name="Idempotent Event")
     db_session.add(event)
     db_session.flush()
@@ -460,7 +476,9 @@ def test_sweep_idempotency_on_already_cleaned_paths(db_session, fake_storage):
     assert swept2 == []
 
 
-def test_sweep_dynamic_override_takes_effect_without_redeploy(db_session, fake_storage):
+def test_sweep_dynamic_override_takes_effect_without_redeploy(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(
         name="Dynamic Override Event",
         retention_overrides={"final_retention_days": 30},
@@ -498,7 +516,7 @@ def test_sweep_dynamic_override_takes_effect_without_redeploy(db_session, fake_s
     assert not fake_storage.exists(final_key)
 
 
-def test_enqueue_retention_sweep():
+def test_enqueue_retention_sweep() -> None:
     mock_queue = MagicMock()
     enqueue_retention_sweep(queue=mock_queue)
     mock_queue.enqueue.assert_called_once_with(
@@ -508,7 +526,7 @@ def test_enqueue_retention_sweep():
     )
 
 
-def test_register_periodic_retention_sweep():
+def test_register_periodic_retention_sweep() -> None:
     mock_queue = MagicMock()
     mock_queue.connection = MagicMock()
 
@@ -523,7 +541,7 @@ def test_register_periodic_retention_sweep():
     assert kwargs["repeat"].intervals == [1800]
 
 
-def test_register_periodic_retention_sweep_rejects_non_positive_interval():
+def test_register_periodic_retention_sweep_rejects_non_positive_interval() -> None:
     mock_queue = MagicMock()
     with pytest.raises(ValueError, match="interval must be positive"):
         register_periodic_retention_sweep(queue=mock_queue, interval_seconds=0)
@@ -532,7 +550,7 @@ def test_register_periodic_retention_sweep_rejects_non_positive_interval():
         register_periodic_retention_sweep(queue=mock_queue, interval_seconds=-10)
 
 
-def test_settings_retention_sweep_interval_validation():
+def test_settings_retention_sweep_interval_validation() -> None:
     from app.config import Settings
 
     with pytest.raises(
@@ -546,7 +564,7 @@ def test_settings_retention_sweep_interval_validation():
         Settings(retention_sweep_interval_seconds=-1)
 
 
-def test_sweep_handles_list_keys_failure_gracefully(db_session):
+def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None:
     event = Event(name="Resilience Event")
     db_session.add(event)
     db_session.flush()
@@ -573,7 +591,7 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session):
 
     mock_storage = MagicMock()
 
-    def mock_list_keys(prefix):
+    def mock_list_keys(prefix: str) -> list[str]:
         if prefix.startswith(f"{talk1.id}/"):
             raise OSError("Simulated disk I/O error")
         return [f"{prefix}/final.mp4"]
@@ -590,7 +608,9 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session):
     assert talk2.final_cleaned_at is not None
 
 
-def test_sweep_sets_final_cleaned_at_and_skips_subsequent(db_session, fake_storage):
+def test_sweep_sets_final_cleaned_at_and_skips_subsequent(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     event = Event(name="Cleaned Tracking Event")
     db_session.add(event)
     db_session.flush()
@@ -620,7 +640,9 @@ def test_sweep_sets_final_cleaned_at_and_skips_subsequent(db_session, fake_stora
 
 
 @patch("rq.job.Job.fetch")
-def test_register_periodic_retention_sweep_deletes_stale_job(mock_fetch):
+def test_register_periodic_retention_sweep_deletes_stale_job(
+    mock_fetch: MagicMock,
+) -> None:
     mock_stale_job = MagicMock()
     mock_stale_job.get_status.return_value = "finished"
     mock_fetch.return_value = mock_stale_job
@@ -633,7 +655,7 @@ def test_register_periodic_retention_sweep_deletes_stale_job(mock_fetch):
     assert mock_queue.enqueue_in.called
 
 
-def test_register_periodic_retention_sweep_times_parameter():
+def test_register_periodic_retention_sweep_times_parameter() -> None:
     mock_queue = MagicMock()
     mock_queue.connection = MagicMock()
 
@@ -650,7 +672,7 @@ def test_register_periodic_retention_sweep_times_parameter():
         )
 
 
-def test_sweep_raises_and_stops_on_db_flush_failure(db_session):
+def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None:
     from sqlalchemy.exc import SQLAlchemyError
 
     event = Event(name="Flush Failure Event")
@@ -682,15 +704,15 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session):
 
     original_flush = db_session.flush
 
-    def failing_flush():
+    def failing_flush() -> None:
         raise SQLAlchemyError("Simulated database flush failure")
 
-    db_session.flush = failing_flush
+    db_session.flush = failing_flush  # type: ignore[method-assign, assignment]
     try:
         with pytest.raises(SQLAlchemyError, match="Simulated database flush failure"):
             run_retention_sweep(db=db_session, storage=mock_storage)
     finally:
-        db_session.flush = original_flush
+        db_session.flush = original_flush  # type: ignore[method-assign]
 
     # Storage delete should have been called for talk1 before flush failed,
     # but NOT for talk2 since the sweep stops immediately
@@ -698,7 +720,7 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session):
     assert mock_storage.delete.call_args[0][0] == f"{talk1.id}/final"
 
 
-def test_register_periodic_retention_sweep_retry():
+def test_register_periodic_retention_sweep_retry() -> None:
     from rq import Retry
 
     mock_queue = MagicMock()
@@ -718,7 +740,7 @@ def test_register_periodic_retention_sweep_retry():
     assert kwargs["retry"] == custom_retry
 
 
-def test_sweep_deletes_when_storage_lacks_list_keys(db_session):
+def test_sweep_deletes_when_storage_lacks_list_keys(db_session: Session) -> None:
     event = Event(name="No List Keys Event")
     db_session.add(event)
     db_session.flush()
@@ -737,8 +759,8 @@ def test_sweep_deletes_when_storage_lacks_list_keys(db_session):
 
     # Minimal storage mock without list_keys attribute
     class StorageWithoutListKeys:
-        def __init__(self):
-            self.deleted_prefixes = []
+        def __init__(self) -> None:
+            self.deleted_prefixes: list[str] = []
 
         def delete(self, prefix: str) -> None:
             self.deleted_prefixes.append(prefix)

@@ -3,6 +3,7 @@ import getpass
 import secrets
 import sys
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -18,7 +19,7 @@ def create_client(
     event_id: int | None,
     webhook_url: str | None = None,
     webhook_secret: str | None = None,
-):
+) -> None:
     if not event_name and not event_id:
         print("Error: Must provide either --event-name or --event-id.")
         sys.exit(1)
@@ -51,12 +52,16 @@ def create_client(
         print(f"Created Event '{event.name}' with ID {selected_event_id}")
     else:
         # Verify event_id exists
-        event = session.query(models.Event).filter(models.Event.id == event_id).first()
-        if not event:
+        existing_event = session.scalar(
+            select(models.Event).where(models.Event.id == event_id)
+        )
+        if not existing_event:
             print(f"Error: Event with ID {event_id} does not exist.")
             sys.exit(1)
-        selected_event_id = event.id
-        print(f"Using existing Event '{event.name}' with ID {selected_event_id}")
+        selected_event_id = existing_event.id
+        print(
+            f"Using existing Event '{existing_event.name}' with ID {selected_event_id}"
+        )
 
     raw_api_key = secrets.token_urlsafe(32)
     hashed_key = hash_api_key(raw_api_key)
@@ -83,7 +88,7 @@ def create_client(
     print("Store this key safely! It will not be shown again.")
 
 
-def create_admin(session: Session, email: str, password: str):
+def create_admin(session: Session, email: str, password: str) -> None:
     clean_email = email.strip().lower() if email else ""
     if not is_valid_email(clean_email):
         print("Error: Invalid email format.")
@@ -93,8 +98,8 @@ def create_admin(session: Session, email: str, password: str):
         print("Error: Password must be at least 8 characters long.")
         sys.exit(1)
 
-    existing = (
-        session.query(models.User).filter(models.User.email == clean_email).first()
+    existing = session.scalar(
+        select(models.User).where(models.User.email == clean_email)
     )
     if existing:
         print(f"Error: User with email '{clean_email}' already exists.")
@@ -112,9 +117,9 @@ def create_admin(session: Session, email: str, password: str):
     print(f"Created admin user '{user.email}' with ID {user.id}")
 
 
-def promote_user(session: Session, email: str, role: str):
+def promote_user(session: Session, email: str, role: str) -> None:
     clean_email = email.strip().lower() if email else ""
-    user = session.query(models.User).filter(models.User.email == clean_email).first()
+    user = session.scalar(select(models.User).where(models.User.email == clean_email))
     if not user:
         print(f"Error: User with email '{clean_email}' not found.")
         sys.exit(1)
@@ -138,8 +143,8 @@ def promote_user(session: Session, email: str, role: str):
     print(f"Updated user '{user.email}' role to '{user.role}'.")
 
 
-def list_users(session: Session):
-    users = session.query(models.User).order_by(models.User.id.asc()).all()
+def list_users(session: Session) -> None:
+    users = list(session.scalars(select(models.User).order_by(models.User.id.asc())))
     if not users:
         print("No users found.")
         return
@@ -154,7 +159,7 @@ def list_users(session: Session):
         print(f"{u.id:<6} {u.email:<32} {u.role:<12} {u.is_active!s:<8} {created_str}")
 
 
-def run_retention_sweep_cmd(session: Session, enqueue: bool = False):
+def run_retention_sweep_cmd(session: Session, enqueue: bool = False) -> None:
     if enqueue:
         from app.retention import enqueue_retention_sweep
 
@@ -167,7 +172,7 @@ def run_retention_sweep_cmd(session: Session, enqueue: bool = False):
         print(f"Retention sweep completed. Cleaned {len(swept_ids)} talks: {swept_ids}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="VEditor CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

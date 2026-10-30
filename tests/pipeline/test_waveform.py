@@ -9,7 +9,7 @@ from tests.conftest import (
 )
 
 
-def test_extract_waveform_peaks_audio_clip(tmp_path: Path):
+def test_extract_waveform_peaks_audio_clip(tmp_path: Path) -> None:
     """Verify waveform extraction on synthetic audio clip produces bounded peaks."""
     clip = generate_clip(
         2.0,
@@ -27,7 +27,7 @@ def test_extract_waveform_peaks_audio_clip(tmp_path: Path):
     assert max(peaks) > 0.0
 
 
-def test_extract_waveform_peaks_video_only(tmp_path: Path):
+def test_extract_waveform_peaks_video_only(tmp_path: Path) -> None:
     """Verify waveform extraction returns empty list for media with no audio."""
     clip = generate_clip(
         1.0,
@@ -39,21 +39,21 @@ def test_extract_waveform_peaks_video_only(tmp_path: Path):
     assert peaks == []
 
 
-def test_extract_waveform_peaks_corrupt_clip(tmp_path: Path):
+def test_extract_waveform_peaks_corrupt_clip(tmp_path: Path) -> None:
     """Verify waveform extraction returns empty list gracefully on corrupt input."""
     corrupt = generate_corrupt_clip(output_dir=tmp_path)
     peaks = extract_waveform_peaks(corrupt)
     assert peaks == []
 
 
-def test_extract_waveform_peaks_nonexistent_file(tmp_path: Path):
+def test_extract_waveform_peaks_nonexistent_file(tmp_path: Path) -> None:
     """Verify waveform extraction handles non-existent paths gracefully."""
     nonexistent = tmp_path / "does_not_exist.mp4"
     peaks = extract_waveform_peaks(nonexistent)
     assert peaks == []
 
 
-def test_extract_waveform_peaks_num_peaks_scaling(tmp_path: Path):
+def test_extract_waveform_peaks_num_peaks_scaling(tmp_path: Path) -> None:
     """Verify requested peak count is respected for various bucket sizes."""
     clip = generate_clip(
         3.0,

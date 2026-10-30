@@ -158,7 +158,7 @@ def generate_outro_clip(
 
         # Derive target resolution
         if "resolution" in talk_metadata:
-            resolution = tuple(talk_metadata["resolution"])  # type: ignore
+            resolution = tuple(talk_metadata["resolution"])
         elif "width" in talk_metadata and "height" in talk_metadata:
             resolution = (int(talk_metadata["width"]), int(talk_metadata["height"]))
         elif "video_metadata" in talk_metadata and isinstance(
@@ -166,7 +166,7 @@ def generate_outro_clip(
         ):
             vm = talk_metadata["video_metadata"]
             if "resolution" in vm:
-                resolution = tuple(vm["resolution"])  # type: ignore
+                resolution = tuple(vm["resolution"])
             elif "width" in vm and "height" in vm:
                 resolution = (int(vm["width"]), int(vm["height"]))
 

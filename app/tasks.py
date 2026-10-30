@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import av
+from sqlalchemy import select, update
 
 from app.config import PREVIEW_PRESETS, get_setting, settings
 from app.db import SessionLocal
@@ -69,6 +70,8 @@ from app.storage import (
     cleanup_intermediates,
     get_storage_backend,
 )
+
+from .consts import TalkStatus
 
 TRANSCODE_PRESETS = {
     "480p": PRESET_480P,
@@ -124,10 +127,10 @@ def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -
             job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
         if talk and talk.status not in (
-            "waiting_for_files",
-            "broken",
-            "done",
-            "rejected",
+            TalkStatus.WAITING_FILES,
+            TalkStatus.BROKEN,
+            TalkStatus.DONE,
+            TalkStatus.REJECTED,
         ):
             advance(talk, "broken")
         db.commit()
@@ -157,7 +160,7 @@ def job_ingest(
     try:
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
-            if not talk or talk.status != "waiting_for_files":
+            if not talk or talk.status != TalkStatus.WAITING_FILES:
                 logger.info(
                     "Talk %s ingest job was aborted or state changed prior to start; discarding",
                     talk_id,
@@ -165,12 +168,13 @@ def job_ingest(
                 return
 
             # Atomically claim the talk by transitioning from waiting_for_files to detecting
-            updated = (
-                db.query(Talk)
-                .filter(Talk.id == talk_id, Talk.status == "waiting_for_files")
-                .update({"status": "detecting"})
-            )
-            if not updated:
+            claimed_id = db.execute(
+                update(Talk)
+                .where(Talk.id == talk_id, Talk.status == TalkStatus.WAITING_FILES)
+                .values(status=TalkStatus.DETECTING)
+                .returning(Talk.id)
+            ).scalar_one_or_none()
+            if claimed_id is None:
                 logger.info(
                     "Talk %s was already claimed by another ingest job; discarding",
                     talk_id,
@@ -202,7 +206,7 @@ def job_ingest(
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "detecting":
+            if not talk or not job or talk.status != TalkStatus.DETECTING:
                 logger.info(
                     "Talk %s ingest job %s was aborted or state changed; discarding",
                     talk_id,
@@ -229,8 +233,8 @@ def job_ingest(
         if claimed:
             with SessionLocal() as db:
                 talk = db.get(Talk, talk_id)
-                if talk and talk.status == "detecting":
-                    talk.status = "waiting_for_files"
+                if talk and talk.status == TalkStatus.DETECTING:
+                    talk.status = TalkStatus.WAITING_FILES
                     db.commit()
             _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -260,12 +264,16 @@ def job_ingest_room_url(
     try:
         # Create ingest jobs for tracked talks so status and progress are recorded
         with SessionLocal() as db:
-            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+            stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
             if talk_ids:
-                query = query.filter(Talk.id.in_(talk_ids))
-            room_talks = query.order_by(Talk.start).all()
+                stmt = stmt.where(Talk.id.in_(talk_ids))
+            room_talks = db.scalars(stmt.order_by(Talk.start)).all()
             for talk in room_talks:
-                if talk.status in ("waiting_for_files", "detecting", "broken"):
+                if talk.status in (
+                    TalkStatus.WAITING_FILES,
+                    TalkStatus.DETECTING,
+                    TalkStatus.BROKEN,
+                ):
                     job = Job(
                         talk_id=talk.id,
                         kind="ingest",
@@ -274,7 +282,7 @@ def job_ingest_room_url(
                         updated_at=datetime.now(UTC),
                     )
                     db.add(job)
-                    talk.status = "detecting"
+                    talk.status = TalkStatus.DETECTING
                     db.flush()
                     job_ids[talk.id] = job.id
             db.commit()
@@ -313,12 +321,12 @@ def job_ingest_room_url(
                 pass
 
         with SessionLocal() as db:
-            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+            stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
             if talk_ids:
-                query = query.filter(Talk.id.in_(talk_ids))
+                stmt = stmt.where(Talk.id.in_(talk_ids))
             eligible_talks = [
                 t
-                for t in query.order_by(Talk.start).all()
+                for t in db.scalars(stmt.order_by(Talk.start)).all()
                 if t.id in job_ids and t.status == "detecting"
             ]
             if not eligible_talks:
@@ -332,8 +340,8 @@ def job_ingest_room_url(
                         job.updated_at = datetime.now(UTC)
                 for tid in job_ids:
                     talk = db.get(Talk, tid)
-                    if talk and talk.status == "detecting":
-                        talk.status = "waiting_for_files"
+                    if talk and talk.status == TalkStatus.DETECTING:
+                        talk.status = TalkStatus.WAITING_FILES
                 db.commit()
                 return
 
@@ -387,13 +395,13 @@ def job_ingest_room_url(
                     if job:
                         job.status = "cancelled"
                         job.updated_at = datetime.now(UTC)
-                untalk.status = "waiting_for_files"
+                untalk.status = TalkStatus.WAITING_FILES
 
             matched_ids = []
             for talk in matched_talks:
                 raw_key = f"{talk.id}/raw/raw.mp4"
                 storage.link_or_copy(raw_key, staged_path)
-                talk.status = "detecting"
+                talk.status = TalkStatus.DETECTING
                 talk.raw_duration_seconds = duration
 
                 talk_start_utc = (
@@ -446,8 +454,8 @@ def job_ingest_room_url(
                     job.status = "failed"
                     job.updated_at = datetime.now(UTC)
                 talk = db.get(Talk, tid)
-                if talk and talk.status == "detecting":
-                    talk.status = "broken"
+                if talk and talk.status == TalkStatus.DETECTING:
+                    talk.status = TalkStatus.BROKEN
             db.commit()
         raise
     finally:
@@ -469,7 +477,7 @@ def job_detect(
     try:
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
-            if not talk or talk.status != "detecting":
+            if not talk or talk.status != TalkStatus.DETECTING:
                 logger.info(
                     "Talk %s detect job was aborted or state changed prior to start; discarding",
                     talk_id,
@@ -517,7 +525,7 @@ def job_detect(
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "detecting":
+            if not talk or not job or talk.status != TalkStatus.DETECTING:
                 logger.info(
                     "Talk %s detect job %s was aborted or state changed; discarding",
                     talk_id,
@@ -634,7 +642,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "cutting":
+            if not talk or not job or talk.status != TalkStatus.CUTTING:
                 logger.info(
                     "Talk %s cut job %s was aborted or state changed; discarding",
                     talk_id,
@@ -667,15 +675,20 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
     """Dispatches the next background stage in the assembly workflow."""
     with SessionLocal() as db:
         talk = db.get(Talk, talk_id)
-        if not talk or talk.status not in ("assembling", "generating_previews"):
+        if not talk or talk.status not in (
+            TalkStatus.ASSEMBLING,
+            TalkStatus.GENERATING_PREVIEWS,
+        ):
             return
 
         # 1. Check if generated intro is required and not yet completed
         intro_needed = talk.include_intro and talk.intro_source == "generated"
         intro_done = (
-            db.query(Job)
-            .filter(Job.talk_id == talk_id, Job.kind == "intro", Job.status == "done")
-            .first()
+            db.scalar(
+                select(Job.id).where(
+                    Job.talk_id == talk_id, Job.kind == "intro", Job.status == "done"
+                )
+            )
             is not None
         )
         if intro_needed and not intro_done:
@@ -691,9 +704,11 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         # 2. Check if generated outro is required and not yet completed
         outro_needed = talk.include_outro and talk.outro_source == "generated"
         outro_done = (
-            db.query(Job)
-            .filter(Job.talk_id == talk_id, Job.kind == "outro", Job.status == "done")
-            .first()
+            db.scalar(
+                select(Job.id).where(
+                    Job.talk_id == talk_id, Job.kind == "outro", Job.status == "done"
+                )
+            )
             is not None
         )
         if outro_needed and not outro_done:
@@ -807,7 +822,8 @@ def job_intro(
             if (
                 not talk
                 or not job
-                or talk.status not in ("assembling", "generating_previews")
+                or talk.status
+                not in (TalkStatus.ASSEMBLING, TalkStatus.GENERATING_PREVIEWS)
             ):
                 logger.info(
                     "Talk %s intro job %s was aborted or state changed; discarding",
@@ -880,7 +896,8 @@ def job_outro(
             if (
                 not talk
                 or not job
-                or talk.status not in ("assembling", "generating_previews")
+                or talk.status
+                not in (TalkStatus.ASSEMBLING, TalkStatus.GENERATING_PREVIEWS)
             ):
                 logger.info(
                     "Talk %s outro job %s was aborted or state changed; discarding",
@@ -958,7 +975,7 @@ def job_concat(
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "assembling":
+            if not talk or not job or talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
                     "Talk %s concat job %s was aborted or state changed; discarding",
                     talk_id,
@@ -1051,7 +1068,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "generating_previews":
+            if not talk or not job or talk.status != TalkStatus.GENERATING_PREVIEWS:
                 logger.info(
                     "Talk %s preview job %s was aborted or state changed; discarding",
                     talk_id,
@@ -1116,7 +1133,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            if talk.status != "assembling":
+            if talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
                     "Talk %s loudness job: talk status %s != assembling; discarding",
                     talk_id,
@@ -1187,7 +1204,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "assembling":
+            if not talk or not job or talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
                     "Talk %s loudness job %s was aborted or state changed; discarding",
                     talk_id,
@@ -1316,7 +1333,7 @@ def job_transcode(
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "transcoding":
+            if not talk or not job or talk.status != TalkStatus.TRANSCODING:
                 logger.info(
                     "Talk %s transcode job %s was aborted or state changed; discarding",
                     talk_id,
@@ -1386,7 +1403,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "uploading":
+            if not talk or not job or talk.status != TalkStatus.UPLOADING:
                 logger.info(
                     "Talk %s publish job %s was aborted or state changed; discarding",
                     talk_id,
@@ -1622,13 +1639,13 @@ def job_send_speaker_handoff_email(talk_id: int) -> bool:
     from app.models import Event
 
     with SessionLocal() as db:
-        talk = db.query(Talk).filter(Talk.id == talk_id).first()
+        talk = db.get(Talk, talk_id)
         if not talk or not talk.speaker_email:
             logger.info(
                 "Skipping handoff email: talk %s has no assigned speaker", talk_id
             )
             return True
-        event = db.query(Event).filter(Event.id == talk.event_id).first()
+        event = db.scalar(select(Event).where(Event.id == talk.event_id))
         event_synced = False
         if event is not None and isinstance(event, Event):
             event_synced = event.is_eventyay_synced
@@ -1676,7 +1693,7 @@ def job_send_password_reset_email(email: str) -> bool:
 
     clean_email = email.strip().lower()
     with SessionLocal() as db:
-        user = db.query(User).filter(User.email == clean_email).first()
+        user = db.scalar(select(User).where(User.email == clean_email))
         if not user or not user.is_active:
             logger.info(
                 "Skipping password reset email: user %s not found or inactive",

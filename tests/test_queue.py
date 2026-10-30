@@ -5,7 +5,7 @@ import yaml
 from app.tasks import STAGE_CONFIG
 
 
-def test_stage_config_contains_all_stages():
+def test_stage_config_contains_all_stages() -> None:
     expected_stages = {
         "ingest",
         "detect",
@@ -21,7 +21,7 @@ def test_stage_config_contains_all_stages():
     assert set(STAGE_CONFIG.keys()) == expected_stages
 
 
-def test_stage_config_queue_assignments():
+def test_stage_config_queue_assignments() -> None:
     for cfg in STAGE_CONFIG.values():
         assert "queue" in cfg
         assert "job_timeout" in cfg
@@ -40,17 +40,24 @@ def test_stage_config_queue_assignments():
     assert STAGE_CONFIG["publish"]["queue"] == "light"
 
 
-def test_transcode_timeout_profile():
+def _job_timeout(stage: str) -> int:
+    """Narrow a stage's job_timeout to int so it can be compared numerically."""
+    timeout = STAGE_CONFIG[stage]["job_timeout"]
+    assert isinstance(timeout, int)
+    return timeout
+
+
+def test_transcode_timeout_profile() -> None:
     # Heavy transcode timeout must be significantly longer than light stages
-    assert STAGE_CONFIG["transcode"]["job_timeout"] >= 3600
-    assert STAGE_CONFIG["detect"]["job_timeout"] <= 600
-    assert STAGE_CONFIG["cut"]["job_timeout"] <= 1800
-    assert STAGE_CONFIG["intro"]["job_timeout"] <= 600
-    assert STAGE_CONFIG["outro"]["job_timeout"] <= 600
-    assert STAGE_CONFIG["concat"]["job_timeout"] <= 1800
+    assert _job_timeout("transcode") >= 3600
+    assert _job_timeout("detect") <= 600
+    assert _job_timeout("cut") <= 1800
+    assert _job_timeout("intro") <= 600
+    assert _job_timeout("outro") <= 600
+    assert _job_timeout("concat") <= 1800
 
 
-def test_stage_config_exact_timeouts():
+def test_stage_config_exact_timeouts() -> None:
     expected_timeouts = {
         "detect": 300,
         "cut": 900,
@@ -66,7 +73,7 @@ def test_stage_config_exact_timeouts():
         assert STAGE_CONFIG[stage]["job_timeout"] == expected_timeout
 
 
-def test_docker_compose_worker_concurrency():
+def test_docker_compose_worker_concurrency() -> None:
     compose_path = Path(__file__).parent.parent / "docker-compose.yml"
     assert compose_path.is_file()
 
@@ -84,7 +91,7 @@ def test_docker_compose_worker_concurrency():
     assert "--concurrency" in heavy_cmd
 
 
-def test_docker_compose_postgres_volume_mount():
+def test_docker_compose_postgres_volume_mount() -> None:
     compose_path = Path(__file__).parent.parent / "docker-compose.yml"
     assert compose_path.is_file()
 

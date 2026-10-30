@@ -57,15 +57,15 @@ def _can_stream_copy(segments: list[Path]) -> bool:
 
                 audio_props: list[tuple[Any, ...]] = []
                 for a in audio_streams:
-                    ctx = a.codec_context
-                    fmt_name = ctx.format.name if ctx.format else None
+                    a_ctx = a.codec_context
+                    fmt_name = a_ctx.format.name if a_ctx.format else None
                     audio_props.append(
                         (
-                            ctx.name,
-                            ctx.sample_rate,
-                            ctx.channels,
+                            a_ctx.name,
+                            a_ctx.sample_rate,
+                            a_ctx.channels,
                             fmt_name,
-                            bytes(ctx.extradata or b""),
+                            bytes(a_ctx.extradata or b""),
                         )
                     )
 
@@ -311,9 +311,11 @@ def _concat_reencode(
                                 fps_graph.push(frame)
                                 while True:
                                     try:
-                                        emit_video_frame(fps_graph.pull())
+                                        pulled = fps_graph.pull()
                                     except (av.BlockingIOError, av.EOFError) as _:
                                         break
+                                    if isinstance(pulled, av.VideoFrame):
+                                        emit_video_frame(pulled)
                             else:
                                 emit_video_frame(frame)
 
@@ -330,9 +332,11 @@ def _concat_reencode(
                     fps_graph.push(None)
                     while True:
                         try:
-                            emit_video_frame(fps_graph.pull())
+                            pulled = fps_graph.pull()
                         except (av.BlockingIOError, av.EOFError) as _:
                             break
+                        if isinstance(pulled, av.VideoFrame):
+                            emit_video_frame(pulled)
 
             if resampler is not None:
                 for r_frame in resampler.resample(None):
@@ -366,7 +370,7 @@ def _concat_reencode(
                     black_frame = av.VideoFrame.from_ndarray(
                         np.zeros((can_h, can_w, 3), dtype=np.uint8), format="rgb24"
                     ).reformat(format="yuv420p")
-                    for _ in range(needed_frames):
+                    for i in range(needed_frames):
                         emit_video_frame(black_frame)
 
         if out_video is not None:

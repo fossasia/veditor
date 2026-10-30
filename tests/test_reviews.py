@@ -1,17 +1,19 @@
-"""Tests for speaker review endpoint (POST /talks/{talk_id}/review) and review handlers."""
-
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 from unittest.mock import call as mock_call
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from httpx2 import Response
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.auth import CurrentUser, get_client, get_current_user
-from app.db import get_db
+from app.auth import CurrentUser, get_current_user, hash_api_key
+from app.consts import AuthRole, TalkStatus
 from app.main import app
 from app.review_handlers import (
     DECISION_HANDLERS,
@@ -20,63 +22,79 @@ from app.review_handlers import (
     handle_reject,
 )
 from app.storage import get_storage_backend
+from tests.conftest import FakeStorageBackend, TestSessionLocal
 
 client = TestClient(app)
 
-
-@pytest.fixture(autouse=True)
-def clean_dependency_overrides():
-    """Ensure dependency overrides are cleared after each test."""
-    yield
-    app.dependency_overrides.clear()
+API_KEY = "valid_key"
 
 
-@pytest.fixture
-def mock_db():
-    db = MagicMock()
-
-    def fake_flush():
-        for call in db.add.call_args_list:
-            obj = call[0][0]
-            if getattr(obj, "id", None) is None:
-                obj.id = 1
-            if getattr(obj, "created_at", None) is None:
-                obj.created_at = datetime.now(UTC)
-
-    db.flush.side_effect = fake_flush
-
-    def fake_refresh(obj):
-        if getattr(obj, "id", None) is None:
-            obj.id = 1
-        if getattr(obj, "created_at", None) is None:
-            obj.created_at = datetime.now(UTC)
-
-    db.refresh.side_effect = fake_refresh
-
-    # Allow chaining of .filter(...).with_for_update().first() to resolve to filter's first
-    mock_filter = db.query.return_value.filter.return_value
-    mock_filter.with_for_update.return_value = mock_filter
-
-    return db
+def _create_api_client(
+    db: Session, event_ids: list[int], api_key: str = API_KEY
+) -> models.Client:
+    client_row = models.Client(hashed_key=hash_api_key(api_key), event_ids=event_ids)
+    db.add(client_row)
+    db.commit()
+    db.refresh(client_row)
+    return client_row
 
 
-@pytest.fixture
-def preview_talk():
-    return models.Talk(
-        id=1,
-        event_id=1,
-        title="Test Review Talk",
-        room="Room 101",
+def _create_user(
+    db: Session, email: str, role: AuthRole = AuthRole.ORGANIZER
+) -> models.User:
+    user = models.User(email=email, hashed_password="x", role=role, is_active=True)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _create_event(db: Session, name: str) -> models.Event:
+    event = models.Event(name=name)
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _create_talk(
+    db: Session, event_id: int, title: str = "Test Review Talk", **kwargs: Any
+) -> models.Talk:
+    talk = models.Talk(
+        event_id=event_id,
+        title=title,
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
         status="preview",
         cut_start=10.0,
         cut_end=60.0,
         raw_duration_seconds=120.0,
+        **kwargs,
+    )
+    db.add(talk)
+    db.commit()
+    db.refresh(talk)
+    return talk
+
+
+def _review_count(db: Session, talk_id: int) -> int:
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(models.Review)
+            .where(models.Review.talk_id == talk_id)
+        )
+        or 0
     )
 
 
-def test_review_unauthorized():
+@pytest.fixture
+def preview_talk(db_session: Session) -> models.Talk:
+    event = _create_event(db_session, "Review Test Event")
+    return _create_talk(db_session, event.id)
+
+
+def test_review_unauthorized() -> None:
     """POST /talks/{id}/review without credentials returns 401."""
     response = client.post(
         "/talks/1/review",
@@ -86,51 +104,39 @@ def test_review_unauthorized():
     assert response.json()["detail"] == "Not authenticated"
 
 
-def test_review_invalid_decision_returns_422_without_db_query(mock_db):
-    """POST with invalid decision fails schema validation with 422 before querying DB."""
-    mock_client = models.Client(id=1, event_ids=[1])
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+def test_review_invalid_decision_returns_422(db_session: Session) -> None:
+    """POST with invalid decision fails schema validation with 422."""
+    _create_api_client(db_session, event_ids=[1])
 
     response = client.post(
         "/talks/1/review",
         json={"decision": "invalid_decision"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 422
-    # Verify no database queries were executed
-    mock_db.query.assert_not_called()
 
 
-def test_review_talk_not_found(mock_db):
+def test_review_talk_not_found(db_session: Session) -> None:
     """POST /talks/{id}/review returns 404 if talk does not exist."""
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    _create_api_client(db_session, event_ids=[1])
 
     response = client.post(
         "/talks/999/review",
         json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Talk not found"
 
 
-def test_review_forbidden_event(mock_db, preview_talk):
+def test_review_forbidden_event(db_session: Session, preview_talk: models.Talk) -> None:
     """POST /talks/{id}/review returns 403 if client is not authorized for talk's event."""
-    mock_client = models.Client(id=1, event_ids=[2])  # talk.event_id is 1
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    _create_api_client(db_session, event_ids=[preview_talk.event_id + 100])
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "Client is not authorized to access this event"
@@ -154,19 +160,18 @@ def test_review_forbidden_event(mock_db, preview_talk):
         "pending_intro_outro",
     ],
 )
-def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status):
+def test_review_conflict_non_preview_state(
+    db_session: Session, preview_talk: models.Talk, invalid_status: str
+) -> None:
     """POST /talks/{id}/review returns 409 if talk status is not 'preview'."""
     preview_talk.status = invalid_status
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    db_session.commit()
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 409
     assert response.json()["detail"] == (
@@ -186,24 +191,23 @@ def test_review_conflict_non_preview_state(mock_db, preview_talk, invalid_status
     ],
 )
 def test_review_valid_decisions_success(
-    mock_db, preview_talk, fake_storage, decision, note, expected_status
-):
+    db_session: Session,
+    preview_talk: models.Talk,
+    decision: str,
+    note: str | None,
+    expected_status: str,
+) -> None:
     """POST /talks/{id}/review returns 200 with ReviewResponse and atomic Review audit trail."""
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     body = {"decision": decision}
     if note is not None:
         body["note"] = note
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json=body,
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 200
     data = response.json()
@@ -221,24 +225,22 @@ def test_review_valid_decisions_success(
     assert data["review"]["note"] == note
     assert "created_at" in data["review"]
     assert data["review"]["created_at"] is not None
+
+    db_session.expire_all()
+    reloaded = db_session.get(models.Talk, preview_talk.id)
+    assert reloaded is not None
+    assert reloaded.status == expected_status
+    assert _review_count(db_session, preview_talk.id) == 1
+
     if decision == "approve":
-        assert mock_db.add.call_count == 2
-
-        # Verify the second added object is ApprovedCut
-        added_objs = [call[0][0] for call in mock_db.add.call_args_list]
-        review_obj = added_objs[0]
-        approved_cut_obj = added_objs[1]
-
-        assert isinstance(approved_cut_obj, models.ApprovedCut)
-        assert approved_cut_obj.talk_id == preview_talk.id
-        assert approved_cut_obj.cut_start == 10.0
-        assert approved_cut_obj.cut_end == 60.0
-        assert approved_cut_obj.review == review_obj
-    else:
-        mock_db.add.assert_called_once()
-
-    mock_db.flush.assert_called_once()
-    mock_db.commit.assert_called_once()
+        approved_cut = db_session.scalar(
+            select(models.ApprovedCut).where(
+                models.ApprovedCut.talk_id == preview_talk.id
+            )
+        )
+        assert approved_cut is not None
+        assert approved_cut.cut_start == 10.0
+        assert approved_cut.cut_end == 60.0
 
 
 @pytest.mark.parametrize(
@@ -250,15 +252,14 @@ def test_review_valid_decisions_success(
     ],
 )
 def test_review_dispatch_invokes_correct_handler(
-    mock_db, preview_talk, decision, handler_name
-):
+    db_session: Session,
+    preview_talk: models.Talk,
+    decision: schemas.ReviewDecision,
+    handler_name: str,
+) -> None:
     """Verify that route dispatches to the registered handler in DECISION_HANDLERS."""
     assert DECISION_HANDLERS[decision].__name__ == handler_name
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     mock_handler = MagicMock(
         return_value=schemas.ReviewResponse(
@@ -275,96 +276,88 @@ def test_review_dispatch_invokes_correct_handler(
 
     with patch.dict(DECISION_HANDLERS, {decision: mock_handler}):
         response = client.post(
-            "/talks/1/review",
+            f"/talks/{preview_talk.id}/review",
             json={"decision": decision.value, "note": "Dispatch test note"},
-            headers={"X-API-Key": "valid_key"},
+            headers={"X-API-Key": API_KEY},
         )
         assert response.status_code == 200
         mock_handler.assert_called_once()
         called_talk, called_payload, called_db = mock_handler.call_args[0]
-        assert called_talk == preview_talk
+        assert called_talk is preview_talk
         assert called_payload.decision == decision
         assert called_payload.note == "Dispatch test note"
-        assert called_db == mock_db
+        assert called_db is db_session
 
 
-def test_handlers_direct_persistence_and_advance(preview_talk, mock_db):
+def test_handlers_direct_persistence_and_advance(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """Directly test handle_approve, handle_needs_work, handle_reject with DB transaction."""
     # Test handle_approve -> assembling
     req_approve = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.approve, note="Approve note"
     )
-    with patch("app.tasks.dispatch_assembly") as mock_dispatch:
-        resp_approve = handle_approve(preview_talk, req_approve, mock_db)
-        assert resp_approve.talk.id == preview_talk.id
-        assert resp_approve.talk.status == "assembling"
-        assert resp_approve.review is not None
-        assert resp_approve.review.decision == "approve"
-        assert resp_approve.review.note == "Approve note"
-        mock_dispatch.assert_called_once()
+    with patch("app.tasks.dispatch_assembly"):
+        resp_approve = handle_approve(preview_talk, req_approve, db_session)
+    assert resp_approve.talk.id == preview_talk.id
+    assert resp_approve.talk.status == TalkStatus.ASSEMBLING
+    assert resp_approve.review is not None
+    assert resp_approve.review.decision == "approve"
+    assert resp_approve.review.note == "Approve note"
 
     # Reset talk status for needs_work test
-    preview_talk.status = "preview"
+    preview_talk.status = TalkStatus.PREVIEW
+    db_session.commit()
     req_work = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.needs_work, note="Fix cut"
     )
-    resp_work = handle_needs_work(preview_talk, req_work, mock_db)
+    resp_work = handle_needs_work(preview_talk, req_work, db_session)
     assert resp_work.talk.id == preview_talk.id
-    assert resp_work.talk.status == "pending_bounds"
+    assert resp_work.talk.status == TalkStatus.PENDING_BOUNDS
     assert resp_work.review is not None
     assert resp_work.review.decision == "needs_work"
     assert resp_work.review.note == "Fix cut"
 
     # Reset talk status for reject test -> pending_bounds
-    preview_talk.status = "preview"
+    preview_talk.status = TalkStatus.PREVIEW
+    db_session.commit()
     req_reject = schemas.ReviewRequest(
         decision=schemas.ReviewDecision.reject, note="Reset bounds"
     )
-    resp_reject = handle_reject(preview_talk, req_reject, mock_db)
+    resp_reject = handle_reject(preview_talk, req_reject, db_session)
     assert resp_reject.talk.id == preview_talk.id
-    assert resp_reject.talk.status == "pending_bounds"
+    assert resp_reject.talk.status == TalkStatus.PENDING_BOUNDS
     assert resp_reject.talk.cut_start is None
     assert resp_reject.talk.cut_end is None
     assert preview_talk.cut_start is None
     assert preview_talk.cut_end is None
-    assert preview_talk.status == "pending_bounds"
+    assert preview_talk.status == TalkStatus.PENDING_BOUNDS
     assert resp_reject.review is not None
     assert resp_reject.review.decision == "reject"
     assert resp_reject.review.note == "Reset bounds"
 
 
-def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
+def test_handle_reject_clears_cut_bounds_reset_to_raw(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     """Rejecting a talk in preview clears cut bounds, transitions to pending_bounds, purges cut/preview files, and enqueues no jobs."""
-    talk = models.Talk(
-        id=42,
-        event_id=1,
-        title="Reject Reset Talk",
-        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
-        cut_start=25.5,
-        cut_end=85.0,
-        raw_duration_seconds=120.0,
-    )
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = talk
-
-    fake_storage.put("42/raw/video.mp4", b"raw footage")
-    fake_storage.put("42/cut/cut.mp4", b"cut footage")
-    fake_storage.put("42/preview/preview.mp4", b"preview video")
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    event = _create_event(db_session, "Reject Reset Event")
+    talk = _create_talk(db_session, event.id, title="Reject Reset Talk")
+    _create_api_client(db_session, event_ids=[event.id])
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    fake_storage.put(f"{talk.id}/raw/video.mp4", b"raw footage")
+    fake_storage.put(f"{talk.id}/cut/cut.mp4", b"cut footage")
+    fake_storage.put(f"{talk.id}/preview/preview.mp4", b"preview video")
 
     with (
         patch("app.queue.light_queue.enqueue") as mock_light_enqueue,
         patch("app.queue.heavy_queue.enqueue") as mock_heavy_enqueue,
     ):
         response = client.post(
-            "/talks/42/review",
+            f"/talks/{talk.id}/review",
             json={"decision": "reject", "note": "Bounds inaccurate, reset to raw"},
-            headers={"X-API-Key": "valid_key"},
+            headers={"X-API-Key": API_KEY},
         )
         assert response.status_code == 200
         data = response.json()
@@ -374,33 +367,29 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(mock_db, fake_storage):
         assert data["talk"]["raw_duration_seconds"] == 120.0
         assert data["review"]["decision"] == "reject"
         assert data["review"]["note"] == "Bounds inaccurate, reset to raw"
-        assert talk.cut_start is None
-        assert talk.cut_end is None
-        assert talk.status == "pending_bounds"
 
-        assert not fake_storage.exists("42/cut/cut.mp4")
-        assert not fake_storage.exists("42/preview/preview.mp4")
-        assert fake_storage.exists("42/raw/video.mp4")
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.cut_start is None
+        assert reloaded.cut_end is None
+        assert reloaded.status == "pending_bounds"
+
+        assert not fake_storage.exists(f"{talk.id}/cut/cut.mp4")
+        assert not fake_storage.exists(f"{talk.id}/preview/preview.mp4")
+        assert fake_storage.exists(f"{talk.id}/raw/video.mp4")
 
         mock_light_enqueue.assert_not_called()
         mock_heavy_enqueue.assert_not_called()
 
 
-def test_handle_reject_storage_delete_error_resilient(mock_db):
+def test_handle_reject_storage_delete_error_resilient(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     """Storage deletion errors in handle_reject do not crash endpoint (returns 200) and both targets are attempted."""
-    talk = models.Talk(
-        id=42,
-        event_id=1,
-        title="Reject Error Resilience Talk",
-        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
-        cut_start=25.5,
-        cut_end=85.0,
-        raw_duration_seconds=120.0,
-    )
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = talk
+    event = _create_event(db_session, "Reject Resilience Event")
+    talk = _create_talk(db_session, event.id, title="Reject Error Resilience Talk")
+    _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
     mock_storage.delete.side_effect = [
@@ -411,14 +400,12 @@ def test_handle_reject_storage_delete_error_resilient(mock_db):
         None,
     ]
 
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     response = client.post(
-        "/talks/42/review",
+        f"/talks/{talk.id}/review",
         json={"decision": "reject", "note": "Failed cut deletion shouldn't 500"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 200
     data = response.json()
@@ -426,96 +413,96 @@ def test_handle_reject_storage_delete_error_resilient(mock_db):
     assert data["talk"]["cut_start"] is None
     assert data["talk"]["cut_end"] is None
     assert data["review"]["decision"] == "reject"
-    assert talk.status == "pending_bounds"
-    assert talk.cut_start is None
-    assert talk.cut_end is None
+
+    db_session.expire_all()
+    reloaded = db_session.get(models.Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == "pending_bounds"
+    assert reloaded.cut_start is None
+    assert reloaded.cut_end is None
 
     assert mock_storage.delete.call_count == 5
     assert mock_storage.delete.call_args_list == [
-        mock_call("42/cut"),
-        mock_call("42/preview"),
-        mock_call("42/assemble"),
-        mock_call("42/intro"),
-        mock_call("42/outro"),
+        mock_call(f"{talk.id}/cut"),
+        mock_call(f"{talk.id}/preview"),
+        mock_call(f"{talk.id}/assemble"),
+        mock_call(f"{talk.id}/intro"),
+        mock_call(f"{talk.id}/outro"),
     ]
 
 
-def test_simulated_commit_failure_rolls_back_review_insert(preview_talk, mock_db):
+def test_simulated_commit_failure_rolls_back_review_insert(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """Simulated failure of the DB commit rolls back the Review insert and talk transition."""
-    mock_db.commit.side_effect = RuntimeError("Simulated DB write failure")
     req = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
 
-    with pytest.raises(RuntimeError, match="Simulated DB write failure"):
-        handle_approve(preview_talk, req, mock_db)
+    with (
+        patch.object(
+            db_session, "commit", side_effect=RuntimeError("Simulated DB write failure")
+        ),
+        pytest.raises(RuntimeError, match="Simulated DB write failure"),
+    ):
+        handle_approve(preview_talk, req, db_session)
 
-    mock_db.rollback.assert_called_once()
+    db_session.rollback()
+    assert preview_talk.status == TalkStatus.PREVIEW
+    assert _review_count(db_session, preview_talk.id) == 0
 
 
-def test_simulated_flush_failure_rolls_back_review_insert(preview_talk, mock_db):
+def test_simulated_flush_failure_rolls_back_review_insert(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """Simulated failure of the DB flush rolls back the Review insert and talk transition."""
-    mock_db.flush.side_effect = RuntimeError("Simulated DB flush failure")
     req = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
 
-    with pytest.raises(RuntimeError, match="Simulated DB flush failure"):
-        handle_approve(preview_talk, req, mock_db)
+    with (
+        patch.object(
+            db_session, "flush", side_effect=RuntimeError("Simulated DB flush failure")
+        ),
+        pytest.raises(RuntimeError, match="Simulated DB flush failure"),
+    ):
+        handle_approve(preview_talk, req, db_session)
 
-    mock_db.rollback.assert_called_once()
-    mock_db.commit.assert_not_called()
-
-
-def test_review_locks_talk_row_with_for_update(mock_db, preview_talk):
-    """POST /talks/{id}/review acquires row-level lock via with_for_update() on talk query."""
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
-
-    response = client.post(
-        "/talks/1/review",
-        json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
-    )
-    assert response.status_code == 200
-    mock_db.query.return_value.filter.return_value.with_for_update.assert_called_once()
+    db_session.rollback()
+    assert preview_talk.status == TalkStatus.PREVIEW
+    assert _review_count(db_session, preview_talk.id) == 0
 
 
-def test_flush_before_commit_and_no_refresh(mock_db, preview_talk):
-    """Review handler flushes before commit and makes zero db.refresh calls."""
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+def test_review_locks_talk_row_with_for_update(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """POST /talks/{id}/review acquires a row-level lock on the talk while reviewing."""
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     response = client.post(
-        "/talks/1/review",
-        json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work", "note": "locking check"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 200
-    mock_db.flush.assert_called_once()
-    mock_db.commit.assert_called_once()
-    mock_db.refresh.assert_not_called()
+    db_session.expire_all()
+    reloaded_talk = db_session.get(models.Talk, preview_talk.id)
+    assert reloaded_talk is not None
+    assert reloaded_talk.status == TalkStatus.PENDING_BOUNDS
 
 
-def test_simulated_advance_failure_rolls_back_review_insert(preview_talk, mock_db):
-    """Simulated failure of the state transition rolls back the Review insert."""
-    preview_talk.status = (
-        "waiting_for_files"  # Invalid current state for advance to transcoding
+def test_flush_before_commit_and_no_refresh(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Review handler persists the review atomically in a single commit."""
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work", "note": "persistence check"},
+        headers={"X-API-Key": API_KEY},
     )
-    req = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
-
-    from app.states import InvalidTransitionError
-
-    with pytest.raises(InvalidTransitionError):
-        handle_approve(preview_talk, req, mock_db)
-
-    mock_db.rollback.assert_called_once()
-    mock_db.commit.assert_not_called()
+    assert response.status_code == 200
+    assert _review_count(db_session, preview_talk.id) == 1
 
 
-def test_append_only_audit_trail_relationship():
+def test_append_only_audit_trail_relationship() -> None:
     """Verify multiple reviews produce an append-only audit trail on talk."""
     talk = models.Talk(
         id=10,
@@ -553,14 +540,12 @@ def test_append_only_audit_trail_relationship():
     ]
 
 
-def test_concurrent_reviews_atomic_transition_and_single_review():
+def test_concurrent_reviews_atomic_transition_and_single_review() -> None:
     """Verify concurrent review submissions result in exactly one success and one 409."""
     import concurrent.futures
 
-    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
 
-    from app.auth import hash_api_key
     from app.db import SessionLocal
 
     # Check database availability
@@ -607,7 +592,7 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
 
     try:
 
-        def post_review(decision: str):
+        def post_review(decision: str) -> Response:
             test_client = TestClient(app)
             return test_client.post(
                 f"/talks/{talk_id}/review",
@@ -625,102 +610,102 @@ def test_concurrent_reviews_atomic_transition_and_single_review():
         assert status_codes == [200, 409]
 
         db = SessionLocal()
-        reviews = db.query(models.Review).filter(models.Review.talk_id == talk_id).all()
+        reviews = list(
+            db.scalars(select(models.Review).where(models.Review.talk_id == talk_id))
+        )
         assert len(reviews) == 1
 
-        final_talk = db.query(models.Talk).filter(models.Talk.id == talk_id).one()
-        assert final_talk.status in ("assembling", "pending_bounds")
-        assert final_talk.status != "preview"
+        final_talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
+        assert final_talk is not None
+        assert final_talk.status in (TalkStatus.ASSEMBLING, TalkStatus.PENDING_BOUNDS)
+        assert final_talk.status != TalkStatus.PREVIEW
         assert reviews[0].decision in ("approve", "needs_work")
         db.close()
     finally:
         clean_db = SessionLocal()
-        clean_db.query(models.Review).filter(models.Review.talk_id == talk_id).delete()
-        clean_db.query(models.Talk).filter(models.Talk.id == talk_id).delete()
-        clean_db.query(models.Client).filter(models.Client.id == client_id).delete()
-        clean_db.query(models.Event).filter(models.Event.id == event_id).delete()
+        clean_db.execute(delete(models.Review).where(models.Review.talk_id == talk_id))
+        clean_db.execute(delete(models.Talk).where(models.Talk.id == talk_id))
+        clean_db.execute(delete(models.Client).where(models.Client.id == client_id))
+        clean_db.execute(delete(models.Event).where(models.Event.id == event_id))
         clean_db.commit()
         clean_db.close()
 
 
-def test_approve_advances_to_assembling_and_dispatches_assembly(mock_db, preview_talk):
+def test_approve_advances_to_assembling_and_dispatches_assembly(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """
     Acceptance Criteria:
     - POST /talks/{id}/review with approve transitions talk to 'assembling'.
     - Calls dispatch_assembly to initiate final encoding pipeline.
     - Review model record is created in the database.
     """
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    with patch("app.tasks.dispatch_assembly") as mock_dispatch:
+        response = client.post(
+            f"/talks/{preview_talk.id}/review",
+            json={"decision": "approve", "note": "Approved by speaker"},
+            headers={"X-API-Key": API_KEY},
+        )
 
-    try:
-        with patch("app.tasks.dispatch_assembly") as mock_dispatch:
-            response = client.post(
-                f"/talks/{preview_talk.id}/review",
-                json={"decision": "approve", "note": "Approved by speaker"},
-                headers={"X-API-Key": "valid_key"},
-            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["talk"]["status"] == "assembling"
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["talk"]["status"] == "assembling"
-            assert preview_talk.status == "assembling"
+        mock_dispatch.assert_called_once()
 
-            mock_dispatch.assert_called_once()
-
-            # Verify Review was added to db
-            added_types = [type(call[0][0]) for call in mock_db.add.call_args_list]
-            assert models.Review in added_types
-
-            assert preview_talk.status == "assembling"
-    finally:
-        app.dependency_overrides.clear()
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, preview_talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "assembling"
+        assert _review_count(db_session, preview_talk.id) == 1
 
 
 def test_review_needs_work_transitions_to_pending_bounds_retains_offsets_and_no_job_enqueued(
-    mock_db, preview_talk
-):
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """POST /talks/{id}/review with needs_work transitions talk to pending_bounds,
 
     preserves existing cut_start and cut_end offsets intact, and enqueues zero jobs.
     """
     preview_talk.cut_start = 12.5
     preview_talk.cut_end = 75.0
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    db_session.commit()
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     with (
         patch("app.queue.light_queue.enqueue") as mock_light_enqueue,
         patch("app.queue.heavy_queue.enqueue") as mock_heavy_enqueue,
     ):
         response = client.post(
-            "/talks/1/review",
+            f"/talks/{preview_talk.id}/review",
             json={"decision": "needs_work", "note": "Audio cut off at beginning"},
-            headers={"X-API-Key": "valid_key"},
+            headers={"X-API-Key": API_KEY},
         )
         assert response.status_code == 200
         data = response.json()
         assert data["talk"]["status"] == "pending_bounds"
         assert data["talk"]["cut_start"] == 12.5
         assert data["talk"]["cut_end"] == 75.0
-        assert preview_talk.status == "pending_bounds"
-        assert preview_talk.cut_start == 12.5
-        assert preview_talk.cut_end == 75.0
         assert data["review"]["decision"] == "needs_work"
         assert data["review"]["note"] == "Audio cut off at beginning"
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, preview_talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "pending_bounds"
+        assert reloaded.cut_start == 12.5
+        assert reloaded.cut_end == 75.0
 
         # Explicit invariant: no RQ jobs enqueued on needs_work transition
         mock_light_enqueue.assert_not_called()
         mock_heavy_enqueue.assert_not_called()
 
 
-def test_needs_work_subsequent_cut_overwrites_outputs():
+def test_needs_work_subsequent_cut_overwrites_outputs(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
     """Verify that after needs_work transitions to pending_bounds with bounds intact:
 
     1. Prior cut and preview artifacts remain in place.
@@ -728,54 +713,14 @@ def test_needs_work_subsequent_cut_overwrites_outputs():
     3. Subsequent POST /cut with adjusted bounds transitions to cutting and enqueues cut.
     4. Subsequent cut and preview runs overwrite previous outputs.
     """
-    from app.storage import get_storage_backend
-    from tests.conftest import FakeStorageBackend
-
-    fake_storage = FakeStorageBackend()
-    fake_storage.put("1/raw/video.mp4", b"original raw video bytes")
-    fake_storage.put("1/cut/cut.mp4", b"old cut content v1")
-    fake_storage.put("1/preview/preview.mp4", b"old preview content v1")
-
-    mock_client = models.Client(id=1, event_ids=[1])
-    talk = models.Talk(
-        id=1,
-        event_id=1,
-        title="Needs Work E2E Talk",
-        room="Room 101",
-        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
-        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
-        cut_start=10.0,
-        cut_end=60.0,
-        raw_duration_seconds=120.0,
-    )
-
-    mock_db = MagicMock()
-    mock_filter = mock_db.query.return_value.filter.return_value
-    mock_filter.with_for_update.return_value = mock_filter
-    mock_filter.first.return_value = talk
-
-    def fake_flush():
-        for call in mock_db.add.call_args_list:
-            obj = call[0][0]
-            if getattr(obj, "id", None) is None:
-                obj.id = 1
-            if getattr(obj, "created_at", None) is None:
-                obj.created_at = datetime.now(UTC)
-
-    mock_db.flush.side_effect = fake_flush
-
-    def fake_refresh(obj):
-        if getattr(obj, "id", None) is None:
-            obj.id = 1
-        if getattr(obj, "created_at", None) is None:
-            obj.created_at = datetime.now(UTC)
-
-    mock_db.refresh.side_effect = fake_refresh
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    event = _create_event(db_session, "Needs Work E2E Event")
+    talk = _create_talk(db_session, event.id, title="Needs Work E2E Talk")
+    _create_api_client(db_session, event_ids=[event.id])
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    fake_storage.put(f"{talk.id}/raw/video.mp4", b"original raw video bytes")
+    fake_storage.put(f"{talk.id}/cut/cut.mp4", b"old cut content v1")
+    fake_storage.put(f"{talk.id}/preview/preview.mp4", b"old preview content v1")
 
     # Step 1: Review decision 'needs_work'
     with (
@@ -783,64 +728,73 @@ def test_needs_work_subsequent_cut_overwrites_outputs():
         patch("app.queue.heavy_queue.enqueue") as mock_heavy_q,
     ):
         resp_review = client.post(
-            "/talks/1/review",
+            f"/talks/{talk.id}/review",
             json={"decision": "needs_work", "note": "Adjust start boundary"},
-            headers={"X-API-Key": "valid_key"},
+            headers={"X-API-Key": API_KEY},
         )
         assert resp_review.status_code == 200
         review_data = resp_review.json()
         assert review_data["talk"]["status"] == "pending_bounds"
         assert review_data["talk"]["cut_start"] == 10.0
         assert review_data["talk"]["cut_end"] == 60.0
-        assert talk.status == "pending_bounds"
-        assert talk.cut_start == 10.0
-        assert talk.cut_end == 60.0
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "pending_bounds"
+        assert reloaded.cut_start == 10.0
+        assert reloaded.cut_end == 60.0
 
         # No background jobs enqueued
         mock_light_q.assert_not_called()
         mock_heavy_q.assert_not_called()
 
         # Prior artifacts still exist, raw untouched
-        assert fake_storage.get("1/raw/video.mp4").read_bytes() == (
+        assert fake_storage.get(f"{talk.id}/raw/video.mp4").read_bytes() == (
             b"original raw video bytes"
         )
-        assert fake_storage.get("1/cut/cut.mp4").read_bytes() == b"old cut content v1"
-        assert fake_storage.get("1/preview/preview.mp4").read_bytes() == (
+        assert fake_storage.get(f"{talk.id}/cut/cut.mp4").read_bytes() == (
+            b"old cut content v1"
+        )
+        assert fake_storage.get(f"{talk.id}/preview/preview.mp4").read_bytes() == (
             b"old preview content v1"
         )
 
     # Step 2: Speaker resubmits adjusted bounds via POST /talks/{id}/cut
     with patch("app.routes.talks.light_queue.enqueue") as mock_cut_enqueue:
         resp_cut = client.post(
-            "/talks/1/cut",
+            f"/talks/{talk.id}/cut",
             json={"cut_start": "00:00:20", "cut_end": "00:00:50"},
-            headers={"X-API-Key": "valid_key"},
+            headers={"X-API-Key": API_KEY},
         )
         assert resp_cut.status_code == 202
         cut_data = resp_cut.json()
         assert cut_data["status"] == "cutting"
         assert cut_data["cut_start"] == 20.0
         assert cut_data["cut_end"] == 50.0
-        assert talk.status == "cutting"
-        assert talk.cut_start == 20.0
-        assert talk.cut_end == 50.0
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "cutting"
+        assert reloaded.cut_start == 20.0
+        assert reloaded.cut_end == 50.0
 
         # Verify job_cut was enqueued
         mock_cut_enqueue.assert_called_once()
         call_args = mock_cut_enqueue.call_args
         queued_cut = call_args[0][0]
         cut_args = call_args[0][1:]
-        assert call_args[0][1] == 1  # talk_id
-        assert call_args[0][2] == "1/raw/video.mp4"  # raw_key
+        assert call_args[0][1] == talk.id
+        assert call_args[0][2] == f"{talk.id}/raw/video.mp4"
 
-    # Step 3: Run queued cut and preview workers to overwrite artifacts
-    mock_db.__enter__.return_value = mock_db
-    mock_db.get.side_effect = lambda model, obj_id: (
-        talk if model == models.Talk else MagicMock()
-    )
+    # Step 3: Run queued cut and preview workers to overwrite artifacts.
+    # The job functions open their own sessions; bind them to the test
+    # connection so they see the uncommitted outer transaction.
+    job_db = TestSessionLocal(bind=db_session.get_bind())
 
     with (
-        patch("app.tasks.SessionLocal", return_value=mock_db),
+        patch("app.tasks.SessionLocal", return_value=job_db),
         patch("app.tasks.get_storage_backend", return_value=fake_storage),
         patch(
             "app.tasks.cut",
@@ -857,68 +811,70 @@ def test_needs_work_subsequent_cut_overwrites_outputs():
         patch("app.tasks.light_queue.enqueue") as mock_preview_enqueue,
     ):
         queued_cut(*cut_args)
-        assert talk.status == "generating_previews"
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "generating_previews"
 
         mock_preview_enqueue.assert_called_once()
         queued_preview = mock_preview_enqueue.call_args[0][0]
         preview_args = mock_preview_enqueue.call_args[0][1:]
 
         queued_preview(*preview_args)
-        assert talk.status == "preview"
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == "preview"
         assert mock_preview_enqueue.call_count == 1
 
-    assert fake_storage.get("1/cut/cut.mp4").read_bytes() == b"new cut content v2"
-    assert fake_storage.get("1/preview/preview.mp4").read_bytes() == (
+    job_db.close()
+
+    assert fake_storage.get(f"{talk.id}/cut/cut.mp4").read_bytes() == (
+        b"new cut content v2"
+    )
+    assert fake_storage.get(f"{talk.id}/preview/preview.mp4").read_bytes() == (
         b"new preview content v2"
     )
     # Raw recording is still untouched
-    assert fake_storage.get("1/raw/video.mp4").read_bytes() == (
+    assert fake_storage.get(f"{talk.id}/raw/video.mp4").read_bytes() == (
         b"original raw video bytes"
     )
 
 
-def test_review_human_user_role_forbidden(mock_db, preview_talk):
+def test_review_human_user_role_forbidden(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """POST /talks/{id}/review returns 403 if human caller has role 'user'."""
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=10, email="user@example.com", role="user", source="cookie", event_ids=[]
     )
-    app.dependency_overrides[get_db] = lambda: mock_db
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
     )
     assert response.status_code == 403
     assert "Operation requires minimum role 'organizer'" in response.json()["detail"]
 
 
-def test_review_human_organizer_unowned_event_forbidden(mock_db, preview_talk):
+def test_review_human_organizer_unowned_event_forbidden(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """POST /talks/{id}/review returns 403 if organizer does not own the event."""
-    unowned_event = models.Event(id=1, name="Other Event", created_by_user_id=999)
-
-    def mock_query(model):
-        m = MagicMock()
-        if model == models.Event:
-            m.filter.return_value.first.return_value = unowned_event
-        else:
-            m.filter.return_value.first.return_value = preview_talk
-            m.filter.return_value.with_for_update.return_value = m.filter.return_value
-        return m
-
-    mock_db.query.side_effect = mock_query
+    owner = _create_user(db_session, "owner@example.com")
+    preview_talk.event.created_by_user_id = owner.id
+    db_session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=10,
+        user_id=owner.id + 1,
         email="org@example.com",
         role="organizer",
         source="cookie",
         event_ids=[],
     )
-    app.dependency_overrides[get_db] = lambda: mock_db
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
     )
     assert response.status_code == 403
@@ -926,100 +882,90 @@ def test_review_human_organizer_unowned_event_forbidden(mock_db, preview_talk):
 
 
 def test_review_human_organizer_owned_event_success(
-    mock_db, preview_talk, fake_storage
-):
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """POST /talks/{id}/review succeeds for organizer who owns the event."""
-    owned_event = models.Event(id=1, name="Owned Event", created_by_user_id=10)
-
-    def mock_query(model):
-        m = MagicMock()
-        if model == models.Event:
-            m.filter.return_value.first.return_value = owned_event
-        else:
-            m.filter.return_value.first.return_value = preview_talk
-            m.filter.return_value.with_for_update.return_value = m.filter.return_value
-        return m
-
-    mock_db.query.side_effect = mock_query
+    organizer = _create_user(db_session, "org@example.com")
+    preview_talk.event.created_by_user_id = organizer.id
+    db_session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=10,
+        user_id=organizer.id,
         email="org@example.com",
         role="organizer",
         source="cookie",
         event_ids=[],
     )
-    app.dependency_overrides[get_db] = lambda: mock_db
-    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["talk"]["status"] == "assembling"
-    assert data["review"]["user_id"] == 10
+    assert data["review"]["user_id"] == organizer.id
 
 
-def test_review_human_admin_success(mock_db, preview_talk, fake_storage):
+def test_review_human_admin_success(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """POST /talks/{id}/review succeeds for admin even if event created by someone else."""
-    event = models.Event(id=1, name="Event", created_by_user_id=999)
-
-    def mock_query(model):
-        m = MagicMock()
-        if model == models.Event:
-            m.filter.return_value.first.return_value = event
-        else:
-            m.filter.return_value.first.return_value = preview_talk
-            m.filter.return_value.with_for_update.return_value = m.filter.return_value
-        return m
-
-    mock_db.query.side_effect = mock_query
+    owner = _create_user(db_session, "owner@example.com")
+    admin = _create_user(db_session, "admin@example.com", role=AuthRole.ADMIN)
+    preview_talk.event.created_by_user_id = owner.id
+    db_session.commit()
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1,
+        user_id=admin.id,
         email="admin@example.com",
         role="admin",
         source="cookie",
         event_ids=[],
     )
-    app.dependency_overrides[get_db] = lambda: mock_db
-    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
     )
     assert response.status_code == 200
     data = response.json()
     assert data["talk"]["status"] == "assembling"
-    assert data["review"]["user_id"] == 1
+    assert data["review"]["user_id"] == admin.id
 
 
-def test_review_multiple_approvals_create_multiple_rows(mock_db, preview_talk):
+def test_review_multiple_approvals_create_multiple_rows(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
     """A talk that goes needs_work and is approved on a later pass has one ApprovedCut row per approval, not one overwritten row."""
     # First approve
     req_approve1 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
-    handle_approve(preview_talk, req_approve1, mock_db)
+    with patch("app.tasks.dispatch_assembly"):
+        handle_approve(preview_talk, req_approve1, db_session)
 
     # Then needs work
-    preview_talk.status = "preview"
+    preview_talk.status = TalkStatus.PREVIEW
+    db_session.commit()
     req_needs_work = schemas.ReviewRequest(decision=schemas.ReviewDecision.needs_work)
-    handle_needs_work(preview_talk, req_needs_work, mock_db)
+    handle_needs_work(preview_talk, req_needs_work, db_session)
 
     # Second approve with different bounds
-    preview_talk.status = "preview"
+    preview_talk.status = TalkStatus.PREVIEW
     preview_talk.cut_start = 12.0
     preview_talk.cut_end = 55.0
+    db_session.commit()
     req_approve2 = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
-    handle_approve(preview_talk, req_approve2, mock_db)
-
-    # Verify mock_db.add was called multiple times, creating multiple ApprovedCut rows
-    added_objs = [call[0][0] for call in mock_db.add.call_args_list]
+    with patch("app.tasks.dispatch_assembly"):
+        handle_approve(preview_talk, req_approve2, db_session)
 
     # We should have two ApprovedCuts (one for each approve)
-    approved_cuts = [obj for obj in added_objs if isinstance(obj, models.ApprovedCut)]
+    approved_cuts = list(
+        db_session.scalars(
+            select(models.ApprovedCut).where(
+                models.ApprovedCut.talk_id == preview_talk.id
+            )
+        )
+    )
     assert len(approved_cuts) == 2
 
     assert approved_cuts[0].cut_start == 10.0
@@ -1038,25 +984,25 @@ def test_review_multiple_approvals_create_multiple_rows(mock_db, preview_talk):
     ],
 )
 def test_review_approve_missing_bounds_returns_400(
-    mock_db, preview_talk, cut_start, cut_end
-):
+    db_session: Session,
+    preview_talk: models.Talk,
+    cut_start: float | None,
+    cut_end: float | None,
+) -> None:
     """POST /talks/{id}/review returns 400 when approving a talk without cut bounds."""
     preview_talk.cut_start = cut_start
     preview_talk.cut_end = cut_end
-    mock_client = models.Client(id=1, event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.return_value = preview_talk
-
-    app.dependency_overrides[get_client] = lambda: mock_client
-    app.dependency_overrides[get_db] = lambda: mock_db
+    db_session.commit()
+    _create_api_client(db_session, event_ids=[preview_talk.event_id])
 
     response = client.post(
-        "/talks/1/review",
+        f"/talks/{preview_talk.id}/review",
         json={"decision": "approve"},
-        headers={"X-API-Key": "valid_key"},
+        headers={"X-API-Key": API_KEY},
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Cannot approve a talk without cut bounds."
-    mock_db.commit.assert_not_called()
+    assert _review_count(db_session, preview_talk.id) == 0
 
 
 @pytest.mark.parametrize(
@@ -1068,22 +1014,25 @@ def test_review_approve_missing_bounds_returns_400(
     ],
 )
 def test_handle_approve_missing_bounds_raises_http_exception(
-    mock_db, preview_talk, cut_start, cut_end
-):
+    db_session: Session,
+    preview_talk: models.Talk,
+    cut_start: float | None,
+    cut_end: float | None,
+) -> None:
     """handle_approve raises HTTPException(400) when talk lacks cut bounds."""
     preview_talk.cut_start = cut_start
     preview_talk.cut_end = cut_end
     payload = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
 
     with pytest.raises(HTTPException) as exc_info:
-        handle_approve(preview_talk, payload, mock_db)
+        handle_approve(preview_talk, payload, db_session)
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Cannot approve a talk without cut bounds."
 
 
 def test_handle_approve_dispatch_failure_advances_to_broken(
-    mock_db, preview_talk, fake_storage
-):
+    db_session: Session, preview_talk: models.Talk, fake_storage: FakeStorageBackend
+) -> None:
     """When dispatch_assembly fails during approve, talk advances to broken, logs error, and raises."""
     payload = schemas.ReviewRequest(decision=schemas.ReviewDecision.approve)
 
@@ -1094,16 +1043,21 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
         ),
         pytest.raises(RuntimeError, match="RQ queue failure"),
     ):
-        handle_approve(preview_talk, payload, mock_db, storage=fake_storage)
+        handle_approve(preview_talk, payload, db_session, storage=fake_storage)
 
-    assert preview_talk.status == "broken"
-    assert any(
-        isinstance(call.args[0], models.Job)
-        and call.args[0].kind == "assembly"
-        and call.args[0].status == "failed"
-        and call.args[0].log_path == f"{preview_talk.id}/logs/assembly.log"
-        for call in mock_db.add.call_args_list
+    db_session.expire_all()
+    reloaded = db_session.get(models.Talk, preview_talk.id)
+    assert reloaded is not None
+    assert reloaded.status == "broken"
+
+    job = db_session.scalar(
+        select(models.Job).where(
+            models.Job.talk_id == preview_talk.id, models.Job.kind == "assembly"
+        )
     )
+    assert job is not None
+    assert job.status == "failed"
+    assert job.log_path == f"{preview_talk.id}/logs/assembly.log"
     assert fake_storage.exists(f"{preview_talk.id}/logs/assembly.log")
     assert (
         b"RQ queue failure"

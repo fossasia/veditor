@@ -14,7 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
@@ -28,6 +28,8 @@ from app.security import SSOTokenPayload, decode_sso_token
 from app.storage import StorageBackend, get_storage_backend
 from app.tasks import job_waveform
 from app.ui.templating import templates
+
+from ..consts import AuthRole, SSOScopeType, TalkStatus
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +63,8 @@ def get_ui_client(
             detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
         )
     hashed_key = hash_api_key(api_key)
-    client = (
-        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    client = db.scalar(
+        select(models.Client).where(models.Client.hashed_key == hashed_key)
     )
     if not client:
         raise HTTPException(
@@ -81,8 +83,8 @@ def get_optional_ui_client(
     if not api_key:
         return None
     hashed_key = hash_api_key(api_key)
-    return (
-        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    return db.scalar(
+        select(models.Client).where(models.Client.hashed_key == hashed_key)
     )
 
 
@@ -108,21 +110,23 @@ def _authorize_studio_talk(
     if raw_sso:
         sso_payload = decode_sso_token(raw_sso)
         if sso_payload:
-            talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+            talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
             if not talk:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=not_found_detail,
                 )
             authorized = (
-                sso_payload.scope_type == "talk" and sso_payload.scope_id == talk.id
+                sso_payload.scope_type == SSOScopeType.TALK
+                and sso_payload.scope_id == talk.id
             ) or (
-                sso_payload.scope_type == "event"
+                sso_payload.scope_type == SSOScopeType.EVENT
                 and sso_payload.scope_id == talk.event_id
                 and (
-                    sso_payload.role != "speaker"
+                    sso_payload.role != AuthRole.SPEAKER
                     or (
                         talk.speaker_email
+                        and sso_payload.email is not None
                         and talk.speaker_email.lower() == sso_payload.email.lower()
                     )
                 )
@@ -139,7 +143,7 @@ def _authorize_studio_talk(
                     role=sso_payload.role,
                     source="sso",
                     event_ids=[sso_payload.scope_id]
-                    if sso_payload.scope_type == "event"
+                    if sso_payload.scope_type == SSOScopeType.EVENT
                     else [],
                     scope_type=sso_payload.scope_type,
                     scope_id=sso_payload.scope_id,
@@ -148,11 +152,10 @@ def _authorize_studio_talk(
 
     user = _get_authenticated_user_from_cookie(request, db)
     if user:
-        talk = (
-            db.query(models.Talk)
+        talk = db.scalar(
+            select(models.Talk)
             .options(selectinload(models.Talk.event))
-            .filter(models.Talk.id == talk_id)
-            .first()
+            .where(models.Talk.id == talk_id)
         )
         if not talk:
             raise HTTPException(
@@ -160,7 +163,7 @@ def _authorize_studio_talk(
                 detail=not_found_detail,
             )
         authorized = (
-            user.role == "admin"
+            user.role == AuthRole.ADMIN
             or (
                 talk.speaker_email
                 and user.email
@@ -174,10 +177,8 @@ def _authorize_studio_talk(
             )
             if api_key:
                 hashed_key = hash_api_key(api_key)
-                client = (
-                    db.query(models.Client)
-                    .filter(models.Client.hashed_key == hashed_key)
-                    .first()
+                client = db.scalar(
+                    select(models.Client).where(models.Client.hashed_key == hashed_key)
                 )
                 if client and talk.event_id in client.event_ids:
                     authorized = True
@@ -187,12 +188,12 @@ def _authorize_studio_talk(
                 detail=not_found_detail,
             )
         if (
-            user.role == "user"
+            user.role == AuthRole.USER
             and talk.speaker_email
             and user.email
             and talk.speaker_email.lower() == user.email.lower()
         ):
-            user.role = "speaker"
+            user.role = AuthRole.SPEAKER
             db.commit()
         if hasattr(request, "state"):
             request.state.user = user
@@ -205,19 +206,18 @@ def _authorize_studio_talk(
             detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
         )
     hashed_key = hash_api_key(api_key)
-    client = (
-        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    client = db.scalar(
+        select(models.Client).where(models.Client.hashed_key == hashed_key)
     )
     if not client:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
         )
-    talk = (
-        db.query(models.Talk)
+    talk = db.scalar(
+        select(models.Talk)
         .options(selectinload(models.Talk.event))
-        .filter(models.Talk.id == talk_id)
-        .first()
+        .where(models.Talk.id == talk_id)
     )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
@@ -228,21 +228,21 @@ def _authorize_studio_talk(
 
 
 ALL_STATUSES = [
-    "waiting_for_files",
-    "detecting",
-    "pending_approval",
-    "pending_bounds",
-    "cutting",
-    "generating_previews",
-    "preview",
-    "pending_intro_outro",
-    "assembling",
-    "transcoding",
-    "uploading",
-    "needs_work",
-    "done",
-    "rejected",
-    "broken",
+    TalkStatus.WAITING_FILES,
+    TalkStatus.DETECTING,
+    TalkStatus.PENDING_APPROVAL,
+    TalkStatus.PENDING_BOUNDS,
+    TalkStatus.CUTTING,
+    TalkStatus.GENERATING_PREVIEWS,
+    TalkStatus.PREVIEW,
+    TalkStatus.PENDING_INTRO_OUTRO,
+    TalkStatus.ASSEMBLING,
+    TalkStatus.TRANSCODING,
+    TalkStatus.UPLOADING,
+    TalkStatus.NEEDS_WORK,
+    TalkStatus.DONE,
+    TalkStatus.REJECTED,
+    TalkStatus.BROKEN,
 ]
 
 MILESTONES_DEF = [
@@ -268,22 +268,22 @@ MILESTONES_DEF = [
     },
 ]
 
-STAGE_MILESTONE_MAP = {
-    "waiting_for_files": 0,
-    "detecting": 0,
-    "pending_approval": 0,
-    "pending_intro_outro": 0,
-    "rejected": 0,
-    "pending_bounds": 1,
-    "needs_work": 1,
-    "cutting": 2,
-    "generating_previews": 2,
-    "preview": 2,
-    "assembling": 3,
-    "transcoding": 3,
-    "uploading": 3,
-    "done": 4,  # All milestones complete
-    "broken": 3,
+STAGE_MILESTONE_MAP: dict[str, int] = {
+    TalkStatus.WAITING_FILES: 0,
+    TalkStatus.DETECTING: 0,
+    TalkStatus.PENDING_APPROVAL: 0,
+    TalkStatus.PENDING_INTRO_OUTRO: 0,
+    TalkStatus.REJECTED: 0,
+    TalkStatus.PENDING_BOUNDS: 1,
+    TalkStatus.NEEDS_WORK: 1,
+    TalkStatus.CUTTING: 2,
+    TalkStatus.GENERATING_PREVIEWS: 2,
+    TalkStatus.PREVIEW: 2,
+    TalkStatus.ASSEMBLING: 3,
+    TalkStatus.TRANSCODING: 3,
+    TalkStatus.UPLOADING: 3,
+    TalkStatus.DONE: 4,  # All milestones complete
+    TalkStatus.BROKEN: 3,
 }
 
 
@@ -292,10 +292,10 @@ def get_evaluated_milestones(status: str) -> list[dict]:
     result = []
     for idx, m in enumerate(MILESTONES_DEF):
         item = dict(m)
-        if status == "done" or current_idx > idx:
+        if status == TalkStatus.DONE or current_idx > idx:
             item["state"] = "completed"
         elif current_idx == idx:
-            if status in ("rejected", "broken"):
+            if status in (TalkStatus.REJECTED, TalkStatus.BROKEN):
                 item["state"] = "failed"
             else:
                 item["state"] = "active"
@@ -322,7 +322,7 @@ def dashboard(
     status_filter: str | None = None,
     q: str | None = None,
     sso_token: str | None = None,
-):
+) -> Response:
     # 1. Check if landing with ?sso_token=...
     if sso_token is not None or "sso_token" in request.query_params:
         raw_sso = (
@@ -344,7 +344,7 @@ def dashboard(
         is_secure = (request.url.scheme == "https") or (
             settings.environment.lower() in ("production", "prod")
         )
-        if sso_payload.scope_type == "talk":
+        if sso_payload.scope_type == SSOScopeType.TALK:
             dest_url = f"/studio/talks/{sso_payload.scope_id}"
         else:
             dest_url = f"/studio?event_id={sso_payload.scope_id}"
@@ -381,7 +381,7 @@ def room_talks(
     event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
-):
+) -> Response:
     return _render_talks_page(
         request,
         db,
@@ -421,7 +421,7 @@ def _render_talks_page(
     status_filter: str | None,
     q: str | None,
     room: str | None = None,
-):
+) -> Response:
     """Render the talks list, scoped to the caller and optionally to an event/room."""
     # Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
@@ -451,40 +451,44 @@ def _render_talks_page(
         return resp
 
     if sso_user:
-        if sso_user.scope_type == "talk":
+        if sso_user.scope_type == SSOScopeType.TALK:
             return RedirectResponse(
                 url=f"/studio/talks/{sso_user.scope_id}",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         event_id = sso_user.scope_id
-        user_events = db.query(models.Event).filter(models.Event.id == event_id).all()
+        user_events = list(
+            db.scalars(select(models.Event).where(models.Event.id == event_id))
+        )
     elif user:
-        if user.role in ("organizer", "admin"):
+        if user.role in (AuthRole.ORGANIZER, AuthRole.ADMIN):
             filters = [models.Event.created_by_user_id == user.id]
             if user.email:
                 speaker_events = (
-                    db.query(models.Talk.event_id)
-                    .filter(
+                    select(models.Talk.event_id)
+                    .where(
                         models.Talk.speaker_email == user.email.lower(),
                         models.Talk.event_id.isnot(None),
                     )
                     .scalar_subquery()
                 )
                 filters.append(models.Event.id.in_(speaker_events))
-            user_events = (
-                db.query(models.Event)
-                .filter(or_(*filters))
-                .order_by(models.Event.name.asc())
-                .all()
+            user_events = list(
+                db.scalars(
+                    select(models.Event)
+                    .where(or_(*filters))
+                    .order_by(models.Event.name.asc())
+                )
             )
         else:
             user_events = []
     else:
-        user_events = (
-            db.query(models.Event)
-            .filter(models.Event.id.in_(client.event_ids or []))
-            .order_by(models.Event.name.asc())
-            .all()
+        user_events = list(
+            db.scalars(
+                select(models.Event)
+                .where(models.Event.id.in_(client.event_ids if client else []))
+                .order_by(models.Event.name.asc())
+            )
         )
     if not sso_user:
         event_id = _resolve_event_id(event_id, user_events)
@@ -496,23 +500,28 @@ def _render_talks_page(
     if (
         user
         and user.email
-        and user.role == "user"
-        and db.query(models.Talk)
-        .filter(models.Talk.speaker_email == user.email.lower())
-        .first()
+        and user.role == AuthRole.USER
+        and db.scalar(
+            select(models.Talk).where(models.Talk.speaker_email == user.email.lower())
+        )
     ):
-        user.role = "speaker"
+        user.role = AuthRole.SPEAKER
         db.commit()
-    if user and user.role == "speaker" and user.email:
+    if user and user.role == AuthRole.SPEAKER and user.email:
         scope = models.Talk.speaker_email == user.email.lower()
     else:
         scope = models.Talk.event_id.in_([e.id for e in user_events])
-        if sso_user and sso_user.role == "speaker":
-            scope = and_(
-                scope,
-                func.lower(models.Talk.speaker_email) == sso_user.email.lower(),
-            )
-        elif user and user.email and user.role != "admin":
+        if sso_user and sso_user.role == AuthRole.SPEAKER:
+            if sso_user.email:
+                scope = and_(
+                    scope,
+                    func.lower(models.Talk.speaker_email) == sso_user.email.lower(),
+                )
+            else:
+                # Event-scoped speaker tokens always carry an email (enforced
+                # at decode time); a missing one grants no visible talks.
+                scope = and_(scope, false())
+        elif user and user.email and user.role != AuthRole.ADMIN:
             scope = or_(
                 scope,
                 models.Talk.speaker_email == user.email.lower(),
@@ -520,48 +529,56 @@ def _render_talks_page(
     if event_id is not None:
         scope = and_(scope, models.Talk.event_id == event_id)
 
-    query = (
-        db.query(models.Talk)
+    stmt = (
+        select(models.Talk)
         .options(selectinload(models.Talk.jobs), selectinload(models.Talk.event))
-        .filter(scope)
+        .where(scope)
     )
     if room is not None:
-        query = query.filter(models.Talk.room == room)
+        stmt = stmt.where(models.Talk.room == room)
     if status_filter:
-        query = query.filter(models.Talk.status == status_filter)
+        stmt = stmt.where(models.Talk.status == status_filter)
 
-    talks = query.order_by(models.Talk.start.desc()).all()
+    talks = list(db.scalars(stmt.order_by(models.Talk.start.desc())))
     if q:
         q_lower = q.lower()
         talks = [t for t in talks if q_lower in t.title.lower()]
 
-    all_rooms = [
-        r
-        for (r,) in db.query(models.Talk.room)
-        .filter(scope, models.Talk.room.isnot(None), models.Talk.room != "")
-        .distinct()
-        .order_by(models.Talk.room)
-    ]
+    all_rooms = list(
+        db.scalars(
+            select(models.Talk.room)
+            .where(scope, models.Talk.room.isnot(None), models.Talk.room != "")
+            .distinct()
+            .order_by(models.Talk.room)
+        )
+    )
 
     stats_scope = scope if room is None else and_(scope, models.Talk.room == room)
     status_counts: dict[str, int] = dict(
-        db.query(models.Talk.status, func.count(models.Talk.id))
-        .filter(stats_scope)
-        .group_by(models.Talk.status)
-        .all()
+        db.execute(
+            select(models.Talk.status, func.count(models.Talk.id))
+            .where(stats_scope)
+            .group_by(models.Talk.status)
+        ).all()
     )
     current_event = next((e for e in user_events if e.id == event_id), None)
 
     stats = {
         "total": sum(status_counts.values()),
-        "pending": status_counts.get("pending_approval", 0),
+        "pending": status_counts.get(TalkStatus.PENDING_APPROVAL, 0),
         "processing": sum(
             status_counts.get(s, 0)
-            for s in ("cutting", "generating_previews", "transcoding", "uploading")
+            for s in (
+                TalkStatus.CUTTING,
+                TalkStatus.GENERATING_PREVIEWS,
+                TalkStatus.TRANSCODING,
+                TalkStatus.UPLOADING,
+            )
         ),
-        "preview": status_counts.get("preview", 0),
-        "done": status_counts.get("done", 0),
-        "broken": status_counts.get("broken", 0) + status_counts.get("rejected", 0),
+        "preview": status_counts.get(TalkStatus.PREVIEW, 0),
+        "done": status_counts.get(TalkStatus.DONE, 0),
+        "broken": status_counts.get(TalkStatus.BROKEN, 0)
+        + status_counts.get(TalkStatus.REJECTED, 0),
     }
 
     flash_error = request.cookies.get("flash_error")
@@ -619,7 +636,7 @@ def get_talk_media_default(
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> FileResponse:
     talk = _authorize_studio_talk(
         talk_id, request, db, not_found_detail="Media not found"
     )
@@ -659,7 +676,7 @@ def get_talk_media_categorized(
     filename: str,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> FileResponse:
     safe_category = Path(category).name
     if safe_category not in ALLOWED_MEDIA_CATEGORIES:
         raise HTTPException(status_code=404, detail="Media not found")
@@ -667,10 +684,10 @@ def get_talk_media_categorized(
     talk = None
     # Final published media on completed talks is public for agendas and webhook consumers.
     if safe_category == "final":
-        talk = (
-            db.query(models.Talk)
-            .filter(models.Talk.id == talk_id, models.Talk.status == "done")
-            .first()
+        talk = db.scalar(
+            select(models.Talk).where(
+                models.Talk.id == talk_id, models.Talk.status == TalkStatus.DONE
+            )
         )
         if not talk:
             raw_sso = request.query_params.get("sso_token") or request.cookies.get(
@@ -700,7 +717,7 @@ def get_talk_media_categorized(
     )
 
     is_public_final = (
-        safe_category == "final" and getattr(talk, "status", None) == "done"
+        safe_category == "final" and getattr(talk, "status", None) == TalkStatus.DONE
     )
     cache_control = "no-cache" if is_public_final else "no-store"
 
@@ -720,7 +737,7 @@ def get_talk_waveform(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     category: str | None = None,
     filename: str | None = None,
-):
+) -> Response:
     _authorize_studio_talk(talk_id, request, db, not_found_detail="Talk not found")
 
     media_key = None
@@ -774,7 +791,7 @@ def studio(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
     sso_token: str | None = None,
-):
+) -> Response:
     if sso_token is not None or "sso_token" in request.query_params:
         raw_sso = (
             sso_token
@@ -792,13 +809,16 @@ def studio(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
             )
-        if sso_payload.scope_type == "talk" and sso_payload.scope_id != talk_id:
+        if (
+            sso_payload.scope_type == SSOScopeType.TALK
+            and sso_payload.scope_id != talk_id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="SSO token is not authorized for this talk",
             )
-        if sso_payload.scope_type == "event":
-            talk_obj = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+        if sso_payload.scope_type == SSOScopeType.EVENT:
+            talk_obj = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
             if not talk_obj:
                 raise HTTPException(status_code=404, detail="Talk not found")
             if talk_obj.event_id != sso_payload.scope_id:
@@ -806,8 +826,9 @@ def studio(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="SSO token is not authorized for this event",
                 )
-            if sso_payload.role == "speaker" and not (
+            if sso_payload.role == AuthRole.SPEAKER and not (
                 talk_obj.speaker_email
+                and sso_payload.email is not None
                 and talk_obj.speaker_email.lower() == sso_payload.email.lower()
             ):
                 raise HTTPException(
@@ -918,13 +939,13 @@ def studio(
 
     is_other_organizer_talk = bool(
         user
-        and user.role == "admin"
+        and user.role == AuthRole.ADMIN
         and (not talk.event or talk.event.created_by_user_id != user.id)
     )
 
     is_from_admin = bool(
         user
-        and user.role == "admin"
+        and user.role == AuthRole.ADMIN
         and (request.query_params.get("from") == "admin" or is_other_organizer_talk)
     )
 
@@ -947,7 +968,7 @@ def studio(
             "all_statuses": ALL_STATUSES,
             "is_speaker": (
                 (
-                    sso_user.role == "speaker"
+                    sso_user.role == AuthRole.SPEAKER
                     or bool(
                         talk.speaker_email
                         and sso_user.email
@@ -956,7 +977,7 @@ def studio(
                 )
                 if sso_user
                 else (
-                    getattr(user, "role", None) == "speaker"
+                    getattr(user, "role", None) == AuthRole.SPEAKER
                     or bool(
                         talk.speaker_email
                         and getattr(user, "email", None)
@@ -977,7 +998,7 @@ def studio(
 def list_studio_events(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Response:
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
@@ -992,7 +1013,7 @@ def list_studio_events(
             status_code=status.HTTP_302_FOUND,
         )
 
-    if user.role not in ("organizer", "admin"):
+    if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         is_secure = (request.url.scheme == "https") or (
             settings.environment.lower() in ("production", "prod")
         )
@@ -1042,12 +1063,13 @@ def _render_studio_events_page(
     error: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
-    events = (
-        db.query(models.Event)
-        .options(selectinload(models.Event.created_by_user))
-        .filter(models.Event.created_by_user_id == user.id)
-        .order_by(models.Event.id.asc())
-        .all()
+    events = list(
+        db.scalars(
+            select(models.Event)
+            .options(selectinload(models.Event.created_by_user))
+            .where(models.Event.created_by_user_id == user.id)
+            .order_by(models.Event.id.asc())
+        )
     )
     global_hours = get_setting(
         "speaker_magic_link_expire_hours",
@@ -1073,7 +1095,7 @@ def create_studio_event(
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
     speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
-):
+) -> Response:
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
@@ -1085,7 +1107,7 @@ def create_studio_event(
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    if user.role not in ("organizer", "admin"):
+    if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
@@ -1136,7 +1158,7 @@ def edit_studio_event(
     db: Annotated[Session, Depends(get_db)],
     name: Annotated[str, Form()] = "",
     speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
-):
+) -> RedirectResponse:
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
@@ -1148,19 +1170,19 @@ def edit_studio_event(
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    if user.role not in ("organizer", "admin"):
+    if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    event = db.scalar(select(models.Event).where(models.Event.id == event_id))
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
         )
 
-    if user.role != "admin" and event.created_by_user_id != user.id:
+    if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not authorized to edit this event",
@@ -1195,7 +1217,7 @@ def delete_studio_event(
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> RedirectResponse:
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
@@ -1207,24 +1229,21 @@ def delete_studio_event(
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    if user.role not in ("organizer", "admin"):
+    if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
-    event = (
-        db.query(models.Event)
-        .filter(models.Event.id == event_id)
-        .with_for_update()
-        .first()
+    event = db.scalar(
+        select(models.Event).where(models.Event.id == event_id).with_for_update()
     )
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
         )
 
-    if user.role != "admin" and event.created_by_user_id != user.id:
+    if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not authorized to delete this event",
@@ -1235,8 +1254,8 @@ def delete_studio_event(
         _cancel_talk_jobs(talk.id, storage)
 
     for talk in talks:
-        db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
-        db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
+        db.execute(delete(models.Review).where(models.Review.talk_id == talk.id))
+        db.execute(delete(models.Job).where(models.Job.talk_id == talk.id))
         db.delete(talk)
 
     db.delete(event)

@@ -1890,6 +1890,15 @@ wheels = [
 ]
 
 [[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260906"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/6e/abec85b9013db5b934b0280a6dd104904d84f7bcbaab2e2f3def87ac7463/types_pyyaml-6.0.12.20260906.tar.gz", hash = "sha256:f59c1cc05010b833d2d72287bbaa72610106b28d42d89a907313117faba85212", size = 18649, upload-time = "2026-09-06T06:35:35.362Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/c0/fc0644b7ddcfb969e95845837143cb5173ddd6e06ee4ba5fc493cd9329b7/types_pyyaml-6.0.12.20260906-py3-none-any.whl", hash = "sha256:bca893ff0d51df5c9053137d5d0e6ccd36e939a196356f1d5c16372422f5137b", size = 21282, upload-time = "2026-09-06T06:35:34.372Z" },
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2012,6 +2021,7 @@ dev = [
     { name = "pre-commit" },
     { name = "ptpython" },
     { name = "ruff" },
+    { name = "types-pyyaml" },
 ]
 test = [
     { name = "httpx" },
@@ -2047,6 +2057,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "ptpython", specifier = ">=3.0.32" },
     { name = "ruff", specifier = ">=0.16.3" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20260906" },
 ]
 test = [
     { name = "httpx", specifier = ">=0.28.1" },

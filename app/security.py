@@ -540,14 +540,19 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             return None
         if "user_id" in payload or "sub" in payload:
             return None
+        raw_scope_type = payload.get("scope_type")
+        if not isinstance(raw_scope_type, str):
+            return None
         try:
-            scope_type_enum = SSOScopeType(payload.get("scope_type"))
+            scope_type_enum = SSOScopeType(raw_scope_type)
         except ValueError, TypeError:
             return None
         scope_id = payload.get("scope_id")
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
         raw_role = payload.get("role")
+        if not isinstance(raw_role, str):
+            return None
         try:
             role = AuthRole(raw_role)
         except ValueError, TypeError:

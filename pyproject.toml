@@ -33,6 +33,7 @@ dev = [
     "pre-commit>=4.6.2",
     "ptpython>=3.0.32",
     "mypy>=2.4.0",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 test = [
     "httpx>=0.28.1",

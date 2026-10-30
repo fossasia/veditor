@@ -97,6 +97,7 @@ def run_retention_sweep(
     import logging
     from datetime import UTC, datetime, timedelta
 
+    from sqlalchemy import select
     from sqlalchemy.exc import SQLAlchemyError
     from sqlalchemy.orm import joinedload
 
@@ -116,13 +117,12 @@ def run_retention_sweep(
     now = datetime.now(UTC)
     swept_talk_ids: list[int] = []
 
-    talks = (
-        db.query(Talk)
+    talks = db.scalars(
+        select(Talk)
         .options(joinedload(Talk.event))
-        .filter(Talk.status == "done", Talk.final_cleaned_at.is_(None))
+        .where(Talk.status == "done", Talk.final_cleaned_at.is_(None))
         .order_by(Talk.id.asc())
-        .all()
-    )
+    ).all()
 
     for talk in talks:
         if talk.updated_at is None:
@@ -136,10 +136,11 @@ def run_retention_sweep(
 
         event_obj = getattr(talk, "event", None)
         policy = get_retention(event_obj if event_obj is not None else talk)
-        if policy.is_final_indefinite:
+        retention_days = policy.final_retention_days
+        if isinstance(retention_days, str):
             continue
 
-        retention_delta = timedelta(days=policy.final_retention_days)
+        retention_delta = timedelta(days=retention_days)
         if now < updated_at + retention_delta:
             continue
 

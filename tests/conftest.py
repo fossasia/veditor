@@ -61,13 +61,19 @@ def db_session(setup_test_database: Iterator[None]) -> Generator[Session]:
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_dependency_overrides() -> Generator[None]:
+    yield
+    app.dependency_overrides.clear()
+
+
 # --- Fake Storage ---
 
 
 class FakePath:
     """A minimal mock for pathlib.Path that provides read_bytes for tests."""
 
-    def __init__(self, key: str, data: bytes):
+    def __init__(self, key: str, data: bytes) -> None:
         self.key = key
         self._data = data
 

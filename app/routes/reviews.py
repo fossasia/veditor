@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -10,9 +11,13 @@ from app.auth import (
     check_talk_access,
     get_current_user,
 )
+from app.consts import AuthRole
 from app.db import get_db
 from app.review_handlers import DECISION_HANDLERS
+from app.schemas import ReviewResponse
 from app.storage import StorageBackend, get_storage_backend
+
+from ..consts import TalkStatus
 
 router = APIRouter(
     prefix="/talks",
@@ -31,12 +36,9 @@ def review_talk(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+) -> ReviewResponse:
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk:
         raise HTTPException(
@@ -44,17 +46,20 @@ def review_talk(
             detail="Talk not found",
         )
 
-    if user.source == "sso" or user.role == "speaker":
+    if user.source == "sso" or user.role == AuthRole.SPEAKER:
         check_talk_access(talk, user, db)
     else:
-        if user.role not in ("organizer", "admin") and not user.is_machine:
+        if (
+            user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN)
+            and not user.is_machine
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operation requires minimum role 'organizer'",
             )
         check_event_access(talk.event_id, user, db)
 
-    if talk.status != "preview":
+    if talk.status != TalkStatus.PREVIEW:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",
