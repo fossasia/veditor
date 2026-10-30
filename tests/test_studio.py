@@ -3953,6 +3953,77 @@ def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_sessio
     assert "Submit Timestamps" in resp2.text
 
 
+def test_admin_account_with_speaker_role_accesses_speaker_editor(client, db_session):
+    """When an account has role='admin' but opens a talk where they are the assigned speaker
+
+    (via matching speaker_email or speaker SSO token), they must access the speaker editor
+    with video-cutting controls unlocked, and without being locked into view-only or redirected to admin console.
+    """
+    admin_user = models.User(
+        email="admin_speaker@example.com",
+        hashed_password="pw",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin_user)
+
+    other_org = models.User(
+        email="other_org@example.com",
+        hashed_password="pw",
+        role="organizer",
+        is_active=True,
+    )
+    db_session.add(other_org)
+    db_session.commit()
+
+    event = models.Event(name="Summit 2026", created_by_user_id=other_org.id)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(UTC)
+    talk = models.Talk(
+        title="Admin Keynote",
+        event_id=event.id,
+        status="pending_bounds",
+        speaker_email="admin_speaker@example.com",
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    # 1. Admin visits talk via speaker SSO link
+    sso_token = create_sso_token(
+        scope_type="talk",
+        scope_id=talk.id,
+        role="speaker",
+        email="admin_speaker@example.com",
+    )
+    admin_token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set("veditor_session", admin_token)
+
+    resp = client.get(
+        f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert "is-view-only" not in resp.text
+    assert "Awaiting Speaker to Submit Timestamps" not in resp.text
+    assert "Submit Timestamps" in resp.text
+    assert "btn-set-in" in resp.text
+    assert "input-in-point" in resp.text
+    assert "Admin Console" not in resp.text
+
+    # 2. Admin visits their assigned talk directly using their admin login session
+    client.cookies.set("veditor_session", admin_token)
+    resp2 = client.get(f"/studio/talks/{talk.id}")
+    assert resp2.status_code == 200
+    assert "is-view-only" not in resp2.text
+    assert "Awaiting Speaker to Submit Timestamps" not in resp2.text
+    assert "Submit Timestamps" in resp2.text
+    assert "btn-set-in" in resp2.text
+    assert "input-in-point" in resp2.text
+
+
 def test_talk_speaker_email_index():
     """Ensure speaker_email column has an index defined on models.Talk."""
     assert models.Talk.__table__.c.speaker_email.index is True
