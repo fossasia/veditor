@@ -1991,7 +1991,6 @@ def create_talk_sso_token(
     status_code=status.HTTP_200_OK,
 )
 async def attach_room_recording(
-    request: Request,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
@@ -2009,40 +2008,6 @@ async def attach_room_recording(
     If target_date is specified, only sessions on that date are attached.
     For rooms spanning multiple scheduled days, target_date is required.
     """
-    # Support JSON requests as well as multipart/form-data
-    content_type = request.headers.get("content-type", "")
-    if content_type.startswith("application/json"):
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                room = body.get("room", room)
-                event_id = body.get("event_id", event_id)
-                video_url = body.get("video_url", video_url)
-                relative_key = body.get("relative_key", relative_key)
-                source_path = body.get("source_path", source_path)
-                rec_start_str = body.get("recording_start")
-                if rec_start_str and not recording_start:
-                    try:
-                        recording_start = datetime.fromisoformat(rec_start_str)
-                    except ValueError:
-                        pass
-                if "target_date" in body:
-                    target_date_val = body.get("target_date")
-                    if target_date_val is not None and not target_date:
-                        if not isinstance(target_date_val, str):
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            )
-                        try:
-                            target_date = date.fromisoformat(target_date_val)
-                        except ValueError as exc:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            ) from exc
-        except (ValueError, TypeError, UnicodeDecodeError):  # fmt: skip
-            pass
 
     if not room or not room.strip():
         raise HTTPException(

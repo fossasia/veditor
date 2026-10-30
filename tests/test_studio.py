@@ -2884,10 +2884,10 @@ def test_attach_room_recording_from_ingest_roots(
     with patch("app.routes.talks.light_queue"):
         res = client.post(
             "/talks/room/attach-recording",
-            json={
-                "room": "Hall B",
-                "event_id": event.id,
-                "relative_key": clip.name,
+            files={
+                "room": (None, "Hall B"),
+                "event_id": (None, str(event.id)),
+                "relative_key": (None, clip.name),
             },
             headers={"X-API-Key": api_key},
         )
@@ -2906,6 +2906,29 @@ def test_attach_room_recording_unauthorized(client: TestClient, db_session):
         data={"room": "Hall 1"},
     )
     assert res.status_code == 401
+
+
+def test_attach_room_recording_requires_room(client: TestClient, db_session):
+    from app.auth import hash_api_key
+
+    api_key = f"key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    multipart_cases = (
+        {"event_id": (None, "1")},
+        {"room": (None, "")},
+        {"room": (None, "   ")},
+    )
+    for fields in multipart_cases:
+        res = client.post(
+            "/talks/room/attach-recording",
+            files=fields,
+            headers={"X-API-Key": api_key},
+        )
+        assert res.status_code == 400
+        assert res.json()["detail"] == "Room name is required"
 
 
 def test_attach_room_recording_studio_alias(
@@ -3510,13 +3533,13 @@ def test_attach_room_recording_with_video_url(
     db_session.commit()
 
     with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
-        # 1. Test JSON payload
+        # 1. Test multipart URL payload
         res = client.post(
             "/talks/room/attach-recording",
-            json={
-                "room": "Auditorium Stream",
-                "event_id": event.id,
-                "video_url": "https://example.com/recordings/livestream123.mp4",
+            files={
+                "room": (None, "Auditorium Stream"),
+                "event_id": (None, str(event.id)),
+                "video_url": (None, "https://example.com/recordings/livestream123.mp4"),
             },
             headers={"X-API-Key": api_key},
         )
@@ -3577,10 +3600,10 @@ def test_attach_room_recording_with_video_url_multipart(
     with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
         res = client.post(
             "/talks/room/attach-recording",
-            data={
-                "room": "Auditorium Stream MP",
-                "event_id": str(event.id),
-                "video_url": "https://example.com/recordings/room_stream.mp4",
+            files={
+                "room": (None, "Auditorium Stream MP"),
+                "event_id": (None, str(event.id)),
+                "video_url": (None, "https://example.com/recordings/room_stream.mp4"),
             },
             headers={"X-API-Key": api_key},
         )
@@ -3630,10 +3653,10 @@ def test_attach_room_recording_url_and_source_validations(
     # 1. Invalid URL scheme
     res = client.post(
         "/talks/room/attach-recording",
-        json={
-            "room": "Val Room",
-            "event_id": event.id,
-            "video_url": "ftp://bad-scheme.com/video.mp4",
+        files={
+            "room": (None, "Val Room"),
+            "event_id": (None, str(event.id)),
+            "video_url": (None, "ftp://bad-scheme.com/video.mp4"),
         },
         headers={"X-API-Key": api_key},
     )
@@ -3643,9 +3666,9 @@ def test_attach_room_recording_url_and_source_validations(
     # 2. No source provided
     res = client.post(
         "/talks/room/attach-recording",
-        json={
-            "room": "Val Room",
-            "event_id": event.id,
+        files={
+            "room": (None, "Val Room"),
+            "event_id": (None, str(event.id)),
         },
         headers={"X-API-Key": api_key},
     )
@@ -4055,32 +4078,30 @@ def test_room_days_and_targeted_multi_day_room_attachment(client, db_session):
         assert t2_d1.status == "detecting"
         assert t3_d2.status == "waiting_for_files"
 
-    # 4. Attaching with invalid JSON target_date returns 400
-    res_invalid_json_date = client.post(
+    # 4. Attaching with invalid multipart target_date returns 422
+    res_invalid_date = client.post(
         "/talks/room/attach-recording",
-        json={
-            "room": "Auditorium A",
-            "event_id": event.id,
-            "video_url": "https://example.com/day1.mp4",
-            "target_date": "not-a-valid-date",
+        files={
+            "room": (None, "Auditorium A"),
+            "event_id": (None, str(event.id)),
+            "video_url": (None, "https://example.com/day1.mp4"),
+            "target_date": (None, "not-a-valid-date"),
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={"X-API-Key": api_key},
     )
-    assert res_invalid_json_date.status_code == 400
-    assert "Invalid target_date format" in res_invalid_json_date.json()["detail"]
+    assert res_invalid_date.status_code == 422
 
-    res_non_string_json_date = client.post(
+    res_non_string_date = client.post(
         "/talks/room/attach-recording",
-        json={
-            "room": "Auditorium A",
-            "event_id": event.id,
-            "video_url": "https://example.com/day1.mp4",
-            "target_date": 12345,
+        files={
+            "room": (None, "Auditorium A"),
+            "event_id": (None, str(event.id)),
+            "video_url": (None, "https://example.com/day1.mp4"),
+            "target_date": (None, "12345"),
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={"X-API-Key": api_key},
     )
-    assert res_non_string_json_date.status_code == 400
-    assert "Invalid target_date format" in res_non_string_json_date.json()["detail"]
+    assert res_non_string_date.status_code == 422
 
 
 def test_room_days_day_numbering_relative_to_event_start(client, db_session):
