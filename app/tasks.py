@@ -512,7 +512,18 @@ def job_detect(
             **detect_kwargs,
         )
         if not result.passed:
-            raise ValueError(f"Detection failed: {result.reason}")
+            if (
+                result.has_video
+                and result.actual_duration_seconds > 0
+                and "duration" in (result.reason or "")
+            ):
+                logger.warning(
+                    "Talk %s recording duration differs from schedule (%s); accepting valid media file",
+                    talk_id,
+                    result.reason,
+                )
+            else:
+                raise ValueError(f"Detection failed: {result.reason}")
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
