@@ -899,6 +899,220 @@ def test_job_cut_with_local_storage_caches_waveform(dummy_talk, tmp_path):
     assert max(wf_content["peaks"]) > 0.0
 
 
+def test_job_cut_multi_segment_concatenates_cuts(dummy_talk, tmp_path):
+    import math
+
+    import av
+    import numpy as np
+
+    from app.pipeline.detect import container_duration_seconds
+    from app.storage import LocalDiskBackend
+
+    storage = LocalDiskBackend(data_dir=tmp_path)
+    raw_path = tmp_path / "raw_src" / "raw.mp4"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Generate distinguishable 3.0s media: 1s Red, 1s Green, 1s Blue
+    fps = 24
+    with av.open(str(raw_path), mode="w") as c:
+        v = c.add_stream("libx264", rate=fps)
+        v.width = 64
+        v.height = 64
+        v.pix_fmt = "yuv420p"
+        a = c.add_stream("aac", rate=44100)
+        a.layout = "mono"
+
+        for i in range(3 * fps):
+            color = (
+                (255, 0, 0)
+                if i < fps
+                else ((0, 255, 0) if i < 2 * fps else (0, 0, 255))
+            )
+            arr = np.full((64, 64, 3), color, dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
+            for pkt in v.encode(frame):
+                c.mux(pkt)
+        for pkt in v.encode():
+            c.mux(pkt)
+
+        silence = np.zeros(1024, dtype=np.int16).reshape(1, -1)
+        for _ in range(math.ceil(3.0 * 44100 / 1024)):
+            a_frame = av.AudioFrame.from_ndarray(silence, format="s16", layout="mono")
+            a_frame.sample_rate = 44100
+            for pkt in a.encode(a_frame):
+                c.mux(pkt)
+        for pkt in a.encode():
+            c.mux(pkt)
+
+    storage.put("1/raw/raw.mp4", raw_path)
+
+    dummy_talk.status = "cutting"
+    dummy_talk.raw_duration_seconds = 3.0
+    dummy_talk.cut_start = 0.0
+    dummy_talk.cut_end = 3.0
+    # Select [0.0, 0.8] (red) and [2.2, 3.0] (blue); exclude [0.8, 2.2] (green)
+    dummy_talk.cut_segments = [
+        {"start": 0.0, "end": 0.8},
+        {"start": 2.2, "end": 3.0},
+    ]
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=storage),
+        patch("app.tasks.light_queue.enqueue"),
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4", "1/cut/cut.mp4")
+
+    assert storage.exists("1/cut/cut.mp4")
+    out_file = storage.get("1/cut/cut.mp4")
+
+    observed_colors = []
+    with av.open(str(out_file)) as c:
+        out_dur = container_duration_seconds(c)
+        for frame in c.decode(video=0):
+            rgb = frame.to_ndarray(format="rgb24")
+            mean_c = rgb.mean(axis=(0, 1))
+            r, g, b = mean_c[0], mean_c[1], mean_c[2]
+            if r > 150 and g < 80 and b < 80:
+                c_name = "red"
+            elif g > 150 and r < 80 and b < 80:
+                c_name = "green"
+            elif b > 150 and r < 80 and g < 80:
+                c_name = "blue"
+            else:
+                c_name = "other"
+            if not observed_colors or observed_colors[-1] != c_name:
+                observed_colors.append(c_name)
+
+    assert out_dur == pytest.approx(1.6, abs=0.5)
+    assert "green" not in observed_colors, (
+        "Intervening footage (green) was not removed!"
+    )
+    assert observed_colors == ["red", "blue"], (
+        f"Expected red followed by blue, got: {observed_colors}"
+    )
+
+
+def test_job_cut_discarded_if_aborted_or_superseded(dummy_talk, tmp_path):
+    from app.storage import LocalDiskBackend
+    from tests.conftest import generate_clip
+
+    storage = LocalDiskBackend(data_dir=tmp_path)
+    raw_clip = generate_clip(2.0, output_dir=tmp_path / "raw_src")
+    storage.put("1/raw/raw.mp4", raw_clip)
+    # Pre-populate cut.mp4 with content from replacement cut
+    storage.put("1/cut/cut.mp4", b"replacement cut content")
+
+    dummy_talk.status = "cutting"
+    dummy_talk.raw_duration_seconds = 2.0
+    dummy_talk.cut_start = 0.0
+    dummy_talk.cut_end = 1.0
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    # Simulate talk aborted / state changed to waiting_for_files during cut
+    def fake_cut(inp, out, *args, **kwargs):
+        # Organizer aborts while cut was executing
+        dummy_talk.status = "waiting_for_files"
+        Path(out).write_bytes(b"stale worker output")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=storage),
+        patch("app.tasks.cut", side_effect=fake_cut),
+        patch("app.tasks.light_queue.enqueue"),
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4", "1/cut/cut.mp4")
+
+    # Stale worker output must NOT overwrite replacement cut
+    assert storage.get("1/cut/cut.mp4").read_bytes() == b"replacement cut content"
+    assert dummy_talk.status == "waiting_for_files"
+
+
+def test_job_cut_resynchronizes_stale_cut_segments(dummy_talk, tmp_path):
+    from app.storage import LocalDiskBackend
+    from tests.conftest import generate_clip
+
+    storage = LocalDiskBackend(data_dir=tmp_path)
+    raw_clip = generate_clip(2.0, output_dir=tmp_path / "raw_src")
+    storage.put("1/raw/raw.mp4", raw_clip)
+
+    dummy_talk.status = "cutting"
+    dummy_talk.raw_duration_seconds = 2.0
+    # Simulate single-range resubmission from older instance:
+    dummy_talk.cut_start = 0.2
+    dummy_talk.cut_end = 0.8
+    # cut_segments still contains previous multi-segment or mismatched range:
+    dummy_talk.cut_segments = [
+        {"start": 1.0, "end": 1.5},
+        {"start": 1.6, "end": 1.9},
+    ]
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    captured_bounds = []
+
+    def fake_cut(inp, out, start, end, *args, **kwargs):
+        captured_bounds.append((start, end))
+        Path(out).write_bytes(b"cut content")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=storage),
+        patch("app.tasks.cut", side_effect=fake_cut),
+        patch("app.tasks.light_queue.enqueue"),
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4", "1/cut/cut.mp4")
+
+    # job_cut detected stale segments and resynchronized with scalar bounds
+    assert captured_bounds == [(0.2, 0.8)]
+    assert dummy_talk.cut_segments == [{"start": 0.2, "end": 0.8}]
+
+
+def test_job_cut_multi_segment_enforces_frame_accurate_fallback(dummy_talk, tmp_path):
+    from app.storage import LocalDiskBackend
+    from tests.conftest import generate_clip
+
+    storage = LocalDiskBackend(data_dir=tmp_path)
+    raw_clip = generate_clip(3.0, output_dir=tmp_path / "raw_src")
+    storage.put("1/raw/raw.mp4", raw_clip)
+
+    dummy_talk.status = "cutting"
+    dummy_talk.raw_duration_seconds = 3.0
+    dummy_talk.cut_start = 0.5
+    dummy_talk.cut_end = 2.5
+    dummy_talk.cut_segments = [
+        {"start": 0.5, "end": 1.2},
+        {"start": 1.8, "end": 2.5},
+    ]
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    cut_calls = []
+
+    def fake_cut(inp, out, start, end, *args, **kwargs):
+        cut_calls.append((start, end, kwargs))
+        Path(out).write_bytes(b"cut segment")
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=storage),
+        patch("app.tasks.cut", side_effect=fake_cut),
+        patch(
+            "app.tasks.concat_segments",
+            side_effect=lambda segs, out, **kw: Path(out).write_bytes(b"concatenated"),
+        ),
+        patch("app.tasks.light_queue.enqueue"),
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4", "1/cut/cut.mp4")
+
+    assert len(cut_calls) == 2
+    for call in cut_calls:
+        assert call[2].get("frame_accurate_fallback") is True
+
+
 def test_handle_failure_on_deleted_job_does_not_mark_talk_broken(
     dummy_talk, mock_storage
 ):
@@ -1873,3 +2087,151 @@ def test_seed_cut_bounds_clamped_to_duration(dummy_talk):
 
     assert dummy_talk.cut_start == pytest.approx(0.0)
     assert dummy_talk.cut_end == pytest.approx(14400.0)  # clamped to duration
+
+
+def test_job_cut_fails_closed_when_newer_job_query_errors(
+    dummy_talk, mock_storage, tmp_path
+):
+    """Worker fails closed without calling storage.put when newer cut job query fails."""
+    from unittest.mock import MagicMock, patch
+
+    from app.models import Job, Talk
+    from app.tasks import job_cut
+
+    dummy_talk.status = "cutting"
+    dummy_talk.cut_start = 10.0
+    dummy_talk.cut_end = 50.0
+    dummy_talk.cut_segments = [{"start": 10.0, "end": 50.0}]
+
+    mock_db = MagicMock()
+    job_mock = Job(id=1, talk_id=dummy_talk.id, kind="cut", status="running")
+    mock_db.get.side_effect = lambda model, oid: (
+        job_mock if model == Job else dummy_talk
+    )
+
+    def add_side_effect(obj):
+        if isinstance(obj, Job) and obj.id is None:
+            obj.id = 1
+
+    mock_db.add.side_effect = add_side_effect
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model == Talk:
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                dummy_talk
+            )
+            q.filter.return_value.first.return_value = dummy_talk
+            return q
+        if model == Job:
+            raise RuntimeError("Database query failure")
+        return q
+
+    mock_db.query.side_effect = query_side_effect
+
+    class TestDBContext:
+        def __enter__(self):
+            return mock_db
+
+        def __exit__(self, *args):
+            pass
+
+    def fake_cut(inp, out, *args, **kwargs):
+        Path(out).write_bytes(b"cut content")
+
+    with (
+        patch("app.tasks.SessionLocal", return_value=TestDBContext()),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.cut", side_effect=fake_cut),
+        patch("app.tasks.light_queue.enqueue"),
+        pytest.raises(RuntimeError, match="Database query failure"),
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4")
+
+    # Storage put must never have published the cut video artifact
+    cut_key = f"{dummy_talk.id}/cut/cut.mp4"
+    for call in mock_storage.put.call_args_list:
+        assert call[0][0] != cut_key
+
+
+def test_job_cut_discards_output_when_talk_superseded_or_aborted(
+    dummy_talk, mock_storage
+):
+    """Worker discards output without calling storage.put if talk was aborted or superseded."""
+    from unittest.mock import MagicMock, patch
+
+    from app.models import Job, Talk
+    from app.tasks import job_cut
+
+    dummy_talk.status = "cutting"
+    dummy_talk.cut_start = 10.0
+    dummy_talk.cut_end = 50.0
+
+    mock_db = MagicMock()
+    aborted_talk = Talk(
+        id=dummy_talk.id,
+        status="waiting_for_files",
+        cut_start=None,
+        cut_end=None,
+    )
+    job_mock = Job(id=1, talk_id=dummy_talk.id, kind="cut", status="running")
+
+    def add_side_effect(obj):
+        if isinstance(obj, Job) and obj.id is None:
+            obj.id = 1
+
+    mock_db.add.side_effect = add_side_effect
+
+    def query_side_effect(model):
+        q = MagicMock()
+        if model == Talk:
+            q.filter.return_value.with_for_update.return_value.first.return_value = (
+                aborted_talk
+            )
+            q.filter.return_value.first.return_value = aborted_talk
+            return q
+        if model == Job:
+            q.filter.return_value.first.return_value = None
+            return q
+        return q
+
+    mock_db.query.side_effect = query_side_effect
+    mock_db.get.side_effect = lambda model, oid: (
+        job_mock if model == Job else dummy_talk
+    )
+
+    class TestDBContext:
+        def __enter__(self):
+            return mock_db
+
+        def __exit__(self, *args):
+            pass
+
+    def fake_cut(inp, out, *args, **kwargs):
+        Path(out).write_bytes(b"cut content")
+
+    with (
+        patch("app.tasks.SessionLocal", return_value=TestDBContext()),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch("app.tasks.cut", side_effect=fake_cut),
+        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+    ):
+        job_cut(dummy_talk.id, "1/raw/raw.mp4")
+
+    cut_key = f"{dummy_talk.id}/cut/cut.mp4"
+    for call in mock_storage.put.call_args_list:
+        assert call[0][0] != cut_key
+    mock_enqueue.assert_not_called()
+
+
+def test_job_cut_multi_invokes_job_cut():
+    """Verify job_cut_multi acts as an entrypoint delegating to job_cut."""
+    from unittest.mock import patch
+
+    from app.tasks import job_cut_multi
+
+    with patch("app.tasks.job_cut") as mock_job_cut:
+        job_cut_multi(42, "42/raw/video.mp4", "42/cut/custom.mp4")
+        mock_job_cut.assert_called_once_with(
+            42, "42/raw/video.mp4", "42/cut/custom.mp4"
+        )

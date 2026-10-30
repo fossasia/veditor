@@ -231,6 +231,7 @@ class TalkRead(TalkBase):
     raw_duration_seconds: float | None = None
     cut_start: float | None = None
     cut_end: float | None = None
+    cut_segments: list[dict[str, float]] | None = None
     include_intro: bool = False
     include_outro: bool = False
     intro_source: str | None = None
@@ -408,13 +409,70 @@ def _parse_hhmmss(value: str) -> Decimal:
     return hh * 3600 + mm * 60 + ss
 
 
+def _parse_time_value(value: str | float) -> Decimal:
+    if isinstance(value, (int, float)):
+        if value < 0:
+            raise ValueError(f"Time value must be non-negative, got {value}")
+        return Decimal(str(value))
+    return _parse_hhmmss(value)
+
+
+class CutSegment(BaseModel):
+    start: str | float
+    end: str | float
+
+    @model_validator(mode="after")
+    def validate_segment(self):
+        s = _parse_time_value(self.start)
+        e = _parse_time_value(self.end)
+        if e <= s:
+            raise ValueError("Segment end must be greater than start")
+        if float(e) <= float(s):
+            raise ValueError(
+                "Segment end must be greater than start (values too close)"
+            )
+        return self
+
+    def parsed_seconds(self) -> tuple[float, float]:
+        return float(_parse_time_value(self.start)), float(_parse_time_value(self.end))
+
+
+MAX_CUT_SEGMENTS: int = 50
+
+
 class CutBoundsRequest(BaseModel):
-    cut_start: str  # "HH:MM:SS"
-    cut_end: str  # "HH:MM:SS"
+    cut_start: str | None = None  # "HH:MM:SS"
+    cut_end: str | None = None  # "HH:MM:SS"
+    segments: list[CutSegment] | None = None
     note: str | None = None
 
     @model_validator(mode="after")
     def parse_and_validate(self):
+        if self.segments is not None:
+            if len(self.segments) == 0:
+                raise ValueError("segments list cannot be empty")
+            if len(self.segments) > MAX_CUT_SEGMENTS:
+                raise ValueError(
+                    f"Number of cut segments ({len(self.segments)}) exceeds maximum allowed ({MAX_CUT_SEGMENTS})"
+                )
+            parsed_segs = [seg.parsed_seconds() for seg in self.segments]
+            for i in range(len(parsed_segs) - 1):
+                if parsed_segs[i][1] > parsed_segs[i + 1][0]:
+                    raise ValueError(
+                        f"Segments must be non-overlapping and chronologically ordered: "
+                        f"segment {i} ends at {parsed_segs[i][1]}s but segment {i + 1} starts at {parsed_segs[i + 1][0]}s"
+                    )
+            if self.cut_start is None:
+                self.cut_start = str(self.segments[0].start)
+            if self.cut_end is None:
+                self.cut_end = str(self.segments[-1].end)
+            return self
+
+        if self.cut_start is None or self.cut_end is None:
+            raise ValueError(
+                "Both cut_start and cut_end are required when segments is not provided"
+            )
+
         start_s = _parse_hhmmss(self.cut_start)
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
@@ -427,7 +485,16 @@ class CutBoundsRequest(BaseModel):
         return self
 
     def parsed_seconds(self) -> tuple[float, float]:
+        if self.segments:
+            first_s, _ = self.segments[0].parsed_seconds()
+            _, last_e = self.segments[-1].parsed_seconds()
+            return first_s, last_e
         return float(_parse_hhmmss(self.cut_start)), float(_parse_hhmmss(self.cut_end))
+
+    def parsed_segments(self) -> list[tuple[float, float]]:
+        if self.segments:
+            return [seg.parsed_seconds() for seg in self.segments]
+        return [self.parsed_seconds()]
 
 
 class IntroOutroRequest(BaseModel):

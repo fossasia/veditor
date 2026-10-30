@@ -494,3 +494,24 @@ def concat(
             _concat_reencode(segments, cut_p, tmp_target, threads=threads)
 
         return _persist(tmp_target)
+
+
+def concat_segments(
+    segments: list[Path],
+    output_path: Path,
+    *,
+    threads: int | None = None,
+) -> Path:
+    """Concatenate a list of media segments into output_path."""
+    if not segments:
+        raise ValueError("No segments provided for concatenation")
+    if _can_stream_copy(segments):
+        try:
+            _concat_stream_copy(segments, output_path, canonical_cut_path=segments[0])
+            return output_path
+        except (av.FFmpegError, ValueError, RuntimeError, OSError) as exc:
+            logger.warning(
+                "Stream-copy concat failed (%s); falling back to re-encode", exc
+            )
+    _concat_reencode(segments, segments[0], output_path, threads=threads)
+    return output_path

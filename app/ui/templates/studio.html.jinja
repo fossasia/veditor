@@ -95,7 +95,7 @@
 {% set can_manage = (user and user.role in ['organizer', 'admin'] and not user.is_sso) or (user is none) %}
 {% set is_admin_or_org = (user and user.role in ['organizer', 'admin']) or (user is none) %}
 {% set awaiting_speaker = talk.speaker_email and not is_speaker %}
-<div class="studio-shell{% if is_other_organizer_talk %} is-view-only{% endif %}" data-talk-id="{{ talk.id }}" data-event-id="{{ talk.event_id or '' }}" data-talk-status="{{ talk.status }}" data-speaker-email="{{ talk.speaker_email or '' }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-talk-title="{{ (talk.title or '') | e }}" data-talk-room="{{ (talk.room or '') | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-is-other-organizer="{{ 'true' if is_other_organizer_talk else 'false' }}">
+<div class="studio-shell{% if is_other_organizer_talk %} is-view-only{% endif %}" data-talk-id="{{ talk.id }}" data-event-id="{{ talk.event_id or '' }}" data-talk-status="{{ talk.status }}" data-speaker-email="{{ talk.speaker_email or '' }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-cut-segments="{{ talk.cut_segments | tojson | forceescape if talk.cut_segments else '' }}" data-talk-title="{{ (talk.title or '') | e }}" data-talk-room="{{ (talk.room or '') | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-is-other-organizer="{{ 'true' if is_other_organizer_talk else 'false' }}">
 
 {% set is_processing = talk.status in ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
 {% set active_job = (talk.jobs | selectattr('status', 'equalto', 'running') | list | first) if talk.jobs else none %}
@@ -354,6 +354,7 @@
       <div class="timeline-track" id="timeline-track">
         <canvas id="tl-waveform" class="tl-waveform" aria-hidden="true"></canvas>
         {% if talk.status in ['pending_bounds', 'needs_work'] and not awaiting_speaker %}
+        <div id="tl-segments-container"></div>
         <div class="tl-block tl-content" id="tl-content"></div>
         <div class="tl-marker" id="tl-start-marker" title="Drag Start Point (or press I)"></div>
         <div class="tl-marker end-marker" id="tl-end-marker" title="Drag End Point (or press O)"></div>
@@ -370,6 +371,21 @@
       </div>
 
       {% if talk.status in ['pending_bounds', 'needs_work'] and not awaiting_speaker %}
+      <!-- Cut Segments Selection Bar -->
+      <div class="timeline-segments-bar" id="timeline-segments-bar">
+        <div class="segments-list" id="segments-list" role="tablist" aria-label="Cut Segments"></div>
+        <div class="segments-actions">
+          <button type="button" class="btn btn-ghost btn-xs" id="btn-add-segment" data-edit-control="true" title="Add another cut segment">
+            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Cut
+          </button>
+          <button type="button" class="btn btn-ghost btn-xs" id="btn-split-segment" data-edit-control="true" title="Split current cut at playhead (S)">
+            <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+            Split (S)
+          </button>
+        </div>
+      </div>
+
       <!-- In/Out Bounds Setting Controls -->
       <div class="timeline-inputs-bar">
         <div class="bounds-inputs-group">
@@ -473,19 +489,21 @@
             <span class="submission-timestamps-title">Timestamps to Submit</span>
           </div>
           <div class="submission-timestamps-body">
-            <div class="timestamp-range-pill">
-              <div class="timestamp-unit">
-                <span class="timestamp-label">Start (In)</span>
-                <span class="timestamp-val" id="review-in-point">{{ talk.cut_start | timecode }}</span>
-              </div>
-              <span class="timestamp-arrow">→</span>
-              <div class="timestamp-unit">
-                <span class="timestamp-label">End (Out)</span>
-                <span class="timestamp-val" id="review-out-point">{{ talk.cut_end | timecode }}</span>
+            <div id="submission-timestamps-list">
+              <div class="timestamp-range-pill">
+                <div class="timestamp-unit">
+                  <span class="timestamp-label">Start (In)</span>
+                  <span class="timestamp-val" id="review-in-point">{{ talk.cut_start | timecode }}</span>
+                </div>
+                <span class="timestamp-arrow">→</span>
+                <div class="timestamp-unit">
+                  <span class="timestamp-label">End (Out)</span>
+                  <span class="timestamp-val" id="review-out-point">{{ talk.cut_end | timecode }}</span>
+                </div>
               </div>
             </div>
             <div class="timestamp-duration-text">
-              <span>Cut Duration:</span>
+              <span id="review-duration-label">Cut Duration:</span>
               <strong id="review-duration">{% if talk.cut_start is not none and talk.cut_end is not none %}{{ (talk.cut_end - talk.cut_start) | timecode }}{% else %}00:00:00.00{% endif %}</strong>
             </div>
           </div>

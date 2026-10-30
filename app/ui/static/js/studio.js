@@ -96,9 +96,14 @@ const inputOutPoint   = document.getElementById('input-out-point');
 const btnSetIn        = document.getElementById('btn-set-in');
 const btnSetOut       = document.getElementById('btn-set-out');
 const btnPlayCut      = document.getElementById('btn-play-cut');
+const btnAddSegment   = document.getElementById('btn-add-segment');
+const btnSplitSegment = document.getElementById('btn-split-segment');
+const MAX_CUT_SEGMENTS = 50;
 
 let inPointSec  = 0;
 let outPointSec = 0;
+let cutSegments = [];
+let activeSegmentIndex = 0;
 let boundsEdited = false;
 let isPlayingCut = false;
 let currentWaveformPeaks = [];
@@ -106,14 +111,36 @@ let waveformAbortController = null;
 
 const initShellBounds = getStudioShell();
 if (initShellBounds) {
+  let loadedSegments = null;
+  if (initShellBounds.dataset.cutSegments) {
+    try {
+      const parsed = JSON.parse(initShellBounds.dataset.cutSegments);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        loadedSegments = parsed
+          .map(s => ({ start: parseFloat(s.start) || 0, end: parseFloat(s.end) || 0 }))
+          .filter(s => s.end > s.start);
+      }
+    } catch (_) {}
+  }
+
   const start = parseFloat(initShellBounds.dataset.cutStart) || 0;
   const end = parseFloat(initShellBounds.dataset.cutEnd) || 0;
+
+  if (loadedSegments && loadedSegments.length > 0) {
+    cutSegments = loadedSegments;
+  } else if (end > start) {
+    cutSegments = [{ start, end }];
+  } else {
+    cutSegments = [{ start: 0, end: 0 }];
+  }
+
   if (getActiveVideoCategory() === 'preview') {
     inPointSec = 0;
     outPointSec = Math.max(0, end - start);
+    cutSegments = [{ start: inPointSec, end: outPointSec }];
   } else {
-    inPointSec = Math.max(0, start);
-    outPointSec = Math.max(inPointSec, end);
+    inPointSec = cutSegments[0].start;
+    outPointSec = cutSegments[0].end;
   }
 }
 
@@ -420,9 +447,18 @@ function updateTimecode() {
     const pct = (video.currentTime / dur) * 100;
     if (tlPlayhead) tlPlayhead.style.left = `${pct}%`;
 
-    if (isPlayingCut && video.currentTime >= outPointSec) {
-      video.pause();
-      isPlayingCut = false;
+    if (isPlayingCut) {
+      const curTime = video.currentTime;
+      const currentSeg = cutSegments.find(s => curTime >= s.start && curTime < s.end);
+      if (!currentSeg) {
+        const nextSeg = cutSegments.find(s => s.start > curTime);
+        if (nextSeg) {
+          video.currentTime = nextSeg.start;
+        } else {
+          video.pause();
+          isPlayingCut = false;
+        }
+      }
     }
   }
 }
@@ -448,9 +484,28 @@ function updateTimelineTicks() {
   );
 }
 
+function selectActiveSegment(idx) {
+  if (idx < 0 || idx >= cutSegments.length) return;
+  activeSegmentIndex = idx;
+  inPointSec = cutSegments[activeSegmentIndex].start;
+  outPointSec = cutSegments[activeSegmentIndex].end;
+  updateCutMarkersUI();
+}
+
 function updateCutMarkersUI() {
-  const dur = video && video.duration ? video.duration : outPointSec;
+  const dur = video && video.duration ? video.duration : (outPointSec || 10);
   if (!dur || dur <= 0) return;
+
+  if (cutSegments.length === 0) {
+    cutSegments = [{ start: inPointSec, end: outPointSec || dur }];
+    activeSegmentIndex = 0;
+  }
+  if (activeSegmentIndex >= cutSegments.length) {
+    activeSegmentIndex = cutSegments.length - 1;
+  }
+  const curSeg = cutSegments[activeSegmentIndex];
+  inPointSec = curSeg.start;
+  outPointSec = curSeg.end;
 
   const inPct  = Math.max(0, Math.min(100, (inPointSec / dur) * 100));
   const outPct = Math.max(0, Math.min(100, ((outPointSec || dur) / dur) * 100));
@@ -464,37 +519,269 @@ function updateCutMarkersUI() {
     tlContent.style.width = `${Math.max(0, outPct - inPct)}%`;
   }
 
+  const segmentsContainer = document.getElementById('tl-segments-container');
+  if (segmentsContainer) {
+    segmentsContainer.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const segDiv = document.createElement('div');
+        const sPct = Math.max(0, Math.min(100, (seg.start / dur) * 100));
+        const ePct = Math.max(0, Math.min(100, (seg.end / dur) * 100));
+        segDiv.className = `tl-segment-block${idx === activeSegmentIndex ? ' is-active' : ''}`;
+        segDiv.style.left = `${sPct}%`;
+        segDiv.style.width = `${Math.max(0, ePct - sPct)}%`;
+        segDiv.title = `Cut ${idx + 1}: ${formatTimecode(seg.start)} - ${formatTimecode(seg.end)}`;
+        segDiv.addEventListener('pointerdown', (e) => {
+          e.stopPropagation();
+          selectActiveSegment(idx);
+          if (video && isFinite(video.duration)) {
+            video.currentTime = seg.start;
+          }
+        });
+        return segDiv;
+      })
+    );
+  }
+
   if (inputInPoint)  inputInPoint.value  = formatTimecode(inPointSec);
   if (inputOutPoint) inputOutPoint.value = formatTimecode(outPointSec);
 
-  const reviewIn = document.getElementById('review-in-point');
-  const reviewOut = document.getElementById('review-out-point');
-  const reviewDur = document.getElementById('review-duration');
-  if (reviewIn) reviewIn.textContent = formatTimecode(inPointSec);
-  if (reviewOut) reviewOut.textContent = formatTimecode(outPointSec);
-  if (reviewDur) {
-    const diff = Math.max(0, outPointSec - inPointSec);
-    reviewDur.textContent = formatTimecode(diff);
+  const segmentsList = document.getElementById('segments-list');
+  if (segmentsList) {
+    segmentsList.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const tab = document.createElement('div');
+        tab.className = `segment-tab${idx === activeSegmentIndex ? ' active' : ''}`;
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', idx === activeSegmentIndex ? 'true' : 'false');
+
+        const titleSpan = document.createElement('span');
+        const segDur = Math.max(0, seg.end - seg.start);
+        titleSpan.textContent = `Cut ${idx + 1} (${formatSelectedDuration(segDur)})`;
+        tab.appendChild(titleSpan);
+
+        tab.addEventListener('click', (e) => {
+          if (e.target.closest('.segment-tab-del')) return;
+          selectActiveSegment(idx);
+          if (video && isFinite(video.duration)) {
+            video.currentTime = seg.start;
+          }
+        });
+
+        if (cutSegments.length > 1) {
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'segment-tab-del';
+          delBtn.title = `Delete Cut ${idx + 1}`;
+          delBtn.setAttribute('aria-label', `Delete Cut ${idx + 1}`);
+          delBtn.textContent = '×';
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteSegment(idx);
+          });
+          tab.appendChild(delBtn);
+        }
+        return tab;
+      })
+    );
   }
+
+  const subList = document.getElementById('submission-timestamps-list');
+  if (subList) {
+    subList.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const pill = document.createElement('div');
+        pill.className = 'timestamp-range-pill';
+        const inSpan = document.createElement('span');
+        inSpan.className = 'timestamp-val';
+        inSpan.textContent = formatTimecode(seg.start);
+        if (idx === 0) inSpan.id = 'review-in-point';
+
+        const outSpan = document.createElement('span');
+        outSpan.className = 'timestamp-val';
+        outSpan.textContent = formatTimecode(seg.end);
+        if (idx === cutSegments.length - 1) outSpan.id = 'review-out-point';
+
+        const unitIn = document.createElement('div');
+        unitIn.className = 'timestamp-unit';
+        const labelIn = document.createElement('span');
+        labelIn.className = 'timestamp-label';
+        labelIn.textContent = `Cut ${idx + 1} In`;
+        unitIn.appendChild(labelIn);
+        unitIn.appendChild(inSpan);
+
+        const arrow = document.createElement('span');
+        arrow.className = 'timestamp-arrow';
+        arrow.textContent = '→';
+
+        const unitOut = document.createElement('div');
+        unitOut.className = 'timestamp-unit';
+        const labelOut = document.createElement('span');
+        labelOut.className = 'timestamp-label';
+        labelOut.textContent = `Cut ${idx + 1} Out`;
+        unitOut.appendChild(labelOut);
+        unitOut.appendChild(outSpan);
+
+        pill.appendChild(unitIn);
+        pill.appendChild(arrow);
+        pill.appendChild(unitOut);
+        return pill;
+      })
+    );
+  }
+
+  const reviewDur = document.getElementById('review-duration');
+  const totalDuration = cutSegments.reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+  if (reviewDur) reviewDur.textContent = formatTimecode(totalDuration);
+
   const cutDurationBadge = document.getElementById('cut-duration-badge');
   if (cutDurationBadge) {
-    const cutDuration = Math.max(0, outPointSec - inPointSec);
-    cutDurationBadge.textContent = `Selected Cut: ${formatSelectedDuration(cutDuration)}`;
+    if (cutSegments.length > 1) {
+      cutDurationBadge.textContent = `Total Cut (${cutSegments.length} cuts): ${formatSelectedDuration(totalDuration)}`;
+    } else {
+      cutDurationBadge.textContent = `Selected Cut: ${formatSelectedDuration(totalDuration)}`;
+    }
+  }
+
+  const btnAdd = document.getElementById('btn-add-segment');
+  const btnSplit = document.getElementById('btn-split-segment');
+  const atMaxSegments = cutSegments.length >= MAX_CUT_SEGMENTS;
+  if (btnAdd && !isStudioViewOnly()) {
+    btnAdd.disabled = atMaxSegments;
+    btnAdd.title = atMaxSegments ? `Maximum limit of ${MAX_CUT_SEGMENTS} cut segments reached` : 'Add another cut segment';
+  }
+  if (btnSplit && !isStudioViewOnly()) {
+    btnSplit.disabled = atMaxSegments;
+    btnSplit.title = atMaxSegments ? `Maximum limit of ${MAX_CUT_SEGMENTS} cut segments reached` : 'Split current cut at playhead (S)';
   }
 }
 
 function setInPoint(timeSec) {
   if (isStudioViewOnly()) return;
-  const max = (video?.duration > 0) ? video.duration : Infinity;
-  inPointSec = Math.max(0, Math.min(timeSec, outPointSec > 0 ? outPointSec - 0.1 : max));
+  const dur = (video?.duration > 0) ? video.duration : Infinity;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+
+  const prevEnd = activeSegmentIndex > 0 ? cutSegments[activeSegmentIndex - 1].end : 0;
+  const maxIn = cur.end > 0 ? cur.end - 0.1 : dur;
+  cur.start = Math.max(prevEnd, Math.min(timeSec, maxIn));
+  inPointSec = cur.start;
   boundsEdited = true;
   updateCutMarkersUI();
 }
 
 function setOutPoint(timeSec) {
   if (isStudioViewOnly()) return;
-  const max = (video?.duration > 0) ? video.duration : Infinity;
-  outPointSec = Math.min(max, Math.max(timeSec, inPointSec + 0.1));
+  const dur = (video?.duration > 0) ? video.duration : Infinity;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+
+  const minOut = cur.start + 0.1;
+  const nextStart = activeSegmentIndex < cutSegments.length - 1 ? cutSegments[activeSegmentIndex + 1].start : dur;
+  cur.end = Math.min(nextStart, Math.max(timeSec, minOut));
+  outPointSec = cur.end;
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function addSegment() {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length >= MAX_CUT_SEGMENTS) {
+    if (window.Modal) {
+      Modal.alert({
+        title: 'Segment Limit Reached',
+        message: `A talk can have at most ${MAX_CUT_SEGMENTS} cut segments. Please remove or merge segments before adding another.`,
+        variant: 'warning',
+      });
+    }
+    return;
+  }
+  const dur = (video?.duration > 0) ? video.duration : 10;
+  cutSegments.sort((a, b) => a.start - b.start);
+
+  const t = video && isFinite(video.currentTime) ? video.currentTime : 0;
+  let newStart = -1;
+  let newEnd = -1;
+
+  const insideSeg = cutSegments.some(s => t >= s.start && t < s.end);
+  if (!insideSeg && t < dur - 0.5) {
+    const nextSeg = cutSegments.find(s => s.start > t);
+    const maxE = nextSeg ? nextSeg.start : dur;
+    if (maxE > t + 0.2) {
+      newStart = t;
+      newEnd = Math.min(maxE, t + Math.min(300, (maxE - t)));
+    }
+  }
+
+  if (newStart === -1) {
+    const lastSeg = cutSegments[cutSegments.length - 1];
+    if (lastSeg && lastSeg.end < dur - 0.5) {
+      newStart = lastSeg.end;
+      newEnd = dur;
+    }
+  }
+
+  if (newStart === -1) {
+    for (let i = 0; i < cutSegments.length - 1; i++) {
+      if (cutSegments[i + 1].start - cutSegments[i].end > 1.0) {
+        newStart = cutSegments[i].end;
+        newEnd = cutSegments[i + 1].start;
+        break;
+      }
+    }
+  }
+
+  if (newStart === -1 || newEnd <= newStart) {
+    if (window.Modal) {
+      Modal.alert({ title: 'No Available Space', message: 'No gap remaining on timeline to add a new cut segment. Adjust or split existing cuts.', variant: 'warning' });
+    }
+    return;
+  }
+
+  const newSeg = { start: newStart, end: newEnd };
+  cutSegments.push(newSeg);
+  cutSegments.sort((a, b) => a.start - b.start);
+  activeSegmentIndex = cutSegments.indexOf(newSeg);
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function splitCurrentSegment() {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length >= MAX_CUT_SEGMENTS) {
+    if (window.Modal) {
+      Modal.alert({
+        title: 'Segment Limit Reached',
+        message: `A talk can have at most ${MAX_CUT_SEGMENTS} cut segments. Please remove or merge segments before splitting.`,
+        variant: 'warning',
+      });
+    }
+    return;
+  }
+  const t = video ? video.currentTime : 0;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+  if (t <= cur.start + 0.5 || t >= cur.end - 0.5) {
+    if (window.Modal) {
+      Modal.alert({ title: 'Cannot Split Here', message: 'Move the playhead inside the active cut segment (at least 0.5s from start/end) to split it.', variant: 'warning' });
+    }
+    return;
+  }
+
+  const newSeg = { start: t, end: cur.end };
+  cur.end = t;
+  cutSegments.splice(activeSegmentIndex + 1, 0, newSeg);
+  activeSegmentIndex++;
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function deleteSegment(idx) {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length <= 1) return;
+  cutSegments.splice(idx, 1);
+  if (activeSegmentIndex >= cutSegments.length) {
+    activeSegmentIndex = cutSegments.length - 1;
+  }
   boundsEdited = true;
   updateCutMarkersUI();
 }
@@ -606,10 +893,23 @@ if (inputOutPoint) {
   });
 }
 
+if (btnAddSegment) {
+  btnAddSegment.addEventListener('click', () => addSegment());
+}
+
+if (btnSplitSegment) {
+  btnSplitSegment.addEventListener('click', () => splitCurrentSegment());
+}
+
 if (btnPlayCut) {
   btnPlayCut.addEventListener('click', () => {
     if (!video || !video.src) return;
-    video.currentTime = inPointSec;
+    if (cutSegments.length === 0) return;
+    const curTime = video.currentTime;
+    const insideSeg = cutSegments.find(s => curTime >= s.start && curTime < s.end);
+    if (!insideSeg) {
+      video.currentTime = cutSegments[activeSegmentIndex]?.start || cutSegments[0].start;
+    }
     isPlayingCut = true;
     video.play().catch(() => {});
   });
@@ -657,12 +957,39 @@ if (video) {
     if (!boundsEdited) {
       const shell = getStudioShell() || shellInit;
       const isRaw = getActiveVideoCategory() === 'raw';
-      const rawStart = isRaw ? parseFloat(shell?.dataset?.cutStart) : NaN;
-      const rawEnd = isRaw ? parseFloat(shell?.dataset?.cutEnd) : NaN;
-      inPointSec = (!isNaN(rawStart) && rawStart >= 0) ? Math.min(rawStart, duration - 0.1) : 0;
-      outPointSec = (!isNaN(rawEnd) && rawEnd > inPointSec) ? Math.min(duration, rawEnd) : duration;
-    } else if (outPointSec <= 0 || outPointSec > duration) {
-      outPointSec = duration;
+      let loadedSegments = null;
+      if (isRaw && shell?.dataset?.cutSegments) {
+        try {
+          const parsed = JSON.parse(shell.dataset.cutSegments);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedSegments = parsed
+              .map(s => ({
+                start: Math.max(0, Math.min(parseFloat(s.start) || 0, duration)),
+                end: Math.max(0, Math.min(parseFloat(s.end) || 0, duration)),
+              }))
+              .filter(s => s.end > s.start);
+          }
+        } catch (_) {}
+      }
+
+      if (loadedSegments && loadedSegments.length > 0) {
+        cutSegments = loadedSegments;
+      } else {
+        const rawStart = isRaw ? parseFloat(shell?.dataset?.cutStart) : NaN;
+        const rawEnd = isRaw ? parseFloat(shell?.dataset?.cutEnd) : NaN;
+        const s = (!isNaN(rawStart) && rawStart >= 0) ? Math.min(rawStart, duration - 0.1) : 0;
+        const e = (!isNaN(rawEnd) && rawEnd > s) ? Math.min(duration, rawEnd) : duration;
+        cutSegments = [{ start: s, end: e }];
+      }
+      activeSegmentIndex = 0;
+      inPointSec = cutSegments[0].start;
+      outPointSec = cutSegments[0].end;
+    } else {
+      for (const seg of cutSegments) {
+        if (seg.end > duration) seg.end = duration;
+      }
+      inPointSec = cutSegments[activeSegmentIndex]?.start || 0;
+      outPointSec = cutSegments[activeSegmentIndex]?.end || duration;
     }
     // Seek playhead to pre-seeded inPoint so the speaker sees their talk start, not 00:00.
     if (!boundsEdited && inPointSec > 0 && video.duration > inPointSec) {
@@ -729,6 +1056,8 @@ document.addEventListener('keydown', e => {
     if (video && btnSetIn) setInPoint(video.currentTime);
   } else if (e.code === 'KeyO') {
     if (video && btnSetOut) setOutPoint(video.currentTime);
+  } else if (e.code === 'KeyS') {
+    if (video && btnSplitSegment) splitCurrentSegment();
   } else if (e.code === 'ArrowLeft') {
     if (video && video.src) seekBy(e.shiftKey ? -60 : -5);
   } else if (e.code === 'ArrowRight') {
@@ -800,10 +1129,20 @@ window.approveTalk = async function(id) {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
       const dur = (video?.duration > 0) ? video.duration : (outPointSec || 10);
-      const clampedIn = Math.max(0, Math.min(inPointSec, dur - 0.1));
-      const clampedOut = Math.min(dur, Math.max(outPointSec, clampedIn + 0.1));
       const base = getActiveVideoCategory() === 'preview' ? (parseFloat(getStudioShell()?.dataset?.cutStart) || 0) : 0;
-      const cutPayload = { cut_start: formatTimecode(clampedIn + base), cut_end: formatTimecode(clampedOut + base) };
+      const formattedSegments = (cutSegments && cutSegments.length > 0 ? cutSegments : [{ start: inPointSec, end: outPointSec }]).map(s => {
+        const clampedIn = Math.max(0, Math.min(s.start, dur - 0.1));
+        const clampedOut = Math.min(dur, Math.max(s.end, clampedIn + 0.1));
+        return {
+          start: formatTimecode(clampedIn + base),
+          end: formatTimecode(clampedOut + base),
+        };
+      });
+      const cutPayload = {
+        segments: formattedSegments,
+        cut_start: formattedSegments[0].start,
+        cut_end: formattedSegments[formattedSegments.length - 1].end,
+      };
       if (notes) cutPayload.note = notes;
       await postAPI(`/talks/${id}/cut`, cutPayload);
     } else if (talkStatus === 'preview') {

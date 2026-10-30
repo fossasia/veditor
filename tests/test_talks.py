@@ -934,6 +934,51 @@ def test_submit_cut_bounds_needs_work_accepted():
             app.dependency_overrides.clear()
 
 
+def test_submit_cut_bounds_multiple_segments_accepted():
+    """POST /talks/{id}/cut succeeds with multiple non-overlapping segments."""
+    mock_db, mock_talk = _make_pending_bounds_talk_db()
+    mock_talk.raw_duration_seconds = 3600.0
+    mock_client = models.Client(id=1, event_ids=[1])
+    fake_storage = FakeStorageBackend()
+    fake_storage.put("1/raw/video.mp4", b"raw video")
+
+    app.dependency_overrides[get_client] = lambda: mock_client
+    app.dependency_overrides[get_db] = lambda: mock_db
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    with patch("app.routes.talks.light_queue.enqueue") as mock_enqueue:
+        try:
+            resp = client.post(
+                "/talks/1/cut",
+                json={
+                    "segments": [
+                        {"start": "00:05:00", "end": "00:15:00"},
+                        {"start": "00:20:00", "end": "00:30:00"},
+                    ],
+                    "note": "Cut out the mic malfunction",
+                },
+                headers={"X-API-Key": "valid_key"},
+            )
+            assert resp.status_code == 202
+            assert mock_talk.status == "cutting"
+            assert mock_talk.cut_start is None
+            assert mock_talk.cut_end is None
+            assert mock_talk.cut_segments == [
+                {"start": 300.0, "end": 900.0},
+                {"start": 1200.0, "end": 1800.0},
+            ]
+            from app.tasks import job_cut_multi
+
+            mock_enqueue.assert_called_once_with(
+                job_cut_multi,
+                1,
+                "1/raw/video.mp4",
+                job_timeout=900,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+
 # --- Full Path Test: recordings -> detect -> pending_approval -> approve -> cut -> preview -> preview halt ---
 
 

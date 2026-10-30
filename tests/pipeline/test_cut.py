@@ -303,3 +303,81 @@ def test_smart_cut_frame_accurate(tmp_path: Path):
     assert info.duration is not None
     # 6.8 - 1.2 = 5.6s window; smart cut must be frame-accurate within 0.15s
     assert abs(info.duration - 5.6) <= 0.15
+
+
+def test_cut_frame_accurate_preserves_vfr_timestamps(tmp_path: Path):
+    """Verify frame-accurate fallback preserves variable-frame-rate timestamps."""
+    from fractions import Fraction
+
+    import av
+
+    from app.pipeline.cut import _cut_frame_accurate
+
+    src = tmp_path / "vfr_source.mp4"
+    with av.open(str(src), "w") as out:
+        v = out.add_stream("libx264", rate=30)
+        v.codec_context.time_base = Fraction(1, 90000)
+        v.width = 320
+        v.height = 240
+        v.pix_fmt = "yuv420p"
+        # Non-uniform timestamps representing variable frame rate
+        times = [0.0, 0.4, 0.5, 0.9, 1.2, 1.8, 2.0]
+        last_pts = None
+        for t in times:
+            f = av.VideoFrame(320, 240, "yuv420p")
+            f.time_base = Fraction(1, 90000)
+            pts = round(t * 90000)
+            f.pts = max(pts, (last_pts + 1) if last_pts is not None else 0)
+            last_pts = f.pts
+            for p in v.encode(f):
+                out.mux(p)
+        for p in v.encode():
+            out.mux(p)
+
+    out_cut = tmp_path / "vfr_cut.mp4"
+    _cut_frame_accurate(str(src), str(out_cut), 0.4, 1.8)
+
+    with av.open(str(out_cut)) as inp:
+        st = inp.streams.video[0]
+        decoded_times = []
+        for p in inp.demux(st):
+            for f in p.decode():
+                decoded_times.append(float(f.pts * f.time_base))
+
+        expected = [round(t - 0.4, 3) for t in [0.4, 0.5, 0.9, 1.2, 1.8]]
+        assert len(decoded_times) == len(expected)
+        for act, exp in zip(decoded_times, expected, strict=True):
+            assert abs(act - exp) < 0.02
+
+
+def test_cut_frame_accurate_flushes_resampler(tmp_path: Path):
+    """Verify fallback audio resampler is flushed with None before encoder flush."""
+    from unittest.mock import patch
+
+    import av
+
+    from app.pipeline.cut import _cut_frame_accurate
+
+    src = generate_clip(3.0, output_dir=tmp_path)
+    out = tmp_path / "resampler_flushed.mp4"
+
+    real_resampler_factory = av.AudioResampler
+    flushed = []
+
+    class ResamplerWrapper:
+        def __init__(self, *args, **kwargs):
+            self._real = real_resampler_factory(*args, **kwargs)
+
+        def resample(self, frame=None):
+            if frame is None:
+                flushed.append(True)
+            return self._real.resample(frame)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    with patch("av.AudioResampler", side_effect=ResamplerWrapper):
+        _cut_frame_accurate(str(src), str(out), 0.5, 2.0)
+
+    assert flushed == [True]
+    assert out.is_file()

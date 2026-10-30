@@ -279,6 +279,9 @@ class Talk(Base):
     raw_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cut_segments: Mapped[list[dict[str, float]] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     include_intro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     include_outro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     intro_source: Mapped[str | None] = mapped_column(String(50), nullable=True)

@@ -627,6 +627,126 @@ a.breadcrumb-event:hover {
   align-items: flex-end;
 }
 
+.timeline-segments-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.segments-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+  max-width: 100%;
+}
+
+.segment-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--v-radius-xs);
+  border: 1px solid var(--v-border);
+  background: var(--v-bg-subtle);
+  font-size: 0.72rem;
+  color: var(--v-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.segment-tab:hover {
+  border-color: var(--v-primary-border);
+  color: var(--v-text-primary);
+}
+
+.segment-tab.active {
+  background: var(--v-primary-subtle);
+  border-color: var(--v-primary);
+  color: var(--v-primary);
+  font-weight: 600;
+}
+
+.segment-tab-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.75rem;
+  line-height: 1;
+  border-radius: 2px;
+}
+
+.segment-tab-del:hover {
+  opacity: 1;
+  color: var(--v-status-danger-text);
+  background: rgba(255, 69, 58, 0.12);
+}
+
+.segments-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.segments-actions .btn-xs {
+  height: 24px;
+  font-size: 0.7rem;
+  padding: 0 8px;
+}
+
+#tl-segments-container {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.tl-segment-block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(61, 107, 255, 0.15);
+  border-left: 1px dashed rgba(61, 107, 255, 0.5);
+  border-right: 1px dashed rgba(61, 107, 255, 0.5);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 3;
+  transition: background 0.15s;
+}
+
+.tl-segment-block:hover {
+  background: rgba(61, 107, 255, 0.22);
+}
+
+.tl-segment-block.is-active {
+  background: rgba(61, 107, 255, 0.3);
+  border-left: 2px solid var(--v-status-success-text);
+  border-right: 2px solid var(--v-status-danger-text);
+}
+
+#submission-timestamps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
 .timeline-inputs-bar {
   display: flex;
   align-items: center;

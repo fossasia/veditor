@@ -132,6 +132,7 @@ def cut(
     end_seconds: float,
     *,
     threads: int | None = None,
+    frame_accurate_fallback: bool = False,
 ) -> CutStrategy:
     """Trim an input recording to the [start_seconds, end_seconds] window.
 
@@ -194,6 +195,17 @@ def cut(
         return strategy
     except Exception as smart_exc:  # noqa: BLE001
         smart_err = str(smart_exc)
+        if frame_accurate_fallback:
+            logger.info(
+                "Smart cut failed for %s [%.2fs -> %.2fs] (%s); falling back to frame-accurate re-encode.",
+                in_path.name,
+                start_seconds,
+                end_seconds,
+                smart_exc,
+            )
+            return _cut_frame_accurate(
+                str(in_path), str(out_path), start_seconds, end_seconds, threads=threads
+            )
         logger.warning(
             "Smart cut failed for %s [%.2fs -> %.2fs] (%s); falling back to stream copy at nearest keyframes.",
             in_path.name,
@@ -226,6 +238,165 @@ def cut(
             f"Trimming failed for {in_path.name} [{start_seconds:.2f}s -> {end_seconds:.2f}s]: "
             f"smart cut failed ({smart_err}), stream copy fallback failed ({stream_exc})"
         ) from stream_exc
+
+
+def _cut_frame_accurate(
+    input_path: str,
+    output_path: str,
+    start_seconds: float,
+    end_seconds: float,
+    *,
+    threads: int | None = None,
+) -> CutStrategy:
+    """Frame-accurate cut re-encoding [start_seconds, end_seconds]."""
+    with av.open(input_path) as ref_c:
+        in_v = ref_c.streams.video[0] if ref_c.streams.video else None
+        in_a = ref_c.streams.audio[0] if ref_c.streams.audio else None
+        if not in_v and not in_a:
+            raise ValueError(f"No media streams found in {input_path}")
+
+        has_video = bool(in_v)
+        has_audio = bool(in_a)
+
+        can_w = 1920
+        can_h = 1080
+        can_fps = Fraction(24, 1)
+        v_enc_name = "libx264"
+        if has_video:
+            raw_w = in_v.codec_context.width or 1920
+            raw_h = in_v.codec_context.height or 1080
+            can_w = (raw_w // 2) * 2
+            can_h = (raw_h // 2) * 2
+            fps_val = in_v.average_rate or in_v.guessed_rate or 24
+            can_fps = Fraction(fps_val) if fps_val else Fraction(24, 1)
+            v_enc_name = _resolve_video_encoder(in_v.codec_context.name)
+
+        can_sr = 44100
+        can_layout = "stereo"
+        a_enc_name = "aac"
+        if has_audio:
+            can_sr = in_a.codec_context.sample_rate or 44100
+            if in_a.codec_context.layout and in_a.codec_context.layout.name:
+                can_layout = in_a.codec_context.layout.name
+            elif in_a.codec_context.channels == 1:
+                can_layout = "mono"
+            elif in_a.codec_context.channels == 2:
+                can_layout = "stereo"
+            a_enc_name = _resolve_audio_encoder(in_a.codec_context.name)
+
+    container_options: dict[str, str] = {}
+    if str(output_path).lower().endswith((".mp4", ".m4v", ".mov")):
+        container_options["movflags"] = "faststart"
+
+    with av.open(
+        output_path, mode="w", options=container_options or None
+    ) as out_container:
+        out_v = None
+        if has_video:
+            video_options: dict[str, str] = {"crf": "22", "preset": "ultrafast"}
+            if threads is not None:
+                video_options["threads"] = str(threads)
+            out_v = out_container.add_stream(
+                v_enc_name, rate=can_fps, options=video_options
+            )
+            out_v.codec_context.time_base = Fraction(1, 90000)
+            out_v.width = can_w
+            out_v.height = can_h
+            out_v.pix_fmt = "yuv420p"
+
+        out_a = None
+        if has_audio:
+            out_a = out_container.add_stream(a_enc_name, rate=can_sr)
+            out_a.layout = can_layout
+
+        last_v_pts: int | None = None
+        a_pts = 0
+
+        with av.open(input_path) as in_c:
+            streams = [
+                s
+                for s in (
+                    in_c.streams.video[0] if in_c.streams.video else None,
+                    in_c.streams.audio[0] if in_c.streams.audio else None,
+                )
+                if s is not None
+            ]
+            seek_target = max(0, int((start_seconds - 1.0) * av.time_base))
+            in_c.seek(seek_target, backward=True, any_frame=False)
+
+            resampler = (
+                av.AudioResampler(format="fltp", layout=can_layout, rate=can_sr)
+                if out_a
+                else None
+            )
+
+            for packet in in_c.demux(*streams):
+                try:
+                    frames = packet.decode()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "Skipping unparseable packet during frame-accurate cut: %s", exc
+                    )
+                    continue
+                for frame in frames:
+                    if isinstance(frame, av.VideoFrame) and out_v:
+                        t = (
+                            float(frame.pts * frame.time_base)
+                            if frame.pts is not None
+                            else float(frame.time or 0)
+                        )
+                        if t < start_seconds - 0.001:
+                            continue
+                        if t > end_seconds + 0.001:
+                            continue
+                        rf = frame.reformat(width=can_w, height=can_h, format="yuv420p")
+                        offset_s = max(0.0, t - start_seconds)
+                        target_pts = round(offset_s * 90000)
+                        v_pts = max(
+                            target_pts,
+                            (last_v_pts + 1) if last_v_pts is not None else 0,
+                        )
+                        last_v_pts = v_pts
+                        rf.pts = v_pts
+                        rf.time_base = Fraction(1, 90000)
+                        for enc_p in out_v.encode(rf):
+                            out_container.mux(enc_p)
+                    elif isinstance(frame, av.AudioFrame) and out_a:
+                        t = (
+                            float(frame.pts * frame.time_base)
+                            if frame.pts is not None
+                            else float(frame.time or 0)
+                        )
+                        if t < start_seconds - 0.05:
+                            continue
+                        if t > end_seconds + 0.05:
+                            continue
+                        resampled_list = (
+                            resampler.resample(frame) if resampler else [frame]
+                        )
+                        for rf in resampled_list:
+                            rf.pts = a_pts
+                            rf.time_base = Fraction(1, can_sr)
+                            a_pts += rf.samples
+                            for enc_p in out_a.encode(rf):
+                                out_container.mux(enc_p)
+
+        if resampler and out_a:
+            for rf in resampler.resample(None):
+                rf.pts = a_pts
+                rf.time_base = Fraction(1, can_sr)
+                a_pts += rf.samples
+                for enc_p in out_a.encode(rf):
+                    out_container.mux(enc_p)
+
+        if out_v:
+            for enc_p in out_v.encode():
+                out_container.mux(enc_p)
+        if out_a:
+            for enc_p in out_a.encode():
+                out_container.mux(enc_p)
+
+    return CutStrategy.SMART_CUT
 
 
 def _cut_smart(
