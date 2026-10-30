@@ -1667,6 +1667,104 @@ def test_request_organizer_note_exceeding_max_length_rejected(
     assert res.status_code == 422
 
 
+def test_request_organizer_note_minimum_length(client: TestClient, db_session):
+    """Note under 20 characters is rejected; 20-500 characters is accepted."""
+    user = _create_test_user(db_session, "req_org_min@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    # Note shorter than 20 characters rejected
+    res_short = client.post("/users/request-organizer", json={"note": "a" * 19})
+    assert res_short.status_code == 422
+    assert "Note must be at least 20 characters." in res_short.json()["detail"]
+
+    # Trailing whitespace does not inflate length beyond stripped requirement
+    res_ws = client.post(
+        "/users/request-organizer", json={"note": "   " + "a" * 19 + "   "}
+    )
+    assert res_ws.status_code == 422
+
+    # Exactly 20 characters accepted
+    res_min = client.post("/users/request-organizer", json={"note": "a" * 20})
+    assert res_min.status_code == 200
+    assert res_min.json()["organizer_request_note"] == "a" * 20
+
+    # Empty string note is accepted and normalized to null
+    user_empty = _create_test_user(
+        db_session, "req_org_empty@admin-test.com", role="user"
+    )
+    token_empty = create_session_token(user_empty.id, user_empty.role)
+    client.cookies.set("veditor_session", token_empty)
+    res_empty = client.post("/users/request-organizer", json={"note": ""})
+    assert res_empty.status_code == 200
+    assert res_empty.json()["organizer_request_note"] is None
+
+    # Note exactly 500 characters long is accepted and preserved
+    user_500 = _create_test_user(db_session, "req_org_500@admin-test.com", role="user")
+    token_500 = create_session_token(user_500.id, user_500.role)
+    client.cookies.set("veditor_session", token_500)
+    note_500 = "a" * 500
+    res_500 = client.post("/users/request-organizer", json={"note": note_500})
+    assert res_500.status_code == 200
+    assert res_500.json()["organizer_request_note"] == note_500
+
+
+def test_request_organizer_note_unicode_code_point_validation(
+    client: TestClient, db_session
+):
+    """Supplementary Unicode characters (e.g. emoji) are counted by code point."""
+    user = _create_test_user(db_session, "req_org_unicode@admin-test.com", role="user")
+    token = create_session_token(user.id, user.role)
+    client.cookies.set("veditor_session", token)
+
+    # 10 emoji (20 UTF-16 code units, but only 10 Unicode code points) is rejected (< 20)
+    res_short_emoji = client.post("/users/request-organizer", json={"note": "🚀" * 10})
+    assert res_short_emoji.status_code == 422
+    assert "Note must be at least 20 characters." in res_short_emoji.json()["detail"]
+
+    # 20 emoji (20 code points) is accepted
+    res_valid_emoji = client.post("/users/request-organizer", json={"note": "🚀" * 20})
+    assert res_valid_emoji.status_code == 200
+    assert res_valid_emoji.json()["organizer_request_note"] == "🚀" * 20
+
+    # 500 emoji (500 code points, 1000 UTF-16 code units) is accepted
+    user_emoji_500 = _create_test_user(
+        db_session, "req_org_emoji_500@admin-test.com", role="user"
+    )
+    token_emoji_500 = create_session_token(user_emoji_500.id, user_emoji_500.role)
+    client.cookies.set("veditor_session", token_emoji_500)
+    res_max_emoji = client.post("/users/request-organizer", json={"note": "🚀" * 500})
+    assert res_max_emoji.status_code == 200
+    assert res_max_emoji.json()["organizer_request_note"] == "🚀" * 500
+
+    # 501 emoji (501 code points) is rejected (> 500)
+    user_emoji_501 = _create_test_user(
+        db_session, "req_org_emoji_501@admin-test.com", role="user"
+    )
+    token_emoji_501 = create_session_token(user_emoji_501.id, user_emoji_501.role)
+    client.cookies.set("veditor_session", token_emoji_501)
+    res_over_emoji = client.post("/users/request-organizer", json={"note": "🚀" * 501})
+    assert res_over_emoji.status_code == 422
+
+
+def test_request_organizer_openapi_contract(client: TestClient):
+    """OpenAPI contract documents the minimum and maximum note length requirements."""
+    res = client.get("/openapi.json")
+    assert res.status_code == 200
+    schema = res.json()
+    post_op = schema["paths"]["/users/request-organizer"]["post"]
+    assert "at least 20 characters" in post_op["description"]
+    resp_422 = post_op["responses"]["422"]
+    detail_schema = resp_422["content"]["application/json"]["schema"]["properties"][
+        "detail"
+    ]
+    assert "anyOf" in detail_schema
+    note_prop = schema["components"]["schemas"]["OrganizerRequestCreate"]["properties"][
+        "note"
+    ]
+    assert "at least 20 characters" in note_prop["description"]
+
+
 def test_admin_approve_clears_pending_request(client: TestClient, db_session):
     """Admin promoting a user to organizer clears the pending request flag."""
     admin = _create_test_user(db_session, "admin_appv@admin-test.com", role="admin")

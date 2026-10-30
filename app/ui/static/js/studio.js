@@ -1764,8 +1764,17 @@ function initOrganizerRequest() {
 
   if (!btnRequest || !modal) return;
 
+  function getCodePoints(str) {
+    return Array.from(str || '');
+  }
+
+  let lastVal = '';
+
   function openModal() {
-    if (noteInput) noteInput.value = '';
+    if (noteInput) {
+      noteInput.value = '';
+      lastVal = '';
+    }
     if (noteChars) noteChars.textContent = '0 / 500';
     if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
     Modal.open(modal);
@@ -1782,13 +1791,65 @@ function initOrganizerRequest() {
 
   if (noteInput && noteChars) {
     noteInput.addEventListener('input', () => {
-      noteChars.textContent = `${noteInput.value.length} / 500`;
+      const currentCP = getCodePoints(noteInput.value);
+      if (currentCP.length > 500) {
+        const lastCP = getCodePoints(lastVal);
+        let prefixLen = 0;
+        while (prefixLen < lastCP.length && prefixLen < currentCP.length && lastCP[prefixLen] === currentCP[prefixLen]) {
+          prefixLen++;
+        }
+        let suffixLen = 0;
+        while (
+          suffixLen < (lastCP.length - prefixLen) &&
+          suffixLen < (currentCP.length - prefixLen) &&
+          lastCP[lastCP.length - 1 - suffixLen] === currentCP[currentCP.length - 1 - suffixLen]
+        ) {
+          suffixLen++;
+        }
+        const prefix = lastCP.slice(0, prefixLen);
+        const suffix = suffixLen > 0 ? lastCP.slice(lastCP.length - suffixLen) : [];
+        const inserted = currentCP.slice(prefixLen, currentCP.length - suffixLen);
+        const allowed = Math.max(0, 500 - (prefix.length + suffix.length));
+        const accepted = inserted.slice(0, allowed);
+        noteInput.value = [...prefix, ...accepted, ...suffix].join('');
+        const newCaret = [...prefix, ...accepted].join('').length;
+        if (typeof noteInput.setSelectionRange === 'function') {
+          noteInput.setSelectionRange(newCaret, newCaret);
+        }
+      }
+      lastVal = noteInput.value;
+      const untrimmedCount = getCodePoints(noteInput.value).length;
+      noteChars.textContent = `${untrimmedCount} / 500`;
+      if (errorEl && !errorEl.classList.contains('hidden')) {
+        const trimmedCount = getCodePoints(noteInput.value.trim()).length;
+        if (trimmedCount === 0 || trimmedCount >= 20) {
+          errorEl.textContent = '';
+          errorEl.classList.add('hidden');
+        }
+      }
     });
   }
 
   if (btnSubmit) {
     btnSubmit.addEventListener('click', async () => {
       if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+      const trimmedNote = noteInput ? noteInput.value.trim() : '';
+      const trimmedCount = getCodePoints(trimmedNote).length;
+      if (trimmedCount > 0 && trimmedCount < 20) {
+        if (errorEl) {
+          errorEl.textContent = 'Note must be at least 20 characters.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+      const rawCount = getCodePoints(noteInput ? noteInput.value : '').length;
+      if (rawCount > 500) {
+        if (errorEl) {
+          errorEl.textContent = 'Note must be at most 500 characters.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
       btnSubmit.disabled = true;
       btnSubmit.textContent = 'Submitting…';
       try {
@@ -1796,7 +1857,7 @@ function initOrganizerRequest() {
         const resp = await fetchFn('/users/request-organizer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ note: noteInput ? noteInput.value.trim() : '' }),
+          body: JSON.stringify({ note: trimmedNote }),
         });
         let data = {};
         try {
@@ -1825,9 +1886,12 @@ function initOrganizerRequest() {
             `;
           }
         } else {
-          const msg = (typeof data.detail === 'string' && data.detail.trim())
-            ? data.detail
-            : 'Failed to submit request. Please try again.';
+          let msg = 'Failed to submit request. Please try again.';
+          if (typeof data.detail === 'string' && data.detail.trim()) {
+            msg = data.detail;
+          } else if (Array.isArray(data.detail) && data.detail[0]?.msg) {
+            msg = data.detail[0].msg.replace(/^Value error,\s*/i, '');
+          }
           if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
           btnSubmit.disabled = false;
           btnSubmit.textContent = 'Submit Request';

@@ -437,7 +437,11 @@ class UserRead(BaseModel):
 
 
 class OrganizerRequestCreate(BaseModel):
-    note: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional justification note. If non-empty, must be at least 20 characters and at most 500 characters.",
+    )
 
 
 class UserPromoteRequest(BaseModel):
