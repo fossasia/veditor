@@ -1109,3 +1109,54 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
         b"RQ queue failure"
         in fake_storage.get(f"{preview_talk.id}/logs/assembly.log").read_bytes()
     )
+
+
+def test_admin_can_reopen_completed_talk_for_editing(mock_db, preview_talk):
+    """Admin or organizer can review a completed ('done') talk with 'needs_work' to reopen editing."""
+    preview_talk.status = "done"
+    preview_talk.cut_start = 15.0
+    preview_talk.cut_end = 90.0
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = preview_talk
+
+    admin_user = CurrentUser(
+        user_id=1,
+        email="admin@example.com",
+        role="admin",
+        source="cookie",
+        event_ids=[1],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work", "note": "Removing inappropriate content"},
+    )
+    assert response.status_code == 200
+    assert preview_talk.status == "pending_bounds"
+    assert preview_talk.cut_start == 15.0
+    assert preview_talk.cut_end == 90.0
+
+
+def test_speaker_cannot_reopen_completed_talk(mock_db, preview_talk):
+    """Speaker role receives 403 when trying to reopen a completed talk."""
+    preview_talk.status = "done"
+    preview_talk.speaker_email = "speaker@example.com"
+    mock_db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = preview_talk
+
+    speaker_user = CurrentUser(
+        user_id=2,
+        email="speaker@example.com",
+        role="speaker",
+        source="cookie",
+        event_ids=[],
+    )
+    app.dependency_overrides[get_current_user] = lambda: speaker_user
+    app.dependency_overrides[get_db] = lambda: mock_db
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work"},
+    )
+    assert response.status_code == 403
+    assert "Operation requires minimum role 'organizer'" in response.json()["detail"]

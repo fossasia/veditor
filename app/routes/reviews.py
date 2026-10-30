@@ -54,7 +54,18 @@ def review_talk(
             )
         check_event_access(talk.event_id, user, db)
 
-    if talk.status != "preview":
+    if talk.status == "done":
+        if payload.decision != schemas.ReviewDecision.needs_work:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",
+            )
+        if user.role not in ("organizer", "admin") and not user.is_machine:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operation requires minimum role 'organizer'",
+            )
+    elif talk.status != "preview":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",

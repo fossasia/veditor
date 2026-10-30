@@ -28,7 +28,7 @@ TRANSITIONS = {
     "transcoding": ["uploading", "broken"],
     "uploading": ["done", "broken"],
     "needs_work": ["cutting", "broken"],
-    "done": [],
+    "done": ["pending_bounds"],
     "rejected": [],
     "broken": [],
 }

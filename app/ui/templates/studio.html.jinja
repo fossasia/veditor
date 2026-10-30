@@ -94,7 +94,7 @@
 {% block content %}
 {% set can_manage = (user and user.role in ['organizer', 'admin'] and not user.is_sso) or (user is none) %}
 {% set is_admin_or_org = (user and user.role in ['organizer', 'admin']) or (user is none) %}
-{% set awaiting_speaker = talk.speaker_email and not is_speaker %}
+{% set awaiting_speaker = talk.speaker_email and not is_speaker and not is_admin_or_org %}
 <div class="studio-shell{% if is_other_organizer_talk %} is-view-only{% endif %}" data-talk-id="{{ talk.id }}" data-event-id="{{ talk.event_id or '' }}" data-talk-status="{{ talk.status }}" data-speaker-email="{{ talk.speaker_email or '' }}" data-cut-start="{{ talk.cut_start if talk.cut_start is not none else '' }}" data-cut-end="{{ talk.cut_end if talk.cut_end is not none else '' }}" data-talk-title="{{ (talk.title or '') | e }}" data-talk-room="{{ (talk.room or '') | e }}" data-talk-start="{{ talk.start.isoformat() if talk.start else '' }}" data-talk-end="{{ talk.end.isoformat() if talk.end else '' }}" data-preview-urls="{{ preview_urls | tojson | forceescape }}" data-is-other-organizer="{{ 'true' if is_other_organizer_talk else 'false' }}">
 
 {% set is_processing = talk.status in ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'] %}
@@ -729,6 +729,12 @@
                 </svg>
                 <span>Download Master Video</span>
               </a>
+
+              {% if is_admin_or_org %}
+              <button class="btn btn-warning w-full btn-edit-done btn-step-spacing" id="btn-needs-work" data-edit-control="true">
+                Edit Video
+              </button>
+              {% endif %}
             </div>
 
             {% if media_assets and media_assets | length > 1 %}

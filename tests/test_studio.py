@@ -3956,3 +3956,85 @@ def test_sso_speaker_view_derived_from_email_match(client: TestClient, db_sessio
 def test_talk_speaker_email_index():
     """Ensure speaker_email column has an index defined on models.Talk."""
     assert models.Talk.__table__.c.speaker_email.index is True
+
+
+def test_admin_can_edit_completed_talk_ui(client: TestClient, db_session):
+    """Admin viewing a 'done' talk sees both 'Download Master Video' and 'Edit Video' buttons."""
+    now = datetime.now(UTC)
+    admin = models.User(
+        email="admin_studio_test@example.com",
+        hashed_password="hash",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    event = models.Event(name="Completed Talk Event", created_by_user_id=admin.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Completed Talk With Speaker Cuts",
+        status="done",
+        speaker_email="speaker@example.com",
+        cut_start=20.0,
+        cut_end=120.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    assert "Download Master Video" in response.text
+    assert "btn-needs-work" in response.text
+    assert "Edit Video" in response.text
+    client.cookies.clear()
+
+
+def test_admin_not_blocked_by_awaiting_speaker_in_preview(
+    client: TestClient, db_session
+):
+    """Admin viewing a talk in 'preview' status with assigned speaker sees review action buttons."""
+    now = datetime.now(UTC)
+    admin = models.User(
+        email="admin_preview_test@example.com",
+        hashed_password="hash",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    event = models.Event(name="Preview Event", created_by_user_id=admin.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Preview Talk With Speaker",
+        status="preview",
+        speaker_email="speaker@example.com",
+        cut_start=10.0,
+        cut_end=60.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    assert "Awaiting Speaker to Review Preview" not in response.text
+    assert "Approve Video" in response.text
+    assert "Edit Video" in response.text
+    client.cookies.clear()
