@@ -163,3 +163,12 @@ def test_detect_fails_empty_file(tmp_path: Path):
     assert not result.has_video
     assert not result.has_audio
     assert "file is empty" in result.reason
+
+
+def test_detect_passes_when_schedule_bounds_none(tmp_path: Path):
+    clip = generate_clip(5, output_dir=tmp_path)
+    result = detect(clip, scheduled_start=None, scheduled_end=None)
+    assert result.passed
+    assert result.actual_duration_seconds > 0
+    assert result.has_video
+    assert result.reason is None

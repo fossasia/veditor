@@ -23,8 +23,8 @@ class DetectResult:
 
 def detect(
     file_path: Path,
-    scheduled_start: datetime,
-    scheduled_end: datetime,
+    scheduled_start: datetime | None = None,
+    scheduled_end: datetime | None = None,
     tolerance_seconds: float = DETECT_DURATION_TOLERANCE_SECONDS,
     is_room_recording: bool = False,
 ) -> DetectResult:
@@ -66,6 +66,15 @@ def detect(
             has_video=has_video,
             has_audio=has_audio,
             reason="missing video stream",
+        )
+
+    if scheduled_start is None or scheduled_end is None:
+        return DetectResult(
+            passed=True,
+            actual_duration_seconds=actual_duration,
+            has_video=has_video,
+            has_audio=has_audio,
+            reason=None,
         )
 
     scheduled_duration = (scheduled_end - scheduled_start).total_seconds()

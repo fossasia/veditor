@@ -289,6 +289,39 @@ def test_detect_failure_advances_to_broken(dummy_talk, mock_storage):
     mock_storage.put.assert_called_once()
 
 
+def test_job_detect_duration_mismatch_advances_to_pending_approval(
+    dummy_talk, mock_storage
+):
+    """When a valid video file duration differs from the scheduled duration,
+
+    job_detect accepts the recording, does not fail, and advances the talk to pending_approval.
+    """
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=900.0,
+                has_video=True,
+                has_audio=True,
+                reason="duration delta 1800.0s exceeds tolerance 300.0s (actual: 900.0s, scheduled: 2700.0s)",
+            ),
+        ),
+    ):
+        job_detect(1, "1/raw/raw.mp4")
+
+    assert dummy_talk.status == "pending_approval"
+    assert dummy_talk.raw_duration_seconds == 900.0
+    job = next(iter(jobs.values()))
+    assert job.status == "done"
+
+
 def test_failure_on_already_broken_talk_does_not_crash(dummy_talk, mock_storage):
     dummy_talk.status = "detecting"
     jobs = {}
