@@ -21,10 +21,14 @@ RUN uv venv && uv sync --no-dev --no-install-project
 COPY app/ app/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
+COPY deployment/ deployment/
 COPY alembic.ini .
 
 # Expose the API port
 EXPOSE 8000
+
+# Wait for dependencies and optionally run migrations before starting a process.
+ENTRYPOINT ["/app/deployment/entrypoint.sh"]
 
 # Default command
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

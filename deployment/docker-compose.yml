@@ -1,0 +1,178 @@
+services:
+  api:
+    image: fossasia/veditor:latest
+    entrypoint: ["/app/deployment/entrypoint.sh"]
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/data
+      INGEST_ROOTS: '["/app/ingest"]'
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      - veditor_data:/app/data
+      - veditor_ingest:/app/ingest
+    networks:
+      - application
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  worker-light:
+    image: fossasia/veditor:latest
+    entrypoint: ["/app/deployment/entrypoint.sh"]
+    command: ["uv", "run", "python", "scripts/run_worker.py", "light", "--concurrency", "1", "--with-scheduler", "--nice", "10"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/data
+      INGEST_ROOTS: '["/app/ingest"]'
+      RUN_MIGRATIONS: "false"
+      WAIT_FOR_API: "true"
+      API_HEALTH_URL: http://api:8000/health
+      ENCODER_THREADS: 2
+    volumes:
+      - veditor_data:/app/data
+      - veditor_ingest:/app/ingest
+    networks:
+      - application
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    stop_grace_period: 1h
+    restart: unless-stopped
+
+  worker-heavy:
+    image: fossasia/veditor:latest
+    entrypoint: ["/app/deployment/entrypoint.sh"]
+    command: ["uv", "run", "python", "scripts/run_worker.py", "heavy", "--concurrency", "1", "--nice", "15"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      DATA_DIR: /app/data
+      INGEST_ROOTS: '["/app/ingest"]'
+      RUN_MIGRATIONS: "false"
+      WAIT_FOR_API: "true"
+      API_HEALTH_URL: http://api:8000/health
+      ENCODER_THREADS: 2
+    volumes:
+      - veditor_data:/app/data
+      - veditor_ingest:/app/ingest
+    networks:
+      - application
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    stop_grace_period: 1h
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:18-alpine
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-veditor} -d $${POSTGRES_DB:-veditor}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: redis-server --appendonly yes --appendfsync always
+    volumes:
+      - redis_data:/data
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  watchtower:
+    image: nickfedor/watchtower@sha256:62fb91130ddb493f869cad7e198fa260dd16c5da293ed092cbd5d8781566f7a6
+    command: --label-enable
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      WATCHTOWER_POLL_INTERVAL: 300
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_TIMEOUT: 1h
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
+    networks:
+      - docker_control
+      - egress
+    restart: unless-stopped
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.1.2
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      INFO: "1"
+      NETWORKS: "1"
+      POST: "1"
+      VOLUMES: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - docker_control
+    restart: unless-stopped
+
+networks:
+  application:
+  docker_control:
+    internal: true
+  egress:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-veditor_postgres_data}
+  redis_data:
+    name: ${REDIS_VOLUME_NAME:-veditor_redis_data}
+  veditor_data:
+    name: ${DATA_VOLUME_NAME:-veditor_veditor_data}
+  veditor_ingest:
+    name: ${INGEST_VOLUME_NAME:-veditor_veditor_ingest}
