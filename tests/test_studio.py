@@ -3992,16 +3992,14 @@ def test_admin_account_with_speaker_role_accesses_speaker_editor(client, db_sess
     db_session.add(talk)
     db_session.commit()
 
-    # 1. Admin visits talk via speaker SSO link
+    # 1. User visits talk via speaker SSO link without pre-existing session cookies
+    client.cookies.clear()
     sso_token = create_sso_token(
         scope_type="talk",
         scope_id=talk.id,
         role="speaker",
         email="admin_speaker@example.com",
     )
-    admin_token = create_session_token(admin_user.id, admin_user.role)
-    client.cookies.set("veditor_session", admin_token)
-
     resp = client.get(
         f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
     )
@@ -4013,7 +4011,9 @@ def test_admin_account_with_speaker_role_accesses_speaker_editor(client, db_sess
     assert "input-in-point" in resp.text
     assert "Admin Console" not in resp.text
 
-    # 2. Admin visits their assigned talk directly using their admin login session
+    # 2. Admin visits their assigned talk directly using their admin login session (no SSO token)
+    client.cookies.clear()
+    admin_token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", admin_token)
     resp2 = client.get(f"/studio/talks/{talk.id}")
     assert resp2.status_code == 200
@@ -4022,6 +4022,15 @@ def test_admin_account_with_speaker_role_accesses_speaker_editor(client, db_sess
     assert "Submit Timestamps" in resp2.text
     assert "btn-set-in" in resp2.text
     assert "input-in-point" in resp2.text
+
+    # 3. Admin visits talk via speaker SSO link while logged into their admin account
+    resp3 = client.get(
+        f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
+    )
+    assert resp3.status_code == 200
+    assert "is-view-only" not in resp3.text
+    assert "Awaiting Speaker to Submit Timestamps" not in resp3.text
+    assert "Submit Timestamps" in resp3.text
 
 
 def test_talk_speaker_email_index():
