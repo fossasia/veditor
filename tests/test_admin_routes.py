@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -8,10 +9,15 @@ from sqlalchemy import Executable, delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
-from app.auth import CurrentUser, hash_api_key
+from app.auth import CurrentUser, get_current_user, hash_api_key
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
-from app.security import create_access_token, create_session_token, hash_password
+from app.security import (
+    create_access_token,
+    create_session_token,
+    create_sso_token,
+    hash_password,
+)
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
@@ -337,7 +343,6 @@ def test_deactivate_guard_cannot_deactivate_last_admin(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     # Ensure only 1 active admin exists during the test without deleting pre-existing admins
-    from app.auth import get_current_user
 
     existing_admin_ids: Sequence[int] = []
     try:
@@ -504,7 +509,6 @@ def test_deactivated_user_immediate_session_and_login_rejection(
 
 
 def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) -> None:
-    import threading
 
     other_admin_ids = []
     with SessionLocal() as s:
@@ -1716,7 +1720,6 @@ def test_request_organizer_role_sso_rejected(
     client: TestClient, setup_database: None
 ) -> None:
     """SSO sessions are forbidden from requesting organizer access."""
-    from app.security import create_sso_token
 
     sso_token = create_sso_token(
         scope_type="event", scope_id=1, role="speaker", email="sso@example.com"

@@ -6,8 +6,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ingest import download_media_url, resolve_direct_media_url
 from app.models import Event, Job, Talk
 from app.pipeline.detect import DetectResult
+from app.storage import StorageKeyNotFoundError
 from app.tasks import (
     STAGE_CONFIG,
     dispatch_assembly,
@@ -180,7 +182,6 @@ def test_job_waveform_skips_if_media_key_missing() -> None:
 
 
 def test_job_waveform_handles_storage_key_not_found_on_get() -> None:
-    from app.storage import StorageKeyNotFoundError
 
     mock_storage = MagicMock()
 
@@ -324,7 +325,6 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
 
 
 def test_resolve_direct_media_url() -> None:
-    from app.ingest import resolve_direct_media_url
 
     # Direct URL passes through
     assert (
@@ -353,9 +353,6 @@ def test_resolve_direct_media_url() -> None:
 
 
 def test_download_media_url_streaming_success(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
-
-    from app.ingest import download_media_url
 
     dummy_content = b"x" * 50000
     mock_resp = MagicMock()
@@ -375,9 +372,6 @@ def test_download_media_url_streaming_success(tmp_path: Path) -> None:
 
 
 def test_download_media_url_exceeds_max_bytes(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
-
-    from app.ingest import download_media_url
 
     mock_resp = MagicMock()
     mock_resp.headers = {"Content-Type": "video/mp4"}
@@ -399,9 +393,6 @@ def test_download_media_url_exceeds_max_bytes(tmp_path: Path) -> None:
 
 
 def test_download_media_url_rejects_html_page(tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
-
-    from app.ingest import download_media_url
 
     mock_resp = MagicMock()
     mock_resp.headers = {"Content-Type": "text/html; charset=utf-8"}

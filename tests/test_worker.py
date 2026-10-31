@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import redis.exceptions
 
-from scripts.run_worker import main
+from scripts.run_worker import _run_single_worker, main
 
 
 def test_eager_import_tasks_rationale() -> None:
@@ -199,7 +199,6 @@ def test_worker_concurrency_spawns_processes(
 def test_run_single_worker(
     mock_dispose: MagicMock, mock_worker_cls: MagicMock, mock_redis_from_url: MagicMock
 ) -> None:
-    from scripts.run_worker import _run_single_worker
 
     mock_redis = MagicMock()
     mock_redis_from_url.return_value = mock_redis

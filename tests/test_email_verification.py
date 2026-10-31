@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
@@ -13,12 +14,17 @@ from sqlalchemy.orm import Session
 from app import models
 from app.config import settings
 from app.db import SessionLocal
-from app.email import send_verification_email
+from app.email import (
+    send_password_reset_email,
+    send_speaker_handoff_email,
+    send_verification_email,
+)
 from app.main import app
 from app.security import (
     create_access_token,
     create_email_verification_token,
     decode_email_verification_token,
+    get_session_secret,
     hash_password,
 )
 from app.tasks import job_send_verification_email
@@ -69,9 +75,6 @@ def test_verification_token_rejects_wrong_type() -> None:
 
 
 def test_verification_token_rejects_bool_and_empty_claims() -> None:
-    import jwt
-
-    from app.security import get_session_secret
 
     now = datetime.now(UTC)
     # Boolean user_id
@@ -475,8 +478,6 @@ def test_verify_email_concurrent_update_rejected() -> None:
     token = create_email_verification_token(user.id, user.email)
 
     try:
-        from sqlalchemy.orm import Session
-
         orig_execute = Session.execute
 
         def mock_execute(self: Any, statement: Any, *args: Any, **kwargs: Any) -> Any:
@@ -554,11 +555,6 @@ def test_smtp_rejects_plaintext_authentication(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Ensure sending emails over unencrypted SMTP with authentication is rejected."""
-    from app.email import (
-        send_password_reset_email,
-        send_speaker_handoff_email,
-        send_verification_email,
-    )
 
     with (
         patch.object(settings, "smtp_host", "smtp.example.com"),

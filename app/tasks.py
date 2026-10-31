@@ -19,6 +19,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Any
 import av
 from sqlalchemy import select, update
 
+from app import email as app_email
 from app.config import PREVIEW_PRESETS, get_setting, settings
 from app.db import new_session
 from app.ingest import (
@@ -35,7 +37,7 @@ from app.ingest import (
     get_upload_staging_dir,
     validate_media_file,
 )
-from app.models import Job, Talk
+from app.models import Event, Job, Talk, User
 from app.pipeline.concat import concat
 from app.pipeline.cut import cut
 from app.pipeline.detect import (
@@ -63,6 +65,7 @@ from app.retention import (
     register_periodic_retention_sweep,  # noqa: F401
     run_retention_sweep,  # noqa: F401
 )
+from app.security import create_password_reset_token
 from app.states import advance
 from app.storage import (
     StorageKeyNotFoundError,
@@ -254,7 +257,6 @@ def job_ingest_room_url(
 
     validate and probe duration, and attach to matching talks in the room.
     """
-    import uuid
 
     storage = get_storage_backend()
     staged_target = get_upload_staging_dir() / f"room_url_{uuid.uuid4().hex}.mp4"
@@ -1389,10 +1391,6 @@ def job_publish(talk_id: int, final_key: str) -> None:
 
         duration_seconds: float | None = None
         try:
-            import av
-
-            from app.pipeline.detect import container_duration_seconds
-
             with av.open(str(final_path)) as container:
                 duration_seconds = container_duration_seconds(container)
         except Exception as exc:  # noqa: BLE001
@@ -1600,8 +1598,6 @@ def job_send_verification_email(
     Checks user state in DB, generates the verification URL, dispatches via
     send_verification_email, and exits.
     """
-    from app.email import send_verification_email
-    from app.models import User
 
     with new_session() as db:
         user = db.get(User, user_id)
@@ -1623,7 +1619,7 @@ def job_send_verification_email(
     verify_url = f"{base}/verify-email?token={token}"
     if next:
         verify_url += f"&next={urllib.parse.quote(next, safe='/')}"
-    success = send_verification_email(
+    success = app_email.send_verification_email(
         recipient=email,
         verify_url=verify_url,
         expire_hours=settings.email_verification_expire_hours,
@@ -1635,8 +1631,6 @@ def job_send_verification_email(
 
 def job_send_speaker_handoff_email(talk_id: int) -> bool:
     """Send the review link for a handed-off talk."""
-    from app.email import send_speaker_handoff_email
-    from app.models import Event
 
     with new_session() as db:
         talk = db.get(Talk, talk_id)
@@ -1670,7 +1664,7 @@ def job_send_speaker_handoff_email(talk_id: int) -> bool:
     base = (
         settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
     )
-    success = send_speaker_handoff_email(
+    success = app_email.send_speaker_handoff_email(
         recipient=recipient,
         talk_title=title,
         event_name=event_name,
@@ -1687,9 +1681,6 @@ def job_send_password_reset_email(email: str) -> bool:
     Looks up active user by email, creates a fresh reset token, generates the
     reset URL, dispatches via send_password_reset_email, and exits.
     """
-    from app.email import send_password_reset_email
-    from app.models import User
-    from app.security import create_password_reset_token
 
     clean_email = email.strip().lower()
     with new_session() as db:
@@ -1725,7 +1716,7 @@ def job_send_password_reset_email(email: str) -> bool:
     )
 
     reset_url = f"{base}/reset-password?token={token}"
-    success = send_password_reset_email(
+    success = app_email.send_password_reset_email(
         recipient=clean_email,
         reset_url=reset_url,
         expire_hours=expire_hours,

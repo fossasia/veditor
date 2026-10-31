@@ -4,10 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from rq import Retry
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import settings
+from app.config import Settings, settings
 from app.db import Base
 from app.models import Event, Talk
 from app.retention import (
@@ -552,7 +554,6 @@ def test_register_periodic_retention_sweep_rejects_non_positive_interval() -> No
 
 
 def test_settings_retention_sweep_interval_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(
         ValueError, match="retention_sweep_interval_seconds must be positive"
@@ -674,7 +675,6 @@ def test_register_periodic_retention_sweep_times_parameter() -> None:
 
 
 def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None:
-    from sqlalchemy.exc import SQLAlchemyError
 
     event = Event(name="Flush Failure Event")
     db_session.add(event)
@@ -722,7 +722,6 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None
 
 
 def test_register_periodic_retention_sweep_retry() -> None:
-    from rq import Retry
 
     mock_queue = MagicMock()
     mock_queue.connection = MagicMock()

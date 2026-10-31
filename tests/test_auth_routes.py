@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.requests import Request
 
 from app import models
 from app.db import Base, engine
@@ -445,7 +446,6 @@ def test_api_auth_token_invalid_credentials(
 def test_api_auth_token_fallback_handles_runtime_error(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from starlette.requests import Request
 
     async def mock_json(self: Request) -> None:
         raise RuntimeError("Stream consumed")

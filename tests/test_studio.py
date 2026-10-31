@@ -2,21 +2,22 @@ import json
 import re
 import uuid
 from collections.abc import Callable, Iterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import models
-from app.auth import hash_api_key
+from app.auth import CurrentUser, check_talk_access, get_current_user, hash_api_key
 from app.config import settings
 from app.consts import TalkStatus
 from app.main import app
-from app.security import create_session_token, create_sso_token
+from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
 
 from .conftest import FakeStorageBackend, generate_clip
@@ -1419,8 +1420,6 @@ def test_studio_dashboard_with_slug_event_id_and_sso_token(
     db_session.commit()
     db_session.refresh(event)
 
-    from app.security import create_sso_token
-
     token = create_sso_token(scope_type="event", scope_id=event.id, role="organizer")
 
     # Accessing /studio with a string slug in event_id alongside sso_token
@@ -1556,7 +1555,6 @@ def test_studio_milestones_role_visibility(
     client: TestClient, db_session: Session
 ) -> None:
     """Test milestones stepper is rendered in studio while recent jobs section is omitted."""
-    from app.security import create_session_token, create_sso_token, hash_password
 
     # Create admin, organizer, and standard user
     admin = models.User(
@@ -1650,7 +1648,6 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     client: TestClient, db_session: Session
 ) -> None:
     """Test organizer Intro & Outro bumper studio card is rendered in pending_intro_outro."""
-    from app.security import create_session_token, create_sso_token, hash_password
 
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -2008,7 +2005,6 @@ def test_studio_upload_pending_state_hides_timeline(
 def test_talk_studio_offset_aware_start_normalizes_to_utc(
     client: TestClient, db_session: Session
 ) -> None:
-    from datetime import timezone
 
     event = models.Event(name=f"TZ Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -2084,7 +2080,6 @@ def test_talk_studio_duration_with_seconds_remainder(
 def test_user_menu_accessibility_attributes(
     client: TestClient, db_session: Session
 ) -> None:
-    from app.security import create_session_token
 
     user = models.User(
         email="a11y@test.com",
@@ -2112,7 +2107,6 @@ def test_talk_studio_media_source_selector_and_download(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    from .conftest import generate_clip
 
     event = models.Event(name=f"Media Event {uuid.uuid4().hex}")
     db_session.add(event)
@@ -2170,7 +2164,6 @@ def test_talk_studio_media_source_selector_and_download(
 def test_talk_studio_speaker_mode_body_class(
     client: TestClient, db_session: Session
 ) -> None:
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex}@test.com",
@@ -2229,7 +2222,6 @@ def test_talk_studio_speaker_mode_body_class(
     assert 'id="app-sidebar"' in res_org.text
 
     # SSO Organizer session -> NOT speaker mode
-    from app.security import create_sso_token
 
     sso_org_token = create_sso_token(
         scope_type="talk", scope_id=talk.id, role="organizer"
@@ -2253,7 +2245,6 @@ def test_talk_studio_speaker_preview_quality_notice(
     client: TestClient, db_session: Session
 ) -> None:
     """Test low-quality preview notice is displayed when viewing preview in speaker mode."""
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -2313,7 +2304,6 @@ def test_talk_studio_speaker_preview_quality_notice(
 
 def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> None:
     """Verify speaker and user roles cannot see management and delete buttons on dashboard."""
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -2405,7 +2395,6 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify Reset to Raw modal is present and extra-step btn-retry is absent in studio UI."""
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex}@test.com",
@@ -2461,7 +2450,6 @@ def test_dashboard_speaker_email_case_insensitivity(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify that speaker dashboard queries match talks case-insensitively while respecting event_id."""
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -2544,7 +2532,6 @@ def test_talk_jobs_log_path_gated_for_speakers(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify speakers can view talk jobs status and progress but never log_path, preserving it for organizer/admin."""
-    from app.security import create_session_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -2633,7 +2620,6 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify event-scoped speaker SSO tokens only view and access assigned talks in the event."""
-    from app.security import create_sso_token
 
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
@@ -3042,7 +3028,6 @@ def test_attach_room_recording_studio_alias(
 def test_link_or_copy_fallback_preserves_source_for_multiple_talks(
     tmp_path: Path,
 ) -> None:
-    from app.storage import LocalDiskBackend
 
     storage = LocalDiskBackend(data_dir=tmp_path / "storage")
     source_file = storage.get_temp_dir() / "shared_recording.mp4"
@@ -3076,8 +3061,6 @@ def test_attach_room_recording_sso_discovery_without_event_id(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    from app.auth import CurrentUser, get_current_user
-    from app.main import app
 
     event = models.Event(
         name="SSO Room Event",
@@ -3169,8 +3152,6 @@ def test_attach_room_recording_staging_failure_cleans_up(
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        import pytest
-
         with (
             pytest.raises(RuntimeError),
             patch("app.routes.talks.container_duration_seconds", return_value=3600.0),
@@ -3197,8 +3178,6 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    from app.auth import CurrentUser, get_current_user
-    from app.main import app
 
     event = models.Event(
         name="Platform Room Event",
@@ -3248,7 +3227,6 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    import pytest
 
     event = models.Event(name="Restore Event")
     db_session.add(event)
@@ -3456,10 +3434,6 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    from redis.exceptions import RedisError
-
-    from app.auth import CurrentUser, get_current_user
-    from app.main import app
 
     event = models.Event(
         name="Enqueue Failure Room Event",
@@ -3516,16 +3490,11 @@ def test_sso_organizer_management_controls_visible(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify organizers arriving via SSO have full access to management buttons while speakers do not."""
-    import uuid
-
-    from app.security import create_sso_token
 
     event = models.Event(name=f"SSO Org Event {uuid.uuid4().hex}")
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
-
-    from datetime import UTC, datetime, timedelta
 
     now_utc = datetime.now(UTC)
     talk = models.Talk(
@@ -3584,11 +3553,6 @@ def test_sso_organizer_management_controls_visible(
 def test_attach_room_recording_with_video_url(
     client: TestClient, db_session: Session, temp_storage: LocalDiskBackend
 ) -> None:
-    import uuid
-    from datetime import UTC, datetime, timedelta
-    from unittest.mock import patch
-
-    from app.auth import hash_api_key
 
     user = models.User(
         email="org_url@example.com",
@@ -3658,11 +3622,6 @@ def test_attach_room_recording_with_video_url(
 def test_attach_room_recording_with_video_url_multipart(
     client: TestClient, db_session: Session, temp_storage: LocalDiskBackend
 ) -> None:
-    import uuid
-    from datetime import UTC, datetime, timedelta
-    from unittest.mock import patch
-
-    from app.auth import hash_api_key
 
     user = models.User(
         email="org_url_mp@example.com",
@@ -3711,12 +3670,6 @@ def test_attach_room_recording_with_video_url_multipart(
 def test_attach_room_recording_url_and_source_validations(
     client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
-    import uuid
-    from datetime import UTC, datetime, timedelta
-
-    from app.auth import hash_api_key
-
-    from .conftest import generate_clip
 
     user = models.User(
         email="org_val@example.com",
@@ -3882,7 +3835,6 @@ def test_talk_studio_organizer_request_prompt(
     assert "modal-request-organizer" not in res_org.text
 
     # 4. SSO user does not see organizer request prompt
-    from app.security import create_sso_token
 
     sso_token = create_sso_token(
         scope_type="event", scope_id=event_org.id, role="organizer"
@@ -3896,9 +3848,6 @@ def test_talk_studio_organizer_request_prompt(
 
 def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -> None:
     """Ensure check_talk_access updates models.User record in database upon role promotion."""
-    from datetime import UTC, datetime
-
-    from app.auth import CurrentUser, check_talk_access
 
     now = datetime.now(UTC)
 
@@ -3943,7 +3892,6 @@ def test_organizer_dashboard_includes_assigned_speaker_talks(
     client: TestClient, db_session: Session
 ) -> None:
     """Ensure an organizer's dashboard displays talks where they are assigned as speaker."""
-    from datetime import UTC, datetime
 
     now = datetime.now(UTC)
 
@@ -3987,7 +3935,6 @@ def test_studio_handoff_utc_format_and_cooldown_attr(
     client: TestClient, db_session: Session
 ) -> None:
     """Ensure handed_off_at is rendered in UTC and button has data-handed-off-at."""
-    from datetime import UTC, datetime, timedelta, timezone
 
     now = datetime.now(UTC)
     tz_ist = timezone(timedelta(hours=5, minutes=30))

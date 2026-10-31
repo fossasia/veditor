@@ -1,3 +1,6 @@
+import html
+import re
+import urllib.parse
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock
@@ -9,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
+from app.auth import hash_api_key
 from app.consts import TalkStatus
 from app.db import Base, engine
 from app.main import app
@@ -910,7 +914,6 @@ def _seed_room_talks(
     models.Event,
     dict[str, models.Talk],
 ]:
-    from datetime import UTC, datetime, timedelta
 
     org = create_user(db_session, "room_org@example.com", "organizer")
     other_org = create_user(db_session, "room_other_org@example.com", "organizer")
@@ -950,8 +953,6 @@ def _seed_room_talks(
 
 
 def _extract_href(page: str, css_class: str) -> str:
-    import html
-    import re
 
     match = re.search(
         rf'<a href="([^"]+)" class="[^"]*\b{re.escape(css_class)}\b[^"]*"', page
@@ -1182,7 +1183,6 @@ def test_event_slug_owned_by_another_organizer_resolves_to_nothing(
 def test_api_client_resolves_slugs_for_its_events(
     client: TestClient, db_session: Session
 ) -> None:
-    from app.auth import hash_api_key
 
     _, _, event, other_event, _ = _seed_room_talks(db_session)
     event.source = "eventyay"
@@ -1220,7 +1220,6 @@ def test_talk_list_is_scoped_for_every_caller_type(
     client: TestClient, db_session: Session
 ) -> None:
     """The talk list, not just the stats, only ever contains visible events."""
-    from app.auth import hash_api_key
 
     org, other_org, event, other_event, _ = _seed_room_talks(db_session)
     admin = create_user(db_session, "room_scope_admin@example.com", "admin")
@@ -1281,7 +1280,6 @@ def test_room_page_rejects_invalid_api_key(
 
 def _login_via_redirect(client: TestClient, email: str, start_url: str) -> Response:
     """Hit start_url logged out, then log in with the `next` it hands back."""
-    import urllib.parse
 
     login_redirect = client.get(start_url, follow_redirects=False)
     assert login_redirect.status_code == 302
@@ -1415,7 +1413,6 @@ def test_login_next_keeps_question_mark_and_hash_in_room_names(
 def test_room_page_redirects_talk_scoped_sso_to_its_talk(
     client: TestClient, db_session: Session
 ) -> None:
-    from app.security import create_sso_token
 
     _, _, event, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(
@@ -1523,7 +1520,6 @@ def test_studio_breadcrumb_links_to_event_and_room(
 def test_studio_breadcrumb_is_plain_text_for_talk_scoped_sso(
     client: TestClient, db_session: Session
 ) -> None:
-    from app.security import create_sso_token
 
     _, _, _, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(

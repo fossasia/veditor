@@ -1,5 +1,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -9,12 +11,23 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import models
 from app.config import (
     EXCLUDED_SETTING_KEYS,
+    PREVIEW_PRESETS,
+    PreviewPreset,
+    _cast_setting_value,
     get_setting,
     settings,
 )
 from app.consts import TalkStatus
 from app.db import Base
-from app.routes.admin import _validate_system_setting
+from app.pipeline.detect import DetectResult
+from app.routes.admin import _get_all_settings_data, _validate_system_setting
+from app.tasks import (
+    TRANSCODE_PRESETS,
+    job_detect,
+    job_loudness,
+    job_preview,
+    job_transcode,
+)
 
 engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -116,8 +129,6 @@ def test_preview_preset_options_includes_configured_presets(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.config import PreviewPreset
-    from app.routes.admin import _get_all_settings_data
 
     custom = dict(settings.preview_presets)
     custom["custom_hd_preview"] = PreviewPreset(
@@ -225,7 +236,6 @@ def test_validate_system_setting() -> None:
 
 
 def test_cast_setting_value_rejects_nan_inf() -> None:
-    from app.config import _cast_setting_value
 
     # For float definitions, NaN or Inf must fall back to default
     assert _cast_setting_value("detect_duration_tolerance_seconds", "nan") == 300.0
@@ -239,7 +249,6 @@ def test_get_setting_fallback_default() -> None:
 
 
 def test_get_setting_db_failure_logged(caplog: pytest.LogCaptureFixture) -> None:
-    from unittest.mock import MagicMock
 
     mock_db = MagicMock()
     mock_db.get.side_effect = RuntimeError("DB connection dropped")
@@ -256,11 +265,6 @@ def test_get_setting_db_failure_logged(caplog: pytest.LogCaptureFixture) -> None
 
 
 def test_pipeline_job_detect_dynamic_tolerance() -> None:
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.pipeline.detect import DetectResult
-    from app.tasks import job_detect
 
     override = models.SystemSetting(
         key="detect_duration_tolerance_seconds",
@@ -311,10 +315,6 @@ def test_pipeline_job_detect_dynamic_tolerance() -> None:
 
 
 def test_pipeline_job_loudness_dynamic_lufs() -> None:
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.tasks import job_loudness
 
     override = models.SystemSetting(
         key="loudness_target_lufs",
@@ -358,11 +358,6 @@ def test_pipeline_job_loudness_dynamic_lufs() -> None:
 
 
 def test_pipeline_job_preview_dynamic_preset() -> None:
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.config import PREVIEW_PRESETS
-    from app.tasks import job_preview
 
     override = models.SystemSetting(
         key="default_preview_preset",
@@ -419,10 +414,6 @@ def test_pipeline_job_preview_dynamic_preset() -> None:
 
 
 def test_pipeline_job_transcode_dynamic_preset() -> None:
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.tasks import TRANSCODE_PRESETS, job_transcode
 
     override = models.SystemSetting(
         key="default_transcode_preset",

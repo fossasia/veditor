@@ -28,6 +28,7 @@ from app.tasks import (
     job_outro,
     job_transcode,
 )
+from app.ui.templating import format_timecode_filter
 
 from .conftest import FakeStorageBackend, generate_clip
 
@@ -1117,7 +1118,6 @@ def test_upload_bumper_and_assemble_flow(
 
 def test_format_timecode_filter_rollover() -> None:
     """format_timecode_filter handles centisecond rollover without emitting .100."""
-    from app.ui.templating import format_timecode_filter
 
     assert format_timecode_filter(59.996) == "00:01:00.00"
     assert format_timecode_filter(3599.999) == "01:00:00.00"

@@ -1,9 +1,11 @@
 """Tests for forgot password and password reset flow in VEditor."""
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
@@ -20,6 +22,7 @@ from app.security import (
     decode_access_token,
     decode_password_reset_token,
     decode_session_token,
+    get_session_secret,
     hash_password,
     verify_password,
     verify_password_reset_token,
@@ -99,9 +102,6 @@ def test_password_reset_token_rejects_wrong_type() -> None:
 
 
 def test_password_reset_token_rejects_malformed_claims() -> None:
-    import jwt
-
-    from app.security import get_session_secret
 
     now = datetime.now(UTC)
     # Boolean user_id
@@ -141,7 +141,6 @@ def test_password_reset_token_rejects_malformed_claims() -> None:
 
 
 def test_send_password_reset_email_dev_mode(caplog: pytest.LogCaptureFixture) -> None:
-    import logging
 
     with patch.object(settings, "smtp_host", ""), caplog.at_level(logging.INFO):
         reset_url = "http://localhost:8000/reset-password?token=dev_token_123"
@@ -282,8 +281,6 @@ def test_forgot_password_page_redirects_authenticated_user() -> None:
 
     client = TestClient(app)
     try:
-        from app.security import create_session_token
-
         session_token = create_session_token(user.id, user.role)
         client.cookies.set("veditor_session", session_token)
 

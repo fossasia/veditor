@@ -1,6 +1,7 @@
 import math
 import os
 from collections.abc import Iterator
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -8,7 +9,7 @@ import av
 import pytest
 from pydantic import ValidationError
 
-from app.config import settings
+from app.config import Settings, settings
 from app.ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
@@ -292,7 +293,6 @@ def test_ingest_directory_rejected(ingest_root: Path, mock_backend: Mock) -> Non
 
 
 def test_settings_ingest_roots_validation(tmp_path: Path) -> None:
-    from app.config import Settings
 
     abs_path = tmp_path / "recordings"
     cfg = Settings(ingest_roots=[abs_path])
@@ -383,7 +383,6 @@ def test_stage_recording_custom_disk_guard_multiplier(
 
 
 def test_disk_guard_multiplier_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(ValidationError):
         Settings(disk_guard_multiplier=-1.0)
@@ -412,7 +411,6 @@ def test_stage_recording_decimal_precision(
     original_multiplier = settings.disk_guard_multiplier
     try:
         settings.disk_guard_multiplier = 1.1
-        from decimal import ROUND_CEILING, Decimal
 
         expected_bytes = int(
             (Decimal(file_size) * Decimal("1.1")).to_integral_value(

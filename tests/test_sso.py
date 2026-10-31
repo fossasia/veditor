@@ -1,5 +1,6 @@
 """Comprehensive test suite for scoped SSO tokens and external client handoff."""
 
+import re
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -650,7 +651,6 @@ def test_studio_talk_landing_with_talk_sso_token() -> None:
     set_cookie = response.headers.get("set-cookie", "")
     assert "Max-Age=" in set_cookie
     # Should be well above default 300s
-    import re
 
     m = re.search(r"Max-Age=(\d+)", set_cookie)
     assert m is not None

@@ -88,6 +88,11 @@ def test_cut_audio_only(tmp_path: Path) -> None:
 
 from unittest import mock
 
+import av
+
+from app.config import PREVIEW_PRESETS
+from app.pipeline.preview import generate_preview
+
 
 def test_cut_smart_fallback_to_stream_copy(tmp_path: Path) -> None:
     """Verify that when smart cut fails, cut falls back to stream copy."""
@@ -267,10 +272,6 @@ def test_cut_stream_copy_succeeds_without_fallback_when_keyframe_far(
 
 def test_smart_cut_frame_accurate(tmp_path: Path) -> None:
     """Verify smart cut performs frame-accurate trimming and decodes completely without bitstream errors."""
-    import av
-
-    from app.config import PREVIEW_PRESETS
-    from app.pipeline.preview import generate_preview
 
     source_clip = generate_clip(8.0, output_dir=tmp_path)
     output_clip = tmp_path / "smart_cut.mp4"

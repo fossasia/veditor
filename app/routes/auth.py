@@ -782,7 +782,6 @@ def request_organizer_role(
             status_code=status.HTTP_409_CONFLICT,
             detail="An organizer access request is already pending",
         )
-    from datetime import UTC, datetime
 
     requested_at = datetime.now(UTC)
     note_val = (payload.note or "").strip() or None

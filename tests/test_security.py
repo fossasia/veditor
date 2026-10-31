@@ -1,11 +1,13 @@
 import stat
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import jwt
 import pytest
 
-from app.config import settings
+import app.security as sec
+from app.config import Settings, settings
 from app.consts import SSOScopeType
 from app.security import (
     SSOTokenPayload,
@@ -205,7 +207,6 @@ def test_decode_access_token_missing_claims() -> None:
 def test_get_session_secret_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     valid_secret = "configured-secret-key-that-is-at-least-32-chars-long"
     monkeypatch.setattr(settings, "session_secret", valid_secret)
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
@@ -224,7 +225,6 @@ def test_get_session_secret_production_missing_raises(
 ) -> None:
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "production")
-    import app.security as sec
 
     # Even if dev secret was previously cached, production mode must block it
     monkeypatch.setattr(
@@ -241,7 +241,6 @@ def test_get_session_secret_dev_persists(
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
@@ -264,7 +263,6 @@ def test_get_session_secret_concurrent_creation(
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
@@ -283,7 +281,6 @@ def test_get_session_secret_concurrent_creation(
 
 
 def test_settings_expiration_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(session_token_expire_hours=0)
@@ -299,7 +296,6 @@ def test_settings_expiration_validation() -> None:
 
 
 def test_settings_session_secret_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(
         ValueError, match="SESSION_SECRET must be at least 32 bytes long"
@@ -312,7 +308,6 @@ def test_settings_session_secret_validation() -> None:
 
 
 def test_settings_jwt_algorithm_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(ValueError, match="jwt_algorithm must be one of"):
         Settings(jwt_algorithm="none")
@@ -403,7 +398,6 @@ def test_create_sso_token_invalid_inputs() -> None:
 
 
 def test_decode_sso_token_expired() -> None:
-    from datetime import UTC, datetime, timedelta
 
     secret = get_session_secret()
     now = datetime.now(UTC)
@@ -600,7 +594,6 @@ def test_decode_sso_token_malformed_claims() -> None:
 
 
 def test_settings_sso_token_expire_seconds_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(sso_token_expire_seconds=0)
@@ -613,7 +606,6 @@ def test_settings_sso_token_expire_seconds_validation() -> None:
 
 
 def test_settings_speaker_magic_link_expire_hours_validation() -> None:
-    from app.config import Settings
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(speaker_magic_link_expire_hours=0)
@@ -650,7 +642,6 @@ def test_is_valid_email() -> None:
 
 
 def test_database_url_encodes_reserved_characters() -> None:
-    from app.config import Settings
 
     s = Settings(
         postgres_user="ved@user",

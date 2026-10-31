@@ -25,6 +25,7 @@ from fastapi import (
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
 from rq.job import Job
+from rq.registry import StartedJobRegistry
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -325,7 +326,8 @@ def get_talk(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ) -> TalkWithJobsRead:
     """
-    Retrieves talk metadata, current status, associated jobs with progress/timing, and preview URLs.    Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
+    Retrieves talk metadata, current status, associated jobs with progress/timing, and preview URLs.
+    Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
     """
     talk = None
     if talk_id.isdigit():
@@ -997,8 +999,6 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
         return bool(rq_job.args and rq_job.args[0] == talk_id)
 
     try:
-        from rq.registry import StartedJobRegistry
-
         for q in (light_queue, heavy_queue):
             # 1. Cancel queued jobs
             for job_id in list(q.job_ids):

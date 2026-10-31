@@ -1,3 +1,4 @@
+import concurrent.futures
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -9,11 +10,13 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.auth import CurrentUser, get_current_user, hash_api_key
 from app.consts import AuthRole, TalkStatus
+from app.db import SessionLocal
 from app.main import app
 from app.review_handlers import (
     DECISION_HANDLERS,
@@ -543,11 +546,6 @@ def test_append_only_audit_trail_relationship() -> None:
 
 def test_concurrent_reviews_atomic_transition_and_single_review() -> None:
     """Verify concurrent review submissions result in exactly one success and one 409."""
-    import concurrent.futures
-
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from app.db import SessionLocal
 
     # Check database availability
     probe_db = None

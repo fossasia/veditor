@@ -1,19 +1,37 @@
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
+import redis
 from fastapi.testclient import TestClient
+from rq import Queue, SimpleWorker
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
+from app.config import settings
 from app.consts import TalkStatus
 from app.db import get_db
+from app.ingest import InsufficientStorageError
 from app.main import app
+from app.queue import heavy_queue, light_queue
 from app.storage import get_storage_backend
+from app.tasks import (
+    STAGE_CONFIG,
+    job_concat,
+    job_cut,
+    job_detect,
+    job_intro,
+    job_loudness,
+    job_preview,
+    job_publish,
+    job_transcode,
+)
 
 client = TestClient(app)
 
@@ -689,16 +707,6 @@ def test_lifecycle_full_ingest_to_done(
     uploading (publish) -> done.
     Asserts database mutations, stage transitions, and job record persistence at each step.
     """
-    from app.tasks import (
-        job_concat,
-        job_cut,
-        job_detect,
-        job_intro,
-        job_loudness,
-        job_preview,
-        job_publish,
-        job_transcode,
-    )
 
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id, title="Lifecycle Talk")
@@ -1017,15 +1025,12 @@ def _e2e_dummy_light_task(val: int = 1) -> int:
 
 
 def _e2e_dummy_heavy_task(duration: float = 0.5) -> str:
-    import time
 
     time.sleep(duration)
     return "heavy_complete"
 
 
 def _run_named_simple_worker(redis_url: str, queue_name: str) -> None:
-    import redis
-    from rq import Queue, SimpleWorker
 
     conn = redis.from_url(redis_url)
     q = Queue(queue_name, connection=conn)
@@ -1039,14 +1044,6 @@ def test_e2e_heavy_light_queue_isolation() -> None:
     (such as transcode) into the heavy queue and interactive stages
     into the light queue, and verifies independent queue execution with SimpleWorker.
     """
-    from uuid import uuid4
-
-    import redis
-    from rq import Queue, SimpleWorker
-
-    from app.config import settings
-    from app.queue import heavy_queue, light_queue
-    from app.tasks import STAGE_CONFIG
 
     # 1. Verify queue configuration segregation
     assert STAGE_CONFIG["transcode"]["queue"] == "heavy"
@@ -1099,7 +1096,6 @@ def test_e2e_heavy_light_queue_isolation() -> None:
 
 def test_lifecycle_disk_guard_insufficient_storage(db_session: Session) -> None:
     """Verify that insufficient disk storage guards against recording ingestion."""
-    from app.ingest import InsufficientStorageError
 
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id)
@@ -1140,12 +1136,6 @@ def test_lifecycle_full_approve_review_flow_to_done(
     Validates review submission, pending_intro_outro transition, assembly orchestration,
     and confirms the final published artifact is retrievable in storage.
     """
-    from app.tasks import (
-        job_concat,
-        job_loudness,
-        job_publish,
-        job_transcode,
-    )
 
     event = _create_event(db_session)
     talk = _create_talk(
@@ -1274,7 +1264,6 @@ def test_lifecycle_needs_work_review_loop(
     db_session: Session, out_of_band_sessions
 ) -> None:
     """Drive consecutive needs_work cycles, verifying return to preview without stale jobs."""
-    from app.tasks import job_cut, job_preview
 
     event = _create_event(db_session)
     talk = _create_talk(

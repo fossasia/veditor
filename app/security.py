@@ -15,6 +15,8 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 
 from app.config import ALLOWED_JWT_ALGORITHMS, settings
 from app.consts import AuthRole, SSOScopeType
+from app.db import new_session
+from app.models import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,9 +184,6 @@ def verify_session_token_not_revoked(
         user_id = payload.get("user_id")
         if user_id:
             try:
-                from app.db import new_session
-                from app.models import User
-
                 with new_session() as db:
                     db_user = db.get(User, user_id)
                     if db_user:

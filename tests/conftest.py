@@ -25,7 +25,7 @@ from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 from app.pipeline.detect import container_duration_seconds
-from app.storage import StorageBackend, StorageKeyNotFoundError
+from app.storage import StorageBackend, StorageKeyNotFoundError, get_storage_backend
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +185,6 @@ def override_storage_backend(app: FastAPI, fake_backend: FakeStorageBackend) -> 
         override_storage_backend(app, fake_storage)
     """
     try:
-        from app.storage import get_storage_backend
-
         app.dependency_overrides[get_storage_backend] = lambda: fake_backend
     except ImportError as e:
         logger.warning(

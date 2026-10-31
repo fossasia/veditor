@@ -1,5 +1,19 @@
+import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal
+
+from rq import Retry
+from rq.job import Job
+from rq.repeat import Repeat
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload
+
+from app.config import settings
+from app.db import new_session
+from app.queue import light_queue
+from app.storage import get_storage_backend
 
 DEFAULT_FINAL_RETENTION_DAYS: Final[int] = 14
 INDEFINITE: Final = "indefinite"
@@ -94,16 +108,8 @@ def run_retention_sweep(
     - Excludes 'rejected' talks and intermediate/raw storage.
     - Returns list of talk IDs whose final/ storage was deleted.
     """
-    import logging
-    from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import select
-    from sqlalchemy.exc import SQLAlchemyError
-    from sqlalchemy.orm import joinedload
-
-    from app.db import new_session
     from app.models import Talk
-    from app.storage import get_storage_backend
 
     logger = logging.getLogger(__name__)
 
@@ -191,7 +197,6 @@ def run_retention_sweep(
 
 def enqueue_retention_sweep(queue: Any | None = None) -> Any:
     """Enqueue run_retention_sweep to the RQ light queue."""
-    from app.queue import light_queue
 
     target_queue = queue or light_queue
     return target_queue.enqueue(
@@ -208,15 +213,6 @@ def register_periodic_retention_sweep(
     retry: Any | None = None,
 ) -> Any:
     """Register a scheduled periodic retention sweep job on the RQ queue."""
-    import logging
-    from datetime import timedelta
-
-    from rq import Retry
-    from rq.job import Job
-    from rq.repeat import Repeat
-
-    from app.config import settings
-    from app.queue import light_queue
 
     logger = logging.getLogger(__name__)
     target_queue = queue or light_queue

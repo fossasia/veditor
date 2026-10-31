@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -11,16 +12,19 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import CurrentUser, get_client, get_current_user, hash_api_key
-from app.consts import TalkStatus
+from app.consts import AuthRole, TalkStatus
 from app.db import get_db
 from app.ingest import IngestPathRejectedError, InsufficientStorageError
 from app.main import app
+from app.pipeline.detect import DetectResult
+from app.security import create_sso_token
 from app.storage import get_storage_backend
 from app.tasks import (
     STAGE_CONFIG,
     job_cut,
     job_detect,
     job_preview,
+    job_send_speaker_handoff_email,
 )
 
 from .conftest import FakeStorageBackend
@@ -838,7 +842,9 @@ def test_patch_talk_naive_datetime_comparison_normalized(db_session: Session) ->
 
 
 def test_full_pipeline_flow_recordings_to_preview_halt(
-    db_session: Session, out_of_band_sessions, fake_storage: FakeStorageBackend
+    db_session: Session,
+    out_of_band_sessions: Generator[None],
+    fake_storage: FakeStorageBackend,
 ) -> None:
     """
     Simulates full pipeline flow from ingest to preview halt (Phase 4):
@@ -851,7 +857,6 @@ def test_full_pipeline_flow_recordings_to_preview_halt(
     7. Execute job_preview -> advances talk to 'preview', halts
     8. GET /talks/{id} -> returns 'preview' state and preview_urls
     """
-    from app.pipeline.detect import DetectResult
 
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id, title="E2E Pipeline Talk")
@@ -1013,9 +1018,10 @@ def test_full_pipeline_flow_recordings_to_preview_halt(
 
 
 def test_post_recording_with_recording_start_enqueues_detect(
-    db_session: Session, out_of_band_sessions, fake_storage: FakeStorageBackend
+    db_session: Session,
+    out_of_band_sessions: Generator[None],
+    fake_storage: FakeStorageBackend,
 ) -> None:
-    from app.pipeline.detect import DetectResult
 
     event = _create_event(db_session)
     talk_start = datetime(2026, 9, 26, 10, 15, tzinfo=UTC)
@@ -1131,8 +1137,6 @@ def test_handoff_with_speaker_email_enqueues_email(
         assert reloaded.status == "pending_bounds"
         assert reloaded.speaker_email == "speaker@example.com"
 
-        from app.tasks import job_send_speaker_handoff_email
-
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email in enqueued_jobs
 
@@ -1221,8 +1225,6 @@ def test_handoff_eventyay_synced_talk_does_not_send_mail(
         assert reloaded.status == "pending_bounds"
         assert reloaded.handed_off_at is None
 
-        from app.tasks import job_send_speaker_handoff_email
-
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email not in enqueued_jobs
 
@@ -1231,7 +1233,6 @@ def test_handoff_sso_session_does_not_send_mail(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
     """When an organizer acts via an SSO session, handoff email is not sent."""
-    from app.security import create_sso_token
 
     event = _create_event(db_session, "SSO Event")
     talk = _create_talk(
@@ -1265,8 +1266,6 @@ def test_handoff_sso_session_does_not_send_mail(
         assert reloaded.status == "pending_bounds"
         assert reloaded.handed_off_at is None
 
-        from app.tasks import job_send_speaker_handoff_email
-
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email not in enqueued_jobs
 
@@ -1298,10 +1297,9 @@ def test_handoff_eventyay_talk_resend_email_rejected(
 
 def test_job_send_speaker_handoff_email_skips_eventyay_talk(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: Generator[None],
 ) -> None:
     """job_send_speaker_handoff_email cleanly skips if talk event is synced from Eventyay."""
-    from app.tasks import job_send_speaker_handoff_email
 
     event = _create_event(db_session, "Eventyay Conf", source="eventyay")
     talk = _create_talk(db_session, event.id, title="Talk Title")
@@ -1351,7 +1349,7 @@ def test_handoff_platform_user_on_regular_event_sends_email(
 
     user = CurrentUser(
         user_id=organizer.id,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         source="api_key",
         is_platform=True,
         event_ids=[event.id],
@@ -1371,8 +1369,6 @@ def test_handoff_platform_user_on_regular_event_sends_email(
         assert reloaded is not None
         assert reloaded.status == "pending_bounds"
         assert reloaded.handed_off_at is not None
-
-        from app.tasks import job_send_speaker_handoff_email
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email in enqueued_jobs

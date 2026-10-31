@@ -3,7 +3,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import Self
+from unittest.mock import patch
 
+import av
 import pytest
 
 from app.pipeline.transcode import (
@@ -268,7 +270,6 @@ def test_transcode_graceful_fallback_when_duration_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify transcoding still completes without error when container duration is None."""
-    import av
 
     source_clip = generate_clip(
         2.0, has_video=True, has_audio=True, output_dir=tmp_path
@@ -438,9 +439,6 @@ def test_transcode_unified_intro_outro_loudness(tmp_path: Path) -> None:
 
 def test_transcode_resilient_to_corrupt_packet(tmp_path: Path) -> None:
     """Verify transcode ignores corrupt/unparseable video packets and completes successfully."""
-    from unittest.mock import patch
-
-    import av
 
     source_clip = generate_clip(2.0, output_dir=tmp_path)
     output_clip = tmp_path / "corrupt_resilient_final.mp4"

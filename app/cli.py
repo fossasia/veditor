@@ -6,7 +6,7 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, retention
 from app.auth import hash_api_key, lock_active_admins
 from app.db import new_session
 from app.schemas import WebhookRegisterRequest
@@ -161,14 +161,10 @@ def list_users(session: Session) -> None:
 
 def run_retention_sweep_cmd(session: Session, enqueue: bool = False) -> None:
     if enqueue:
-        from app.retention import enqueue_retention_sweep
-
-        job = enqueue_retention_sweep()
+        job = retention.enqueue_retention_sweep()
         print(f"Enqueued retention sweep job with ID {job.id}")
     else:
-        from app.retention import run_retention_sweep
-
-        swept_ids = run_retention_sweep(db=session)
+        swept_ids = retention.run_retention_sweep(db=session)
         print(f"Retention sweep completed. Cleaned {len(swept_ids)} talks: {swept_ids}")
 
 

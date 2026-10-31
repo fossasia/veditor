@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from app.auth import CurrentUser, get_client, get_current_user
 from app.consts import AuthRole, TalkStatus
 from app.main import app
 from app.review_handlers import handle_approve, handle_needs_work, handle_reject
+from app.schemas import ApiKeyCreate
 from app.storage import get_storage_backend
 
 client = TestClient(app)
@@ -1051,14 +1053,9 @@ def test_test_event_webhook_different_url_does_not_reuse_stored_secret(
 
 
 def test_api_key_create_webhook_secret_length_limit() -> None:
-    from pydantic import ValidationError
-
-    from app.schemas import ApiKeyCreate
 
     valid = ApiKeyCreate(webhook_secret="a" * 255)
     assert valid.webhook_secret == "a" * 255
-
-    import pytest
 
     with pytest.raises(ValidationError):
         ApiKeyCreate(webhook_secret="a" * 256)

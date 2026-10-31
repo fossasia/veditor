@@ -11,6 +11,7 @@ from app.pipeline.concat import (
     _can_stream_copy,
     concat,
 )
+from app.pipeline.intro import generate_intro_clip
 from app.storage import LocalDiskBackend
 
 from ..conftest import (
@@ -386,7 +387,6 @@ def test_concat_rejects_invalid_threads(tmp_path: Path) -> None:
 
 def test_concat_mismatched_extradata_reencodes_successfully(tmp_path: Path) -> None:
     """Verify that concatenating clips with mismatched extradata falls back to re-encoding and decodes cleanly."""
-    from app.pipeline.intro import generate_intro_clip
 
     cut_path = generate_clip(2.0, output_dir=tmp_path, fps=24, resolution=(1920, 1080))
     intro_path = tmp_path / "intro.mp4"

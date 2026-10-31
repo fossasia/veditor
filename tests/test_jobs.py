@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import get_client
 from app.main import app
+from app.schemas import JobRead
 
 client = TestClient(app)
 
@@ -171,9 +172,6 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
 
 def test_get_job_estimated_remaining_edge_cases() -> None:
     """Verify estimated_remaining behavior for 0%, 100%, and null progress/started_at."""
-    from datetime import UTC, datetime, timedelta
-
-    from app.schemas import JobRead
 
     now = datetime.now(UTC)
     started = now - timedelta(seconds=10)
@@ -230,9 +228,6 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
 
 def test_linear_extrapolation_accuracy() -> None:
     """Verify linear extrapolation accuracy across various progress percentages."""
-    from datetime import UTC, datetime, timedelta
-
-    from app.schemas import JobRead
 
     now = datetime.now(UTC)
 
@@ -267,9 +262,6 @@ def test_linear_extrapolation_accuracy() -> None:
 
 def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     """Verify done and failed jobs calculate elapsed_time using updated_at instead of current time."""
-    from datetime import UTC, datetime
-
-    from app.schemas import JobRead
 
     started = datetime(2026, 9, 7, 10, 0, 0, tzinfo=UTC)
     updated = datetime(2026, 9, 7, 10, 2, 30, tzinfo=UTC)  # 150 seconds later
