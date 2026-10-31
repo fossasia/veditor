@@ -4223,3 +4223,294 @@ def test_room_days_and_attachment_with_event_timezone(client, db_session):
         assert data["attached_count"] == 1
         assert data["talk_ids"] == [t_tokyo.id]
         assert data["target_date"] == "2026-10-26"
+
+
+def test_import_schedule_eventyay_frab_json(client: TestClient, db_session):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Eventyay Frab JSON has "conference" at the root (not wrapped in "schedule")
+    payload = {
+        "version": "1.0",
+        "conference": {
+            "acronym": "fossasia-summit-2026",
+            "title": "FOSSASIA Summit 2026",
+            "start": "2026-03-20",
+            "end": "2026-03-22",
+            "daysCount": 3,
+            "days": [
+                {
+                    "index": 0,
+                    "date": "2026-03-20",
+                    "rooms": {
+                        "Auditorium 1": [
+                            {
+                                "id": 101,
+                                "guid": "talk-guid-101",
+                                "code": "FOSS-101",
+                                "title": {"en": "Opening Keynote: Open Source AI"},
+                                "date": "2026-03-20T09:00:00Z",
+                                "start": "09:00",
+                                "duration": "00:45",
+                                "room": "Auditorium 1",
+                                "persons": [
+                                    {
+                                        "code": "SPK-ALICE",
+                                        "name": "Alice Wonderland",
+                                        "public_name": "Alice Wonderland",
+                                        "email": "alice@example.com",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+    }
+
+    res = client.post(
+        "/talks/schedule/import",
+        json=payload,
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["imported_count"] == 1
+    assert data["event_name"] == "FOSSASIA Summit 2026"
+
+    talk = (
+        db_session.query(models.Talk)
+        .filter(models.Talk.external_id == "FOSS-101")
+        .first()
+    )
+    assert talk is not None
+    assert talk.title == "Opening Keynote: Open Source AI"
+    assert talk.room == "Auditorium 1"
+    assert talk.speaker_email == "alice@example.com"
+    # Duration was 00:45 in Frab -> exactly 45 minutes = 2700.0s
+    assert (talk.end - talk.start).total_seconds() == 2700.0
+
+
+def test_import_schedule_eventyay_widget_relational_json(
+    client: TestClient, db_session
+):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Eventyay Agenda / Widget export schema: normalized rooms & speakers
+    payload = {
+        "event_name": "Open Tech Summit",
+        "talks": [
+            {
+                "id": 201,
+                "code": "TECH-201",
+                "title": {"en": "Building Scalable Video Pipelines"},
+                "room": 42,
+                "speakers": ["SPK-BOB"],
+                "start": "2026-05-10T14:00:00Z",
+                "duration": 30,  # 30 minutes represented as integer
+            }
+        ],
+        "rooms": [
+            {
+                "id": 42,
+                "name": {"en": "Hall Einstein"},
+            }
+        ],
+        "speakers": [
+            {
+                "code": "SPK-BOB",
+                "name": "Bob Builder",
+                "email": "bob@example.com",
+            }
+        ],
+    }
+
+    res = client.post(
+        "/talks/schedule/import",
+        json=payload,
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["imported_count"] == 1
+    assert data["event_name"] == "Open Tech Summit"
+
+    talk = (
+        db_session.query(models.Talk)
+        .filter(models.Talk.external_id == "TECH-201")
+        .first()
+    )
+    assert talk is not None
+    assert talk.title == "Building Scalable Video Pipelines"
+    assert talk.room == "Hall Einstein"
+    assert talk.speaker_email == "bob@example.com"
+    # Duration was 30 mins -> exactly 1800.0s
+    assert (talk.end - talk.start).total_seconds() == 1800.0
+
+
+def test_import_schedule_localized_titles_and_day_date_fallback(
+    client: TestClient, db_session
+):
+    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # Conference export where talk has only "start": "11:00" and inherits day date
+    payload = {
+        "conference": {
+            "title": "Multilingual Tech Conf",
+            "days": [
+                {
+                    "date": "2026-07-15",
+                    "rooms": {
+                        "Stage Beta": [
+                            {
+                                "title": {
+                                    "de": "Hauptvortrag",
+                                    "en": "Keynote Presentation",
+                                },
+                                "start": "11:00",
+                                "duration": "01:00",
+                                "code": "CONF-301",
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+    }
+
+    res = client.post(
+        "/talks/schedule/import",
+        json=payload,
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["imported_count"] == 1
+
+    talk = (
+        db_session.query(models.Talk)
+        .filter(models.Talk.external_id == "CONF-301")
+        .first()
+    )
+    assert talk is not None
+    assert talk.title == "Keynote Presentation"
+    assert talk.room == "Stage Beta"
+    # 01:00 duration -> exactly 3600.0s
+    assert (talk.end - talk.start).total_seconds() == 3600.0
+    assert (
+        talk.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        == "2026-07-15T11:00:00"
+    )
+
+
+def test_import_schedule_advanced_formats_and_lookups(client: TestClient, db_session):
+    api_key = f"adv_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # 1. Test relational format where rooms and speakers use pk/slug, and duration is integer minutes
+    payload_relational = {
+        "event_id": "fossasia-summit-2026",
+        "name": "FOSSASIA Summit 2026",
+        "rooms": [
+            {"pk": 101, "name": "Hall A", "slug": "hall-a"},
+        ],
+        "speakers": [
+            {
+                "pk": 501,
+                "name": "Alice Smith",
+                "code": "AS1",
+                "email": "alice@example.com",
+            },
+        ],
+        "talks": [
+            {
+                "id": 9001,
+                "title": "Opening Keynote",
+                "room": 101,
+                "speakers": [501],
+                "start": "2026-03-20T09:00:00Z",
+                "duration": 45,  # Relational talk duration as integer minutes
+            }
+        ],
+    }
+
+    res = client.post(
+        "/talks/schedule/import",
+        json=payload_relational,
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    assert res.json()["imported_count"] == 1
+
+    talk = (
+        db_session.query(models.Talk).filter(models.Talk.external_id == "9001").first()
+    )
+    assert talk is not None
+    assert talk.room == "Hall A"
+    assert talk.speaker_email == "alice@example.com"
+    # 45 minutes duration -> exactly 2700.0s
+    assert (talk.end - talk.start).total_seconds() == 2700.0
+
+    # 2. Test Frab conference acronym used as stable external_id and wall-clock HH:MM:SS combined with date
+    payload_frab = {
+        "conference": {
+            "title": "Open Source Tech Summit",
+            "acronym": "osts2026",
+            "days": [
+                {
+                    "date": "2026-08-10",
+                    "rooms": {
+                        "Main Stage": [
+                            {
+                                "title": "System Architecture Deep Dive",
+                                "start": "14:30:00",
+                                "duration": "00:45:00",
+                                "code": "OSTS-101",
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+    }
+
+    res2 = client.post(
+        "/talks/schedule/import",
+        json=payload_frab,
+        headers={"X-API-Key": api_key},
+    )
+    assert res2.status_code == 200
+    assert res2.json()["imported_count"] == 1
+
+    event = (
+        db_session.query(models.Event)
+        .filter(models.Event.external_id == "osts2026")
+        .first()
+    )
+    assert event is not None
+    assert event.name == "Open Source Tech Summit"
+
+    talk_frab = (
+        db_session.query(models.Talk)
+        .filter(models.Talk.external_id == "OSTS-101")
+        .first()
+    )
+    assert talk_frab is not None
+    assert (
+        talk_frab.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        == "2026-08-10T14:30:00"
+    )
+    assert (talk_frab.end - talk_frab.start).total_seconds() == 2700.0
