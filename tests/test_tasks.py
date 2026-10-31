@@ -1968,3 +1968,92 @@ def test_seed_cut_bounds_clamped_to_duration(dummy_talk):
 
     assert dummy_talk.cut_start == pytest.approx(0.0)
     assert dummy_talk.cut_end == pytest.approx(14400.0)  # clamped to duration
+
+
+def test_job_detect_duration_exceeding_ceiling_fails_and_marks_broken(
+    dummy_talk, mock_storage
+):
+    """When a single-talk video exceeds the dynamic duration ceiling (e.g. 8-hour recording for 30m talk),
+    job_detect fails and transitions the talk to broken state.
+    """
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=28800.0,  # 8 hours
+                has_video=True,
+                has_audio=True,
+                reason="duration delta 27000.0s exceeds tolerance 300.0s (actual: 28800.0s, scheduled: 1800.0s)",
+            ),
+        ),
+        pytest.raises(
+            ValueError, match="significantly exceeds the scheduled session duration"
+        ),
+    ):
+        job_detect(1, "1/raw/raw.mp4")
+
+    assert dummy_talk.status == "broken"
+    job = next(iter(jobs.values()))
+    assert job.status == "failed"
+    assert job.log_path.startswith("1/logs/")
+
+
+def test_job_detect_unscheduled_talk_exceeding_ceiling_fails(dummy_talk, mock_storage):
+    """Unscheduled talks reject recordings exceeding the 4-hour unscheduled maximum limit."""
+    dummy_talk.start = None
+    dummy_talk.end = None
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=18000.0,  # 5 hours
+                has_video=True,
+                has_audio=True,
+                reason="duration outside scheduled window",
+            ),
+        ),
+        pytest.raises(ValueError, match="exceeds the maximum allowed limit of 4 hours"),
+    ):
+        job_detect(1, "1/raw/raw.mp4")
+
+    assert dummy_talk.status == "broken"
+
+
+def test_job_detect_room_recording_allows_large_duration(dummy_talk, mock_storage):
+    """Room recordings bypass the single-talk dynamic ceiling and allow long recordings (e.g. 8 hours)."""
+    dummy_talk.status = "detecting"
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=True,
+                actual_duration_seconds=28800.0,  # 8 hours
+                has_video=True,
+                has_audio=True,
+                reason=None,
+            ),
+        ),
+    ):
+        job_detect(1, "1/raw/raw.mp4", is_room_recording=True)
+
+    assert dummy_talk.status == "pending_approval"
+    assert dummy_talk.raw_duration_seconds == 28800.0

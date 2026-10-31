@@ -10,6 +10,17 @@ import av
 from av.error import FFmpegError
 
 DETECT_DURATION_TOLERANCE_SECONDS = 300.0
+MAX_UNSCHEDULED_DURATION_SECONDS = 14400.0  # 4 hours
+
+
+def compute_max_allowed_duration(scheduled_duration: float) -> float:
+    """Compute the maximum allowed recording duration for a single talk.
+
+    Enforces no minimum duration, but applies a dynamic ceiling:
+    at least double the scheduled duration, or scheduled duration + 30 minutes (1800s),
+    with a minimum floor of 45 minutes (2700s).
+    """
+    return max(2.0 * scheduled_duration, scheduled_duration + 1800.0, 2700.0)
 
 
 @dataclass(frozen=True)
