@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
-from typing import Annotated, TypeIs
+from typing import Annotated, Any, TypeIs
 from zoneinfo import ZoneInfo
 
 import anyio.to_thread
@@ -1339,12 +1339,39 @@ def _parse_iso_datetime(val: str | None) -> datetime | None:
         return None
 
 
+def _extract_string_value(val: Any) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        return s if s else None
+    if isinstance(val, dict):
+        for lang in ("en", "en-us", "en-gb", "en_US", "en_GB"):
+            if val.get(lang):
+                extracted = _extract_string_value(val[lang])
+                if extracted:
+                    return extracted
+        for v in val.values():
+            if v:
+                extracted = _extract_string_value(v)
+                if extracted:
+                    return extracted
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
 def _parse_duration_seconds(val: str | float | None) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
         sec = float(val)
-        return sec if math.isfinite(sec) and sec > 0 else None
+        if not math.isfinite(sec) or sec <= 0:
+            return None
+        # In conference schedules (e.g. Eventyay widget/compact schedule), bare numbers <= 300 represent minutes
+        if sec <= 300:
+            return sec * 60.0
+        return sec
     if isinstance(val, str):
         val = val.strip()
         if not val:
@@ -1382,7 +1409,11 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
                 return None
         try:
             parsed = float(val)
-            return parsed if math.isfinite(parsed) and parsed > 0 else None
+            if math.isfinite(parsed) and parsed > 0:
+                if parsed <= 300:
+                    return parsed * 60.0
+                return parsed
+            return None
         except ValueError, TypeError:
             return None
     return None
@@ -1473,44 +1504,122 @@ async def import_schedule(
     event_name = "Conference Event"
     talks_to_create = []
 
+    rooms_lookup: dict[Any, str] = {}
+    speakers_lookup: dict[Any, dict[str, str]] = {}
+
     if isinstance(data, dict):
-        event_name = data.get("event_name") or event_name
+        event_name = _extract_string_value(data.get("event_name")) or event_name
+
+        # 1. Build lookup tables if top-level "rooms" or "speakers" exist (e.g. Eventyay / Pretalx relational format)
+        if isinstance(data.get("rooms"), list):
+            for r in data["rooms"]:
+                if isinstance(r, dict):
+                    r_id = r.get("id") or r.get("guid") or r.get("slug") or r.get("pk")
+                    r_name = _extract_string_value(r.get("name") or r.get("title"))
+                    if r_name:
+                        if r_id is not None:
+                            rooms_lookup[str(r_id)] = r_name
+                            rooms_lookup[r_id] = r_name
+                        if r.get("slug"):
+                            rooms_lookup[str(r["slug"])] = r_name
+
+        if isinstance(data.get("speakers"), list):
+            for sp in data["speakers"]:
+                if isinstance(sp, dict):
+                    sp_id = (
+                        sp.get("code") or sp.get("id") or sp.get("guid") or sp.get("pk")
+                    )
+                    sp_name = _extract_string_value(
+                        sp.get("name") or sp.get("public_name")
+                    )
+                    sp_email = sp.get("email")
+                    entry = {"name": sp_name or "", "email": sp_email or ""}
+                    if sp_id is not None:
+                        speakers_lookup[str(sp_id)] = entry
+                        speakers_lookup[sp_id] = entry
+                    if sp.get("code"):
+                        speakers_lookup[str(sp["code"])] = entry
+
+        # 2. Check for Frab conference structure (under "schedule" -> "conference" or directly under "conference")
+        conf = None
         if (
             "schedule" in data
             and isinstance(data["schedule"], dict)
             and "conference" in data["schedule"]
         ):
             conf = data["schedule"]["conference"]
-            event_name = conf.get("title") or event_name
+        elif "conference" in data and isinstance(data["conference"], dict):
+            conf = data["conference"]
+
+        if conf and isinstance(conf, dict):
+            event_name = (
+                _extract_string_value(conf.get("title") or conf.get("name"))
+                or event_name
+            )
+            if isinstance(conf.get("rooms"), list):
+                for r in conf["rooms"]:
+                    if isinstance(r, dict):
+                        r_id = r.get("guid") or r.get("id") or r.get("slug")
+                        r_name = _extract_string_value(r.get("name") or r.get("title"))
+                        if r_name and r_id is not None:
+                            rooms_lookup[str(r_id)] = r_name
+                            rooms_lookup[r_id] = r_name
+
             for day in conf.get("days", []):
-                for room_name, room_talks in day.get("rooms", {}).items():
-                    for t in room_talks:
-                        speaker_email = t.get("speaker_email")
-                        if not speaker_email and isinstance(t.get("persons"), list):
-                            for p in t["persons"]:
-                                if isinstance(p, dict) and p.get("email"):
-                                    speaker_email = p["email"]
-                                    break
-                        talks_to_create.append(
-                            {
-                                "title": t.get("title", "Untitled Session"),
-                                "room": room_name,
-                                "start": t.get("date") or t.get("start"),
-                                "end": t.get("end"),
-                                "duration": t.get("duration"),
-                                "speaker_email": speaker_email,
-                                "external_id": str(
-                                    t.get("code")
-                                    or t.get("id")
-                                    or t.get("guid")
-                                    or t.get("external_id")
-                                    or ""
-                                )
-                                or None,
-                            }
-                        )
-        elif "talks" in data:
+                if not isinstance(day, dict):
+                    continue
+                day_date = day.get("date")
+                rooms_data = day.get("rooms", {})
+                if isinstance(rooms_data, dict):
+                    for room_name, room_talks in rooms_data.items():
+                        resolved_room = rooms_lookup.get(
+                            room_name
+                        ) or _extract_string_value(room_name)
+                        if isinstance(room_talks, list):
+                            for t in room_talks:
+                                if isinstance(t, dict):
+                                    t["_derived_room"] = resolved_room
+                                    if day_date:
+                                        t["_day_date"] = day_date
+                                    dur_str = t.get("duration")
+                                    if isinstance(dur_str, str) and ":" in dur_str:
+                                        dur_parts = dur_str.strip().split(":")
+                                        if len(dur_parts) == 2:
+                                            try:
+                                                t["duration_minutes"] = int(
+                                                    dur_parts[0]
+                                                ) * 60 + float(dur_parts[1])
+                                            except ValueError, TypeError:
+                                                pass
+                                    talks_to_create.append(t)
+                elif isinstance(rooms_data, list):
+                    for r_item in rooms_data:
+                        if isinstance(r_item, dict):
+                            r_name = _extract_string_value(
+                                r_item.get("name") or r_item.get("room")
+                            )
+                            for t in r_item.get("talks", []):
+                                if isinstance(t, dict):
+                                    t["_derived_room"] = r_name
+                                    if day_date:
+                                        t["_day_date"] = day_date
+                                    dur_str = t.get("duration")
+                                    if isinstance(dur_str, str) and ":" in dur_str:
+                                        dur_parts = dur_str.strip().split(":")
+                                        if len(dur_parts) == 2:
+                                            try:
+                                                t["duration_minutes"] = int(
+                                                    dur_parts[0]
+                                                ) * 60 + float(dur_parts[1])
+                                            except ValueError, TypeError:
+                                                pass
+                                    talks_to_create.append(t)
+        elif "talks" in data and isinstance(data["talks"], list):
             talks_to_create = data["talks"]
+        elif "sessions" in data and isinstance(data["sessions"], list):
+            talks_to_create = data["sessions"]
+        elif "submissions" in data and isinstance(data["submissions"], list):
+            talks_to_create = data["submissions"]
         elif "title" in data:
             talks_to_create = [data]
     elif isinstance(data, list):
@@ -1527,13 +1636,72 @@ async def import_schedule(
     for t_info in talks_to_create:
         if not isinstance(t_info, dict):
             continue
-        title = t_info.get("title") or "Untitled Talk"
-        room = t_info.get("room")
+        raw_title = (
+            t_info.get("title") or t_info.get("name") or t_info.get("session_title")
+        )
+        title = _extract_string_value(raw_title) or "Untitled Talk"
+
+        raw_room = (
+            t_info.get("room") or t_info.get("room_name") or t_info.get("_derived_room")
+        )
+        room = None
+        if isinstance(raw_room, dict):
+            room = _extract_string_value(raw_room.get("name") or raw_room.get("title"))
+        elif raw_room is not None:
+            room = rooms_lookup.get(raw_room) or rooms_lookup.get(str(raw_room))
+            if not room:
+                room = _extract_string_value(raw_room)
+
+        speaker_email = None
+        if t_info.get("speaker_email"):
+            speaker_email = _extract_string_value(t_info["speaker_email"])
+        elif isinstance(t_info.get("persons"), list):
+            for p in t_info["persons"]:
+                if isinstance(p, dict):
+                    if p.get("email"):
+                        speaker_email = _extract_string_value(p["email"])
+                        break
+                    p_code = p.get("code") or p.get("guid") or p.get("id")
+                    if (
+                        p_code
+                        and p_code in speakers_lookup
+                        and speakers_lookup[p_code].get("email")
+                    ):
+                        speaker_email = speakers_lookup[p_code]["email"]
+                        break
+        elif isinstance(t_info.get("speakers"), list):
+            for sp in t_info["speakers"]:
+                if isinstance(sp, dict):
+                    if sp.get("email"):
+                        speaker_email = _extract_string_value(sp["email"])
+                        break
+                    sp_code = sp.get("code") or sp.get("id") or sp.get("guid")
+                    if (
+                        sp_code
+                        and sp_code in speakers_lookup
+                        and speakers_lookup[sp_code].get("email")
+                    ):
+                        speaker_email = speakers_lookup[sp_code]["email"]
+                        break
+                elif isinstance(sp, (str, int)):
+                    if sp in speakers_lookup and speakers_lookup[sp].get("email"):
+                        speaker_email = speakers_lookup[sp]["email"]
+                        break
+                    if isinstance(sp, str) and "@" in sp:
+                        speaker_email = sp.strip()
+                        break
+        elif isinstance(t_info.get("speaker"), dict):
+            if t_info["speaker"].get("email"):
+                speaker_email = _extract_string_value(t_info["speaker"]["email"])
+        elif isinstance(t_info.get("speaker"), str) and "@" in t_info["speaker"]:
+            speaker_email = t_info["speaker"].strip()
+
         raw_ext_id = (
             t_info.get("external_id")
             or t_info.get("code")
             or t_info.get("id")
             or t_info.get("guid")
+            or t_info.get("slug")
         )
         talk_external_id = (
             str(raw_ext_id).strip()
@@ -1541,7 +1709,15 @@ async def import_schedule(
             else None
         )
 
-        t_start = _parse_iso_datetime(t_info.get("start") or t_info.get("date"))
+        t_start = _parse_iso_datetime(t_info.get("date")) or _parse_iso_datetime(
+            t_info.get("start")
+        )
+        if t_start is None and t_info.get("_day_date") and t_info.get("start"):
+            raw_time = str(t_info["start"]).strip()
+            if ":" in raw_time and len(raw_time) in (4, 5):
+                combined = f"{t_info['_day_date']}T{raw_time.zfill(5)}:00"
+                t_start = _parse_iso_datetime(combined)
+
         t_end = _parse_iso_datetime(t_info.get("end"))
 
         # Explicit duration_seconds / duration_minutes vs generic duration
@@ -1613,7 +1789,7 @@ async def import_schedule(
                 "room": room,
                 "start": start_dt,
                 "end": end_dt,
-                "speaker_email": t_info.get("speaker_email"),
+                "speaker_email": speaker_email,
                 "external_id": talk_external_id,
             }
         )
