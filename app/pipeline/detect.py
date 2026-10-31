@@ -10,6 +10,17 @@ import av
 from av.error import FFmpegError
 
 DETECT_DURATION_TOLERANCE_SECONDS = 300.0
+MAX_UNSCHEDULED_DURATION_SECONDS = 14400.0  # 4 hours
+
+
+def compute_max_allowed_duration(scheduled_duration: float) -> float:
+    """Compute the maximum allowed recording duration for a single talk.
+
+    Enforces no minimum duration, but applies a dynamic ceiling:
+    at least double the scheduled duration, or scheduled duration + 30 minutes (1800s),
+    with a minimum floor of 45 minutes (2700s).
+    """
+    return max(2.0 * scheduled_duration, scheduled_duration + 1800.0, 2700.0)
 
 
 @dataclass(frozen=True)
@@ -23,8 +34,8 @@ class DetectResult:
 
 def detect(
     file_path: Path,
-    scheduled_start: datetime,
-    scheduled_end: datetime,
+    scheduled_start: datetime | None = None,
+    scheduled_end: datetime | None = None,
     tolerance_seconds: float = DETECT_DURATION_TOLERANCE_SECONDS,
     is_room_recording: bool = False,
 ) -> DetectResult:
@@ -66,6 +77,15 @@ def detect(
             has_video=has_video,
             has_audio=has_audio,
             reason="missing video stream",
+        )
+
+    if scheduled_start is None or scheduled_end is None:
+        return DetectResult(
+            passed=True,
+            actual_duration_seconds=actual_duration,
+            has_video=has_video,
+            has_audio=has_audio,
+            reason=None,
         )
 
     scheduled_duration = (scheduled_end - scheduled_start).total_seconds()

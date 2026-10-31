@@ -39,6 +39,8 @@ from app.pipeline.concat import concat
 from app.pipeline.cut import cut
 from app.pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
+    MAX_UNSCHEDULED_DURATION_SECONDS,
+    compute_max_allowed_duration,
     container_duration_seconds,
     detect,
 )
@@ -512,7 +514,47 @@ def job_detect(
             **detect_kwargs,
         )
         if not result.passed:
-            raise ValueError(f"Detection failed: {result.reason}")
+            is_duration_mismatch = (
+                result.has_video
+                and result.actual_duration_seconds > 0
+                and "duration" in (result.reason or "")
+            )
+            if is_duration_mismatch:
+                if (
+                    not is_room_recording
+                    and scheduled_start is not None
+                    and scheduled_end is not None
+                ):
+                    sched_dur = max(
+                        0.0,
+                        (scheduled_end - scheduled_start).total_seconds(),
+                    )
+                    max_allowed = compute_max_allowed_duration(sched_dur)
+                    if result.actual_duration_seconds > max_allowed:
+                        raise ValueError(
+                            f"Recording duration ({result.actual_duration_seconds:.1f}s) significantly exceeds "
+                            f"the scheduled session duration ({sched_dur:.1f}s, maximum allowed: {max_allowed:.1f}s). "
+                            "If this is a multi-talk room recording, attach it as a Room Recording instead."
+                        )
+                elif not is_room_recording and (
+                    scheduled_start is None or scheduled_end is None
+                ):
+                    if (
+                        result.actual_duration_seconds
+                        > MAX_UNSCHEDULED_DURATION_SECONDS
+                    ):
+                        raise ValueError(
+                            f"Recording duration ({result.actual_duration_seconds:.1f}s) exceeds the maximum allowed "
+                            f"limit of 4 hours ({MAX_UNSCHEDULED_DURATION_SECONDS:.1f}s) for unscheduled talks."
+                        )
+
+                logger.warning(
+                    "Talk %s recording duration differs from schedule (%s); accepting valid media file",
+                    talk_id,
+                    result.reason,
+                )
+            else:
+                raise ValueError(f"Detection failed: {result.reason}")
 
         with SessionLocal() as db:
             talk = db.get(Talk, talk_id)
@@ -529,6 +571,35 @@ def job_detect(
                     db.commit()
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
+
+            # Validate existing cut bounds against the measured raw duration.
+            # If cut_end exceeds actual duration, clamp it; if bounds become invalid, reset them.
+            if result.actual_duration_seconds:
+                if (
+                    talk.cut_end is not None
+                    and talk.cut_end > result.actual_duration_seconds
+                ):
+                    logger.warning(
+                        "Talk %s cut_end (%s) exceeds measured duration (%s); clamping",
+                        talk_id,
+                        talk.cut_end,
+                        result.actual_duration_seconds,
+                    )
+                    talk.cut_end = result.actual_duration_seconds
+
+                if (
+                    talk.cut_start is not None
+                    and talk.cut_end is not None
+                    and talk.cut_start >= talk.cut_end
+                ):
+                    logger.warning(
+                        "Talk %s cut_start (%s) >= cut_end (%s) after bounds validation; resetting bounds",
+                        talk_id,
+                        talk.cut_start,
+                        talk.cut_end,
+                    )
+                    talk.cut_start = None
+                    talk.cut_end = None
 
             # Seed cut bounds from schedule offsets when not already set by user.
             # ponytail: only seeds when both are None; user edits are always preserved.

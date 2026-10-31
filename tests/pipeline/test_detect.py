@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.pipeline.detect import DETECT_DURATION_TOLERANCE_SECONDS, detect
+from app.pipeline.detect import (
+    DETECT_DURATION_TOLERANCE_SECONDS,
+    compute_max_allowed_duration,
+    detect,
+)
 from tests.conftest import (
     generate_clip,
     generate_corrupt_clip,
@@ -163,3 +167,26 @@ def test_detect_fails_empty_file(tmp_path: Path):
     assert not result.has_video
     assert not result.has_audio
     assert "file is empty" in result.reason
+
+
+def test_detect_passes_when_schedule_bounds_none(tmp_path: Path):
+    clip = generate_clip(5, output_dir=tmp_path)
+    result = detect(clip, scheduled_start=None, scheduled_end=None)
+    assert result.passed
+    assert result.actual_duration_seconds > 0
+    assert result.has_video
+    assert result.reason is None
+
+
+def test_compute_max_allowed_duration():
+    # 5-minute lightning talk (300s): hits 45-minute (2700s) floor
+    assert compute_max_allowed_duration(300.0) == 2700.0
+
+    # 20-minute talk (1200s): 1200 + 1800 = 3000s (50m) > 2400s (2x)
+    assert compute_max_allowed_duration(1200.0) == 3000.0
+
+    # 40-minute talk (2400s): 2 * 2400 = 4800s (80m)
+    assert compute_max_allowed_duration(2400.0) == 4800.0
+
+    # 3-hour tutorial (10800s): 2 * 10800 = 21600s (6h)
+    assert compute_max_allowed_duration(10800.0) == 21600.0
