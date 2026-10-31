@@ -565,9 +565,7 @@ def _render_talks_page(
         q = q.replace("\x00", "")
         escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         if q.isascii():
-            stmt = stmt.where(
-                models.Talk.title.ilike(f"%{escaped_q}%", escape="\\")
-            )
+            stmt = stmt.where(models.Talk.title.ilike(f"%{escaped_q}%", escape="\\"))
 
     normalized_sort_by = sort_by if sort_by in _TALK_SORT_COLUMNS else "start"
     normalized_sort_dir = sort_dir if sort_dir in ("asc", "desc") else "desc"
@@ -575,9 +573,7 @@ def _render_talks_page(
     order_expression = (
         sort_column.asc() if normalized_sort_dir == "asc" else sort_column.desc()
     )
-    talks = list(
-        db.scalars(stmt.order_by(order_expression, models.Talk.id.desc()))
-    )
+    talks = list(db.scalars(stmt.order_by(order_expression, models.Talk.id.desc())))
     if q and not q.isascii():
         q_lower = q.lower()
         talks = [talk for talk in talks if q_lower in talk.title.lower()]

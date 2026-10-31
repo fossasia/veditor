@@ -47,7 +47,8 @@ async function pollTalk(talkId) {
     const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
 
-    let talkStatus = row ? row.dataset.status : '';
+    const previousStatus = row ? row.dataset.status : '';
+    let talkStatus = previousStatus;
 
     const headers = key ? { 'X-API-Key': key } : {};
     const r = await (window.authFetch || fetch)(`/talks/${talkId}/jobs`, { headers, _isPolling: true });
@@ -61,7 +62,8 @@ async function pollTalk(talkId) {
     }
 
     if (row && talkStatus) row.dataset.status = talkStatus;
-    if (row && talkStatus && sortBySelect && sortBySelect.value === 'status') {
+    if (row && talkStatus && talkStatus !== previousStatus &&
+        sortBySelect && sortBySelect.value === 'status') {
       sortRows();
     }
   } catch { /* skip */ }
@@ -108,7 +110,11 @@ function sortRows() {
     return (Number(right.dataset.talkId) || 0) - (Number(left.dataset.talkId) || 0);
   });
 
+  const activeElement = document.activeElement;
   sortedRows.forEach(row => tbody.insertBefore(row, noMatchesRow));
+  if (activeElement && activeElement !== document.body && tbody.contains(activeElement)) {
+    activeElement.focus({ preventScroll: true });
+  }
 }
 
 function applyFilters() {
