@@ -163,6 +163,7 @@
         >
       </div>
 
+      <label class="sr-only" for="status-select">Filter by status</label>
       <select id="status-select" class="select-field" name="status_filter">
         <option value="">All Statuses</option>
         {% for s in all_statuses %}
@@ -173,6 +174,7 @@
       </select>
 
       {% if room is none %}
+      <label class="sr-only" for="room-filter-select">Filter by room</label>
       <select id="room-filter-select" class="select-field" name="room_filter">
         <option value="">All Rooms</option>
         {% for r in all_rooms %}
@@ -181,6 +183,7 @@
       </select>
       {% endif %}
 
+      <label class="sr-only" for="sort-by-select">Sort talks by</label>
       <select id="sort-by-select" class="select-field" name="sort_by">
         <option value="start" {% if sort_by == 'start' %}selected{% endif %}>Sort by start time</option>
         <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Sort by title</option>
@@ -188,6 +191,7 @@
         <option value="status" {% if sort_by == 'status' %}selected{% endif %}>Sort by status</option>
       </select>
 
+      <label class="sr-only" for="sort-dir-select">Sort direction</label>
       <select id="sort-dir-select" class="select-field" name="sort_dir">
         <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Descending</option>
         <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Ascending</option>

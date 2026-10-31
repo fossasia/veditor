@@ -1036,6 +1036,7 @@ def test_dashboard_room_filter_and_sorting(client: TestClient, db_session):
     org, _, event, _, talks = _seed_room_talks(db_session)
     talks["main_1"].title = "Zeta Opening"
     talks["main_2"].title = "Alpha Closing"
+    talks["workshop"].title = "ÉCOLE Session"
     db_session.commit()
     authenticate_client(client, org)
 
@@ -1059,8 +1060,16 @@ def test_dashboard_room_filter_and_sorting(client: TestClient, db_session):
     )
     assert invalid.status_code == 200
     assert invalid.text.index("Roomless Lightning Talk") < invalid.text.index(
-        "Workshop Hands-On"
+        "ÉCOLE Session"
     )
+
+    unicode_search = client.get(f"/studio?event_id={event.id}&q=%C3%A9cole")
+    assert unicode_search.status_code == 200
+    assert "ÉCOLE Session" in unicode_search.text
+    assert "Zeta Opening" not in unicode_search.text
+
+    nul_search = client.get(f"/studio?event_id={event.id}&q=%00")
+    assert nul_search.status_code == 200
 
 
 def test_event_page_shows_event_title_header(

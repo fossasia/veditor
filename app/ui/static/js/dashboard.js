@@ -61,6 +61,9 @@ async function pollTalk(talkId) {
     }
 
     if (row && talkStatus) row.dataset.status = talkStatus;
+    if (row && talkStatus && sortBySelect && sortBySelect.value === 'status') {
+      sortRows();
+    }
   } catch { /* skip */ }
 }
 
@@ -82,7 +85,31 @@ function startPolling() {
 // ── Instant Live Filter on Typing ───────────────────────────────
 const searchInput = document.getElementById('search-input');
 const statusSelect = document.getElementById('status-select');
+const sortBySelect = document.getElementById('sort-by-select');
+const sortDirSelect = document.getElementById('sort-dir-select');
 const rows = document.querySelectorAll('tbody tr[data-talk-id]');
+
+function sortRows() {
+  if (!sortBySelect || !sortDirSelect) return;
+  const sortBy = sortBySelect.value;
+  const direction = sortDirSelect.value === 'asc' ? 1 : -1;
+  const tbody = document.querySelector('tbody');
+  const noMatchesRow = document.getElementById('no-client-matches-row');
+  if (!tbody) return;
+
+  const sortedRows = [...rows].sort((left, right) => {
+    const leftValue = left.dataset[sortBy] || '';
+    const rightValue = right.dataset[sortBy] || '';
+    const comparison = leftValue.localeCompare(rightValue, undefined, {
+      numeric: sortBy === 'start',
+      sensitivity: 'base',
+    });
+    if (comparison !== 0) return comparison * direction;
+    return (Number(right.dataset.talkId) || 0) - (Number(left.dataset.talkId) || 0);
+  });
+
+  sortedRows.forEach(row => tbody.insertBefore(row, noMatchesRow));
+}
 
 function applyFilters() {
   const q = (searchInput ? searchInput.value : '').toLowerCase().trim();

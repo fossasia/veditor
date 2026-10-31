@@ -397,7 +397,6 @@ def room_talks(
     sort_by: str | None = None,
     sort_dir: str | None = None,
 ) -> Response:
->>>>>>> 19b5fed (feat(studio): add dashboard filters and sorting)
     return _render_talks_page(
         request,
         db,
