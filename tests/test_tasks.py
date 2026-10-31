@@ -322,6 +322,68 @@ def test_job_detect_duration_mismatch_advances_to_pending_approval(
     assert job.status == "done"
 
 
+def test_job_detect_clamps_out_of_range_cut_bounds(dummy_talk, mock_storage):
+    """When a talk already has cut_end exceeding newly measured duration, cut_end is clamped."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = 100.0
+    dummy_talk.cut_end = 1200.0
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=True,
+                actual_duration_seconds=600.0,
+                has_video=True,
+                has_audio=True,
+                reason=None,
+            ),
+        ),
+    ):
+        job_detect(1, "1/raw/raw.mp4")
+
+    assert dummy_talk.status == "pending_approval"
+    assert dummy_talk.raw_duration_seconds == 600.0
+    assert dummy_talk.cut_start == 100.0
+    assert dummy_talk.cut_end == 600.0
+
+
+def test_job_detect_resets_invalid_cut_bounds_when_cut_start_exceeds_duration(
+    dummy_talk, mock_storage
+):
+    """When cut_start is at or beyond the measured duration, both bounds are reset."""
+    dummy_talk.status = "detecting"
+    dummy_talk.cut_start = 700.0
+    dummy_talk.cut_end = 800.0
+    jobs = {}
+    db_ctx = MockDBContext(dummy_talk, jobs)
+
+    with (
+        patch("app.tasks.SessionLocal", side_effect=db_ctx),
+        patch("app.tasks.get_storage_backend", return_value=mock_storage),
+        patch(
+            "app.tasks.detect",
+            return_value=DetectResult(
+                passed=True,
+                actual_duration_seconds=600.0,
+                has_video=True,
+                has_audio=True,
+                reason=None,
+            ),
+        ),
+    ):
+        job_detect(1, "1/raw/raw.mp4")
+
+    assert dummy_talk.status == "pending_approval"
+    assert dummy_talk.raw_duration_seconds == 600.0
+    assert dummy_talk.cut_start is None
+    assert dummy_talk.cut_end is None
+
+
 def test_failure_on_already_broken_talk_does_not_crash(dummy_talk, mock_storage):
     dummy_talk.status = "detecting"
     jobs = {}

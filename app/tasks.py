@@ -541,6 +541,35 @@ def job_detect(
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
 
+            # Validate existing cut bounds against the measured raw duration.
+            # If cut_end exceeds actual duration, clamp it; if bounds become invalid, reset them.
+            if result.actual_duration_seconds:
+                if (
+                    talk.cut_end is not None
+                    and talk.cut_end > result.actual_duration_seconds
+                ):
+                    logger.warning(
+                        "Talk %s cut_end (%s) exceeds measured duration (%s); clamping",
+                        talk_id,
+                        talk.cut_end,
+                        result.actual_duration_seconds,
+                    )
+                    talk.cut_end = result.actual_duration_seconds
+
+                if (
+                    talk.cut_start is not None
+                    and talk.cut_end is not None
+                    and talk.cut_start >= talk.cut_end
+                ):
+                    logger.warning(
+                        "Talk %s cut_start (%s) >= cut_end (%s) after bounds validation; resetting bounds",
+                        talk_id,
+                        talk.cut_start,
+                        talk.cut_end,
+                    )
+                    talk.cut_start = None
+                    talk.cut_end = None
+
             # Seed cut bounds from schedule offsets when not already set by user.
             # ponytail: only seeds when both are None; user edits are always preserved.
             if (
