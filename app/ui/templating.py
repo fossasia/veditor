@@ -126,11 +126,13 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
         if hasattr(request, "state"):
             request.state.user = user
 
-    is_speaker = (
-        not user
-        or getattr(user, "role", None) not in ["organizer", "admin"]
-        or getattr(user, "role", None) == "speaker"
-    )
+    is_speaker = getattr(getattr(request, "state", None), "is_speaker", None)
+    if is_speaker is None:
+        is_speaker = (
+            not user
+            or getattr(user, "role", None) not in ["organizer", "admin"]
+            or getattr(user, "role", None) == "speaker"
+        )
     return {
         "user": user,
         "is_speaker": is_speaker,
