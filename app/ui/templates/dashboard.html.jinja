@@ -438,6 +438,12 @@
       </div>
 
       <div class="v-modal-field">
+        <label for="attach-room-start-time" class="v-modal-label v-modal-label-tight">Recording Start Time (Optional)</label>
+        <input type="time" id="attach-room-start-time" class="input-field" step="1">
+        <span class="v-modal-hint">If recording starts before the session (e.g. 08:30 for a 09:00 event), enter start time to place the initial pointer at 09:00 without cutting footage.</span>
+      </div>
+
+      <div class="v-modal-field">
         <label class="v-modal-label v-modal-label-tight">Recording Source</label>
         <div class="attach-source-toggle" role="group" aria-label="Recording source switcher">
           <button type="button" class="attach-source-btn attach-source-active" id="btn-source-url" data-source="url">

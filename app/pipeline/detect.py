@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import av
@@ -113,3 +113,77 @@ def container_duration_seconds(container) -> float | None:
         and stream.time_base is not None
     ]
     return max(stream_durations) if stream_durations else None
+
+
+def container_creation_time(container) -> datetime | None:
+    """Extract creation_time from container or video stream metadata."""
+    c_time = container.metadata.get("creation_time")
+    if not c_time and container.streams.video:
+        c_time = container.streams.video[0].metadata.get("creation_time")
+    if c_time:
+        try:
+            dt = datetime.fromisoformat(c_time)
+            return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt
+        except ValueError, TypeError:
+            pass
+    return None
+
+
+@dataclass(frozen=True)
+class TalkMatch:
+    talk_id: int
+    overlap_fraction: float
+    cut_start_offset: float
+    cut_end_offset: float
+    is_full: bool
+
+
+def match_talks_to_recording(
+    talks,
+    rec_start: datetime,
+    rec_duration_seconds: float,
+    min_overlap_fraction: float = 0.5,
+) -> list[TalkMatch]:
+    """Match scheduled talks to a recording window based on temporal overlap."""
+    if rec_duration_seconds <= 0:
+        return []
+    start_utc = rec_start.replace(tzinfo=UTC) if rec_start.tzinfo is None else rec_start
+    end_utc = start_utc + timedelta(seconds=rec_duration_seconds)
+
+    matches: list[TalkMatch] = []
+    for talk in talks:
+        if talk.start is None or talk.end is None:
+            continue
+        t_start = (
+            talk.start.replace(tzinfo=UTC) if talk.start.tzinfo is None else talk.start
+        )
+        t_end = talk.end.replace(tzinfo=UTC) if talk.end.tzinfo is None else talk.end
+        talk_dur = (t_end - t_start).total_seconds()
+        if talk_dur <= 0:
+            continue
+
+        overlap_start = max(t_start, start_utc)
+        overlap_end = min(t_end, end_utc)
+        overlap_secs = (overlap_end - overlap_start).total_seconds()
+        if overlap_secs <= 0:
+            continue
+
+        fraction = min(1.0, max(0.0, overlap_secs / talk_dur))
+        if fraction < min_overlap_fraction:
+            continue
+
+        cut_start = max(0.0, (t_start - start_utc).total_seconds())
+        cut_end = min(rec_duration_seconds, (t_end - start_utc).total_seconds())
+        if cut_end <= cut_start:
+            continue
+
+        matches.append(
+            TalkMatch(
+                talk_id=talk.id,
+                overlap_fraction=round(fraction, 3),
+                cut_start_offset=round(cut_start, 2),
+                cut_end_offset=round(cut_end, 2),
+                is_full=fraction >= 0.95,
+            )
+        )
+    return matches

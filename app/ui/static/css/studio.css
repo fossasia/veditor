@@ -1704,3 +1704,430 @@ a.breadcrumb-event:hover {
   color: var(--v-text-primary);
   margin-bottom: 0;
 }
+
+/* ── Recording Studio Layout ─────────────────────────────────── */
+.rec-studio-container {
+  padding: 1.25rem 1.5rem;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+
+.rec-studio-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .rec-studio-grid {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 1rem;
+  }
+}
+
+@media (max-width: 960px) {
+  .rec-studio-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}
+
+.rec-player-card {
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.rec-panel-card {
+  background: var(--v-bg-surface);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.rec-player-wrapper {
+  background: #000;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rec-video-player {
+  width: 100%;
+  height: 100%;
+  max-height: 560px;
+  display: block;
+}
+
+.rec-meta-box {
+  padding: 1.25rem;
+  border-top: 1px solid var(--v-border-subtle);
+}
+
+.rec-meta-heading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  color: var(--v-text-primary);
+}
+
+.rec-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.rec-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.rec-meta-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--v-text-muted);
+}
+
+.rec-meta-value {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+}
+
+.badge-recording-status {
+  background: var(--v-status-waiting-bg);
+  color: var(--v-status-waiting-text);
+  border: 1px solid var(--v-status-waiting-border);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: fit-content;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+/* Right Panel */
+.rec-panel-header {
+  padding: 1rem 1.15rem 0.65rem;
+  border-bottom: 1px solid var(--v-border-subtle);
+  flex-shrink: 0;
+}
+
+.rec-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.2rem;
+  color: var(--v-text-primary);
+}
+
+.rec-panel-description {
+  font-size: 0.78rem;
+  color: var(--v-text-secondary);
+  margin: 0;
+  line-height: 1.35;
+}
+
+.rec-bulk-form {
+  padding: 0.85rem 1.15rem 1rem;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.rec-talks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.rec-empty-talks {
+  padding: 1rem;
+  text-align: center;
+  color: var(--v-text-muted);
+  font-size: 0.88rem;
+}
+
+.rec-talk-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--v-border-subtle);
+  border-radius: 6px;
+  background: var(--v-bg-surface);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.rec-talk-card:hover {
+  background: var(--v-bg-surface-hover);
+}
+
+.rec-talk-card.is-recommended {
+  border-color: var(--v-primary-border);
+  background: var(--v-primary-subtle);
+}
+
+.rec-talk-check-col {
+  padding-top: 0.15rem;
+}
+
+.rec-talk-checkbox {
+  cursor: pointer;
+}
+
+.rec-talk-content-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rec-talk-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.rec-talk-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rec-talk-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--v-text-secondary);
+}
+
+.rec-talk-speaker {
+  color: var(--v-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-talk-speaker-missing {
+  color: var(--v-text-muted);
+  font-style: italic;
+}
+
+.rec-talk-offset-note {
+  font-size: 0.74rem;
+  color: var(--v-text-muted);
+  font-family: var(--v-font-mono);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.btn-seek-pointer {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 0.74rem;
+  color: var(--v-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.btn-seek-pointer:hover {
+  color: var(--v-primary-hover);
+}
+
+/* Coverage Badges */
+.coverage-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.coverage-badge-full {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.coverage-badge-partial {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.coverage-badge-outside {
+  background: var(--v-bg-subtle);
+  color: var(--v-text-muted);
+  border: 1px solid var(--v-border-subtle);
+}
+
+/* Bumpers & Handoff sections */
+.rec-section-divider {
+  height: 1px;
+  background: var(--v-border-subtle);
+  margin: 0.35rem 0;
+}
+
+.rec-panel-card .bumper-studio-card {
+  margin-bottom: 0;
+  padding: 10px 12px;
+  background: var(--v-bg-panel);
+}
+
+.rec-panel-card .bumper-group {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.rec-panel-card .bumper-group:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.rec-panel-card .bumper-group-title {
+  font-size: 0.78rem;
+}
+
+.rec-panel-card .bumper-nested-options {
+  padding: 6px;
+  margin-top: 6px;
+  gap: 6px;
+}
+
+.rec-panel-card .bumper-segment {
+  padding: 5px 8px;
+  font-size: 0.72rem;
+}
+
+/* Enhanced Speaker Handoff Card */
+.rec-handoff-card {
+  background: var(--v-bg-panel);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-xs);
+  padding: 8px 12px;
+  transition: all 0.2s ease;
+  margin-top: 2px;
+}
+
+.rec-handoff-card.is-active {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.rec-handoff-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rec-handoff-icon-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--v-radius-xs);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--v-primary);
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.rec-handoff-card.is-active .rec-handoff-icon-badge {
+  background: var(--v-primary);
+  color: #fff;
+}
+
+.rec-handoff-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-handoff-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rec-handoff-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--v-text-primary);
+}
+
+.rec-handoff-description {
+  font-size: 0.7rem;
+  color: var(--v-text-muted);
+  margin-top: 1px;
+  line-height: 1.3;
+}
+
+/* Action Bar */
+.rec-actions-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  flex-shrink: 0;
+}
+
+.btn-rec-action {
+  width: 100%;
+  justify-content: center;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.82rem;
+}
+
+.rec-status-banner {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  padding: 0;
+  border-radius: 4px;
+}
+
+.rec-status-banner.is-success {
+  padding: 0.5rem 0.75rem;
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.rec-status-banner.is-error {
+  padding: 0.5rem 0.75rem;
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}

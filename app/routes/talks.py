@@ -2003,6 +2003,7 @@ async def attach_room_recording(
     source_path: Annotated[str | None, Form()] = None,
     recording_start: Annotated[datetime | None, Form()] = None,
     target_date: Annotated[date | None, Form()] = None,
+    stage_only: Annotated[bool, Form()] = False,
 ):
     """Attach a continuous room recording to scheduled sessions in that room.
 
@@ -2020,6 +2021,7 @@ async def attach_room_recording(
                 video_url = body.get("video_url", video_url)
                 relative_key = body.get("relative_key", relative_key)
                 source_path = body.get("source_path", source_path)
+                stage_only = body.get("stage_only", stage_only)
                 rec_start_str = body.get("recording_start")
                 if rec_start_str and not recording_start:
                     try:
@@ -2160,6 +2162,60 @@ async def attach_room_recording(
                 detail="video_url must start with http:// or https://",
             )
 
+        creator_id = None
+        if (
+            user
+            and user.user_id
+            and db.query(models.User.id).filter(models.User.id == user.user_id).first()
+        ):
+            creator_id = user.user_id
+
+        room_rec = models.RoomRecording(
+            event_id=event_id,
+            room=room,
+            source_url=clean_url,
+            recording_start=recording_start,
+            status="pending_analysis",
+            created_by_user_id=creator_id,
+        )
+        db.add(room_rec)
+        db.commit()
+        db.refresh(room_rec)
+
+        rec_start_iso = recording_start.isoformat() if recording_start else None
+
+        if stage_only:
+            try:
+                heavy_queue.enqueue(
+                    job_ingest_room_url,
+                    event_id,
+                    room,
+                    clean_url,
+                    recording_start_iso=rec_start_iso,
+                    talk_ids=[],
+                    recording_id=room_rec.id,
+                    stage_only=True,
+                    job_timeout=3600,
+                )
+            except (OSError, RedisError, RuntimeError) as exc:
+                logger.error("Failed to enqueue room URL ingest job: %s", exc)
+                room_rec.status = "broken"
+                db.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Background ingest queue is temporarily unavailable",
+                ) from exc
+
+            return schemas.RoomRecordingAttachResponse(
+                attached_count=0,
+                room=room,
+                event_id=event_id,
+                talk_ids=[],
+                recording_duration_seconds=None,
+                target_date=target_date,
+                recording_id=room_rec.id,
+            )
+
         talk_ids = [t.id for t in eligible_talks]
         talks_to_cancel = [t.id for t in eligible_talks if t.status == "detecting"]
         for tid in talks_to_cancel:
@@ -2170,7 +2226,6 @@ async def attach_room_recording(
             talk.status = "detecting"
         db.commit()
 
-        rec_start_iso = recording_start.isoformat() if recording_start else None
         try:
             heavy_queue.enqueue(
                 job_ingest_room_url,
@@ -2179,12 +2234,14 @@ async def attach_room_recording(
                 clean_url,
                 recording_start_iso=rec_start_iso,
                 talk_ids=talk_ids,
+                recording_id=room_rec.id,
                 job_timeout=3600,
             )
         except (OSError, RedisError, RuntimeError) as exc:
             logger.error("Failed to enqueue room URL ingest job: %s", exc)
             for talk in eligible_talks:
                 talk.status = prev_statuses.get(talk.id, "waiting_for_files")
+            room_rec.status = "broken"
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2206,6 +2263,7 @@ async def attach_room_recording(
             talk_ids=talk_ids,
             recording_duration_seconds=None,
             target_date=target_date,
+            recording_id=room_rec.id,
         )
 
     # Stage media
@@ -2374,6 +2432,19 @@ async def attach_room_recording(
     if rec_start.tzinfo is None:
         rec_start = rec_start.replace(tzinfo=UTC)
 
+    if eligible_talks:
+        first_talk_start = (
+            eligible_talks[0].start.replace(tzinfo=UTC)
+            if eligible_talks[0].start.tzinfo is None
+            else eligible_talks[0].start
+        )
+        if rec_start.date() != first_talk_start.date():
+            rec_start = rec_start.replace(
+                year=first_talk_start.year,
+                month=first_talk_start.month,
+                day=first_talk_start.day,
+            )
+
     rec_end = rec_start + timedelta(seconds=duration)
     matched_talks = [
         t
@@ -2383,13 +2454,7 @@ async def attach_room_recording(
         and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end) > rec_start
     ]
     if not matched_talks:
-        if is_ephemeral_upload:
-            # storage-boundary-exempt: upload staging cleanup
-            staged_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No scheduled talks in room '{room}' match recording window ({rec_start} to {rec_end})",
-        )
+        matched_talks = eligible_talks
 
     # Zero-copy stage into each talk's storage & advance state
     talk_ids = []
@@ -2400,6 +2465,44 @@ async def attach_room_recording(
     # Cancel previous detection jobs before modifying or overwriting storage assets
     for tid in talks_to_cancel:
         _cancel_talk_jobs(tid)
+
+    creator_id = None
+    if (
+        user
+        and user.user_id
+        and db.query(models.User.id).filter(models.User.id == user.user_id).first()
+    ):
+        creator_id = user.user_id
+
+    room_rec = models.RoomRecording(
+        event_id=event_id,
+        room=room,
+        recording_start=rec_start,
+        duration_seconds=duration,
+        status="ready",
+        created_by_user_id=creator_id,
+    )
+    db.add(room_rec)
+    db.flush()
+    room_rec.storage_key = f"recordings/{room_rec.id}/recording.mp4"
+    await anyio.to_thread.run_sync(
+        storage.link_or_copy, room_rec.storage_key, staged_path
+    )
+
+    if stage_only:
+        db.commit()
+        if is_ephemeral_upload:
+            # storage-boundary-exempt: upload staging cleanup
+            staged_path.unlink(missing_ok=True)
+        return schemas.RoomRecordingAttachResponse(
+            attached_count=0,
+            room=room,
+            event_id=event_id,
+            talk_ids=[],
+            recording_duration_seconds=duration,
+            target_date=target_date,
+            recording_id=room_rec.id,
+        )
 
     try:
         for talk in matched_talks:
@@ -2414,6 +2517,7 @@ async def attach_room_recording(
             await anyio.to_thread.run_sync(storage.link_or_copy, raw_key, staged_path)
             staged_keys.append(raw_key)
 
+            talk.room_recording_id = room_rec.id
             talk.status = "detecting"
             talk.raw_duration_seconds = duration
 
@@ -2430,6 +2534,11 @@ async def attach_room_recording(
             if offset_end > offset_start:
                 talk.cut_start = offset_start
                 talk.cut_end = offset_end
+            else:
+                talk.cut_start = 0.0
+                talk.cut_end = min(
+                    (talk_end_utc - talk_start_utc).total_seconds(), duration
+                )
 
             talk_ids.append(talk.id)
 
@@ -2512,4 +2621,5 @@ async def attach_room_recording(
         talk_ids=talk_ids,
         recording_duration_seconds=duration,
         target_date=target_date,
+        recording_id=room_rec.id,
     )

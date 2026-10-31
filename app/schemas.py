@@ -570,6 +570,7 @@ class RoomRecordingAttachResponse(BaseModel):
     talk_ids: list[int]
     recording_duration_seconds: float | None = None
     target_date: date | None = None
+    recording_id: int | None = None
 
 
 class SystemSettingOption(BaseModel):

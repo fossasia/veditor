@@ -409,6 +409,14 @@ html[data-sidebar="collapsed"] .main-content {
   margin-bottom: 3px;
 }
 
+.v-modal-hint {
+  font-size: 0.72rem;
+  color: var(--v-text-muted);
+  display: block;
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
 .v-modal-file-input {
   padding: 6px;
 }
