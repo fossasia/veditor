@@ -1368,9 +1368,6 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
         sec = float(val)
         if not math.isfinite(sec) or sec <= 0:
             return None
-        # In conference schedules (e.g. Eventyay widget/compact schedule), bare numbers <= 300 represent minutes
-        if sec <= 300:
-            return sec * 60.0
         return sec
     if isinstance(val, str):
         val = val.strip()
@@ -1410,8 +1407,6 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
         try:
             parsed = float(val)
             if math.isfinite(parsed) and parsed > 0:
-                if parsed <= 300:
-                    return parsed * 60.0
                 return parsed
             return None
         except ValueError, TypeError:
@@ -1514,31 +1509,27 @@ async def import_schedule(
         if isinstance(data.get("rooms"), list):
             for r in data["rooms"]:
                 if isinstance(r, dict):
-                    r_id = r.get("id") or r.get("guid") or r.get("slug") or r.get("pk")
                     r_name = _extract_string_value(r.get("name") or r.get("title"))
                     if r_name:
-                        if r_id is not None:
-                            rooms_lookup[str(r_id)] = r_name
-                            rooms_lookup[r_id] = r_name
-                        if r.get("slug"):
-                            rooms_lookup[str(r["slug"])] = r_name
+                        for key in ("id", "guid", "slug", "pk", "code"):
+                            val = r.get(key)
+                            if val is not None:
+                                rooms_lookup[str(val)] = r_name
+                                rooms_lookup[val] = r_name
 
         if isinstance(data.get("speakers"), list):
             for sp in data["speakers"]:
                 if isinstance(sp, dict):
-                    sp_id = (
-                        sp.get("code") or sp.get("id") or sp.get("guid") or sp.get("pk")
-                    )
                     sp_name = _extract_string_value(
                         sp.get("name") or sp.get("public_name")
                     )
                     sp_email = sp.get("email")
                     entry = {"name": sp_name or "", "email": sp_email or ""}
-                    if sp_id is not None:
-                        speakers_lookup[str(sp_id)] = entry
-                        speakers_lookup[sp_id] = entry
-                    if sp.get("code"):
-                        speakers_lookup[str(sp["code"])] = entry
+                    for key in ("code", "id", "guid", "pk", "slug"):
+                        val = sp.get(key)
+                        if val is not None:
+                            speakers_lookup[str(val)] = entry
+                            speakers_lookup[val] = entry
 
         # 2. Check for Frab conference structure (under "schedule" -> "conference" or directly under "conference")
         conf = None
@@ -1551,19 +1542,26 @@ async def import_schedule(
         elif "conference" in data and isinstance(data["conference"], dict):
             conf = data["conference"]
 
+        event_external_id = _extract_string_value(
+            data.get("event_id") or data.get("external_id")
+        )
         if conf and isinstance(conf, dict):
             event_name = (
                 _extract_string_value(conf.get("title") or conf.get("name"))
                 or event_name
             )
+            if not event_external_id:
+                event_external_id = _extract_string_value(conf.get("acronym"))
             if isinstance(conf.get("rooms"), list):
                 for r in conf["rooms"]:
                     if isinstance(r, dict):
-                        r_id = r.get("guid") or r.get("id") or r.get("slug")
                         r_name = _extract_string_value(r.get("name") or r.get("title"))
-                        if r_name and r_id is not None:
-                            rooms_lookup[str(r_id)] = r_name
-                            rooms_lookup[r_id] = r_name
+                        if r_name:
+                            for key in ("id", "guid", "slug", "pk", "code"):
+                                val = r.get(key)
+                                if val is not None:
+                                    rooms_lookup[str(val)] = r_name
+                                    rooms_lookup[val] = r_name
 
             for day in conf.get("days", []):
                 if not isinstance(day, dict):
@@ -1616,10 +1614,34 @@ async def import_schedule(
                                     talks_to_create.append(t)
         elif "talks" in data and isinstance(data["talks"], list):
             talks_to_create = data["talks"]
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get("duration"), (int, float))
+                    and "duration_minutes" not in t
+                    and "duration_seconds" not in t
+                ):
+                    t["duration_minutes"] = t["duration"]
         elif "sessions" in data and isinstance(data["sessions"], list):
             talks_to_create = data["sessions"]
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get("duration"), (int, float))
+                    and "duration_minutes" not in t
+                    and "duration_seconds" not in t
+                ):
+                    t["duration_minutes"] = t["duration"]
         elif "submissions" in data and isinstance(data["submissions"], list):
             talks_to_create = data["submissions"]
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get("duration"), (int, float))
+                    and "duration_minutes" not in t
+                    and "duration_seconds" not in t
+                ):
+                    t["duration_minutes"] = t["duration"]
         elif "title" in data:
             talks_to_create = [data]
     elif isinstance(data, list):
@@ -1709,14 +1731,33 @@ async def import_schedule(
             else None
         )
 
-        t_start = _parse_iso_datetime(t_info.get("date")) or _parse_iso_datetime(
-            t_info.get("start")
-        )
-        if t_start is None and t_info.get("_day_date") and t_info.get("start"):
-            raw_time = str(t_info["start"]).strip()
-            if ":" in raw_time and len(raw_time) in (4, 5):
-                combined = f"{t_info['_day_date']}T{raw_time.zfill(5)}:00"
-                t_start = _parse_iso_datetime(combined)
+        raw_start_str = t_info.get("start")
+        raw_date_str = t_info.get("date")
+
+        t_start = None
+        if raw_start_str:
+            t_start = _parse_iso_datetime(raw_start_str)
+
+        # If start is wall-clock time (HH:MM or HH:MM:SS), combine with day date or date prefix
+        if t_start is None and raw_start_str:
+            clean_time = str(raw_start_str).strip()
+            if ":" in clean_time:
+                target_date = t_info.get("_day_date")
+                if not target_date and raw_date_str:
+                    date_cand = str(raw_date_str).strip()
+                    if len(date_cand) >= 10:
+                        target_date = date_cand[:10]
+                if target_date:
+                    time_parts = clean_time.split(":")
+                    if len(time_parts) == 2:
+                        combined = f"{target_date}T{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}:00"
+                        t_start = _parse_iso_datetime(combined)
+                    elif len(time_parts) == 3:
+                        combined = f"{target_date}T{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}:{time_parts[2].zfill(2)}"
+                        t_start = _parse_iso_datetime(combined)
+
+        if t_start is None and raw_date_str:
+            t_start = _parse_iso_datetime(raw_date_str)
 
         t_end = _parse_iso_datetime(t_info.get("end"))
 
@@ -1825,6 +1866,9 @@ async def import_schedule(
             is_explicit_external = True
         elif data.get("event_id"):
             target_identifier = data.get("event_id")
+        elif event_external_id:
+            target_identifier = event_external_id
+            is_explicit_external = True
         target_source = data.get("source")
 
     if (
@@ -1909,6 +1953,38 @@ async def import_schedule(
                     db.flush()
                     is_new_event = True
 
+    if not event and event_external_id:
+        if getattr(user, "is_platform", False):
+            event = (
+                db.query(models.Event)
+                .filter(models.Event.external_id == event_external_id)
+                .first()
+            )
+        elif user.is_machine:
+            event = (
+                db.query(models.Event)
+                .filter(
+                    models.Event.external_id == event_external_id,
+                    models.Event.id.in_(user.event_ids),
+                )
+                .first()
+            )
+        elif user.role == "admin":
+            event = (
+                db.query(models.Event)
+                .filter(models.Event.external_id == event_external_id)
+                .first()
+            )
+        else:
+            event = (
+                db.query(models.Event)
+                .filter(
+                    models.Event.external_id == event_external_id,
+                    models.Event.created_by_user_id == user.user_id,
+                )
+                .first()
+            )
+
     if not event:
         # Check if caller already has an event with matching name
         if getattr(user, "is_platform", False):
@@ -1953,7 +2029,11 @@ async def import_schedule(
 
     if not event:
         created_by = user.user_id if not user.is_machine else None
-        event = models.Event(name=event_name, created_by_user_id=created_by)
+        event = models.Event(
+            name=event_name,
+            external_id=event_external_id,
+            created_by_user_id=created_by,
+        )
         db.add(event)
         db.flush()
         is_new_event = True

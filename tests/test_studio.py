@@ -4408,3 +4408,109 @@ def test_import_schedule_localized_titles_and_day_date_fallback(
     assert talk.room == "Stage Beta"
     # 01:00 duration -> exactly 3600.0s
     assert (talk.end - talk.start).total_seconds() == 3600.0
+    assert (
+        talk.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        == "2026-07-15T11:00:00"
+    )
+
+
+def test_import_schedule_advanced_formats_and_lookups(client: TestClient, db_session):
+    api_key = f"adv_test_key_{uuid.uuid4().hex}"
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # 1. Test relational format where rooms and speakers use pk/slug, and duration is integer minutes
+    payload_relational = {
+        "event_id": "fossasia-summit-2026",
+        "name": "FOSSASIA Summit 2026",
+        "rooms": [
+            {"pk": 101, "name": "Hall A", "slug": "hall-a"},
+        ],
+        "speakers": [
+            {
+                "pk": 501,
+                "name": "Alice Smith",
+                "code": "AS1",
+                "email": "alice@example.com",
+            },
+        ],
+        "talks": [
+            {
+                "id": 9001,
+                "title": "Opening Keynote",
+                "room": 101,
+                "speakers": [501],
+                "start": "2026-03-20T09:00:00Z",
+                "duration": 45,  # Relational talk duration as integer minutes
+            }
+        ],
+    }
+
+    res = client.post(
+        "/talks/schedule/import",
+        json=payload_relational,
+        headers={"X-API-Key": api_key},
+    )
+    assert res.status_code == 200
+    assert res.json()["imported_count"] == 1
+
+    talk = (
+        db_session.query(models.Talk).filter(models.Talk.external_id == "9001").first()
+    )
+    assert talk is not None
+    assert talk.room == "Hall A"
+    assert talk.speaker_email == "alice@example.com"
+    # 45 minutes duration -> exactly 2700.0s
+    assert (talk.end - talk.start).total_seconds() == 2700.0
+
+    # 2. Test Frab conference acronym used as stable external_id and wall-clock HH:MM:SS combined with date
+    payload_frab = {
+        "conference": {
+            "title": "Open Source Tech Summit",
+            "acronym": "osts2026",
+            "days": [
+                {
+                    "date": "2026-08-10",
+                    "rooms": {
+                        "Main Stage": [
+                            {
+                                "title": "System Architecture Deep Dive",
+                                "start": "14:30:00",
+                                "duration": "00:45:00",
+                                "code": "OSTS-101",
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+    }
+
+    res2 = client.post(
+        "/talks/schedule/import",
+        json=payload_frab,
+        headers={"X-API-Key": api_key},
+    )
+    assert res2.status_code == 200
+    assert res2.json()["imported_count"] == 1
+
+    event = (
+        db_session.query(models.Event)
+        .filter(models.Event.external_id == "osts2026")
+        .first()
+    )
+    assert event is not None
+    assert event.name == "Open Source Tech Summit"
+
+    talk_frab = (
+        db_session.query(models.Talk)
+        .filter(models.Talk.external_id == "OSTS-101")
+        .first()
+    )
+    assert talk_frab is not None
+    assert (
+        talk_frab.start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        == "2026-08-10T14:30:00"
+    )
+    assert (talk_frab.end - talk_frab.start).total_seconds() == 2700.0
