@@ -172,6 +172,27 @@
         {% endfor %}
       </select>
 
+      {% if room is none %}
+      <select id="room-filter-select" class="select-field" name="room_filter">
+        <option value="">All Rooms</option>
+        {% for r in all_rooms %}
+          <option value="{{ r }}" {% if r == room_filter %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
+      <select id="sort-by-select" class="select-field" name="sort_by">
+        <option value="start" {% if sort_by == 'start' %}selected{% endif %}>Sort by start time</option>
+        <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Sort by title</option>
+        <option value="room" {% if sort_by == 'room' %}selected{% endif %}>Sort by room</option>
+        <option value="status" {% if sort_by == 'status' %}selected{% endif %}>Sort by status</option>
+      </select>
+
+      <select id="sort-dir-select" class="select-field" name="sort_dir">
+        <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Descending</option>
+        <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Ascending</option>
+      </select>
+
       {% if event_id %}
         <input type="hidden" name="event_id" value="{{ event_id }}">
       {% endif %}
@@ -183,7 +204,7 @@
         Filter
       </button>
 
-      {% if q or status_filter %}
+      {% if q or status_filter or room_filter or sort_by != 'start' or sort_dir != 'desc' %}
         <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost" id="clear-btn">Clear</a>
       {% endif %}
     </form>
@@ -319,7 +340,7 @@
     </table>
     {% else %}
     <div class="empty-state-wrap">
-      {% if q or status_filter %}
+      {% if q or status_filter or room_filter or sort_by != 'start' or sort_dir != 'desc' %}
         <p class="empty-state-title">No matching talks</p>
         <p class="empty-state-desc">No talks match your current filter or search criteria.</p>
         <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost btn-sm empty-state-btn">Clear Filters</a>

@@ -246,6 +246,13 @@ ALL_STATUSES = [
     TalkStatus.BROKEN,
 ]
 
+_TALK_SORT_COLUMNS = {
+    "start": models.Talk.start,
+    "title": models.Talk.title,
+    "room": models.Talk.room,
+    "status": models.Talk.status,
+}
+
 MILESTONES_DEF = [
     {
         "num": 1,
@@ -320,6 +327,9 @@ def dashboard(
     event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    room_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     sso_token: str | None = None,
 ) -> Response:
     # 1. Check if landing with ?sso_token=...
@@ -368,6 +378,9 @@ def dashboard(
         event_id=event_id,
         status_filter=status_filter,
         q=q,
+        room_filter=room_filter,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
 
@@ -380,7 +393,11 @@ def room_talks(
     event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    room_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ) -> Response:
+>>>>>>> 19b5fed (feat(studio): add dashboard filters and sorting)
     return _render_talks_page(
         request,
         db,
@@ -388,6 +405,9 @@ def room_talks(
         event_id=event_id,
         status_filter=status_filter,
         q=q,
+        room_filter=room_filter,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
         room=room_name,
     )
 
@@ -419,6 +439,9 @@ def _render_talks_page(
     event_id: str | int | None,
     status_filter: str | None,
     q: str | None,
+    room_filter: str | None,
+    sort_by: str | None,
+    sort_dir: str | None,
     room: str | None = None,
 ) -> Response:
     """Render the talks list, scoped to the caller and optionally to an event/room."""
@@ -535,13 +558,30 @@ def _render_talks_page(
     )
     if room is not None:
         stmt = stmt.where(models.Talk.room == room)
+    elif room_filter:
+        stmt = stmt.where(models.Talk.room == room_filter)
     if status_filter:
         stmt = stmt.where(models.Talk.status == status_filter)
-
-    talks = list(db.scalars(stmt.order_by(models.Talk.start.desc())))
     if q:
+        q = q.replace("\x00", "")
+        escaped_q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if q.isascii():
+            stmt = stmt.where(
+                models.Talk.title.ilike(f"%{escaped_q}%", escape="\\")
+            )
+
+    normalized_sort_by = sort_by if sort_by in _TALK_SORT_COLUMNS else "start"
+    normalized_sort_dir = sort_dir if sort_dir in ("asc", "desc") else "desc"
+    sort_column = _TALK_SORT_COLUMNS[normalized_sort_by]
+    order_expression = (
+        sort_column.asc() if normalized_sort_dir == "asc" else sort_column.desc()
+    )
+    talks = list(
+        db.scalars(stmt.order_by(order_expression, models.Talk.id.desc()))
+    )
+    if q and not q.isascii():
         q_lower = q.lower()
-        talks = [t for t in talks if q_lower in t.title.lower()]
+        talks = [talk for talk in talks if q_lower in talk.title.lower()]
 
     all_rooms = list(
         db.scalars(
@@ -592,6 +632,9 @@ def _render_talks_page(
             "all_rooms": all_rooms,
             "q": q or "",
             "status_filter": status_filter or "",
+            "room_filter": room_filter or "",
+            "sort_by": normalized_sort_by,
+            "sort_dir": normalized_sort_dir,
             "event_id": event_id,
             "user_events": user_events,
             "error": flash_error,
