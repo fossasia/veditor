@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import CurrentUser, get_current_user, hash_api_key
+from app.consts import AuthRole
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.security import (
@@ -74,7 +75,9 @@ def test_admin_routes_unauthenticated(client: TestClient, setup_database: None) 
 def test_admin_routes_forbidden_for_non_admin(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    regular_user = _create_test_user(db_session, "regular@admin-test.com", role="user")
+    regular_user = _create_test_user(
+        db_session, "regular@admin-test.com", role=AuthRole.USER
+    )
     token = create_session_token(regular_user.id, regular_user.role)
     client.cookies.set("veditor_session", token)
 
@@ -89,7 +92,7 @@ def test_admin_routes_forbidden_for_non_admin(
     assert res.status_code == 403
 
     organizer_user = _create_test_user(
-        db_session, "organizer@admin-test.com", role="organizer"
+        db_session, "organizer@admin-test.com", role=AuthRole.ORGANIZER
     )
     token_org = create_session_token(organizer_user.id, organizer_user.role)
     client.cookies.set("veditor_session", token_org)
@@ -107,9 +110,11 @@ def test_admin_routes_forbidden_for_non_admin(
 def test_admin_users_list_success_and_pagination(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin1@admin-test.com", role="admin")
-    u1 = _create_test_user(db_session, "alpha@admin-test.com", role="user")
-    u2 = _create_test_user(db_session, "beta@admin-test.com", role="organizer")
+    admin_user = _create_test_user(
+        db_session, "admin1@admin-test.com", role=AuthRole.ADMIN
+    )
+    u1 = _create_test_user(db_session, "alpha@admin-test.com", role=AuthRole.USER)
+    u2 = _create_test_user(db_session, "beta@admin-test.com", role=AuthRole.ORGANIZER)
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -180,7 +185,9 @@ def test_admin_routes_reject_api_key(
 def test_promote_user_not_found(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_p1@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_p1@admin-test.com", role=AuthRole.ADMIN
+    )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
@@ -192,8 +199,12 @@ def test_promote_user_not_found(
 def test_promote_user_invalid_role_payload(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_p2@admin-test.com", role="admin")
-    target_user = _create_test_user(db_session, "target_p2@admin-test.com", role="user")
+    admin_user = _create_test_user(
+        db_session, "admin_p2@admin-test.com", role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, "target_p2@admin-test.com", role=AuthRole.USER
+    )
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -209,10 +220,10 @@ def test_promote_rejects_admin_role(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_p_rej@admin-test.com", role="admin"
+        db_session, "admin_p_rej@admin-test.com", role=AuthRole.ADMIN
     )
     target_user = _create_test_user(
-        db_session, "target_p_rej@admin-test.com", role="user"
+        db_session, "target_p_rej@admin-test.com", role=AuthRole.USER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -225,8 +236,12 @@ def test_promote_rejects_admin_role(
 def test_promote_user_success(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_p3@admin-test.com", role="admin")
-    target_user = _create_test_user(db_session, "target_p3@admin-test.com", role="user")
+    admin_user = _create_test_user(
+        db_session, "admin_p3@admin-test.com", role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, "target_p3@admin-test.com", role=AuthRole.USER
+    )
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -271,7 +286,7 @@ def test_promote_guard_cannot_demote_last_admin(
             db_session.commit()
 
         admin_user = _create_test_user(
-            db_session, "sole_admin@admin-test.com", role="admin"
+            db_session, "sole_admin@admin-test.com", role=AuthRole.ADMIN
         )
         token = create_session_token(admin_user.id, admin_user.role)
         client.cookies.set("veditor_session", token)
@@ -298,8 +313,12 @@ def test_promote_guard_cannot_demote_last_admin(
 def test_promote_demote_admin_allowed_if_another_admin_exists(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin1 = _create_test_user(db_session, "admin_a@admin-test.com", role="admin")
-    admin2 = _create_test_user(db_session, "admin_b@admin-test.com", role="admin")
+    admin1 = _create_test_user(
+        db_session, "admin_a@admin-test.com", role=AuthRole.ADMIN
+    )
+    admin2 = _create_test_user(
+        db_session, "admin_b@admin-test.com", role=AuthRole.ADMIN
+    )
 
     token = create_session_token(admin1.id, admin1.role)
     client.cookies.set("veditor_session", token)
@@ -317,7 +336,7 @@ def test_deactivate_self_prevented(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "self_deact@admin-test.com", role="admin"
+        db_session, "self_deact@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -330,7 +349,9 @@ def test_deactivate_self_prevented(
 def test_deactivate_user_not_found(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_d1@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_d1@admin-test.com", role=AuthRole.ADMIN
+    )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
@@ -360,11 +381,11 @@ def test_deactivate_guard_cannot_deactivate_last_admin(
             db_session.commit()
 
         sole_admin = _create_test_user(
-            db_session, "sole_adm_d@admin-test.com", role="admin"
+            db_session, "sole_adm_d@admin-test.com", role=AuthRole.ADMIN
         )
 
         app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-            user_id=99999, role="admin", source="cookie"
+            user_id=99999, role=AuthRole.ADMIN, source="cookie"
         )
         res = client.post(f"/admin/users/{sole_admin.id}/deactivate")
         assert res.status_code == 400
@@ -383,8 +404,12 @@ def test_deactivate_guard_cannot_deactivate_last_admin(
 def test_deactivate_user_success(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_d2@admin-test.com", role="admin")
-    target_user = _create_test_user(db_session, "target_d2@admin-test.com", role="user")
+    admin_user = _create_test_user(
+        db_session, "admin_d2@admin-test.com", role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, "target_d2@admin-test.com", role=AuthRole.USER
+    )
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -400,8 +425,12 @@ def test_deactivate_user_success(
 def test_deactivate_admin_when_another_admin_exists(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin1 = _create_test_user(db_session, "admin_x@admin-test.com", role="admin")
-    admin2 = _create_test_user(db_session, "admin_y@admin-test.com", role="admin")
+    admin1 = _create_test_user(
+        db_session, "admin_x@admin-test.com", role=AuthRole.ADMIN
+    )
+    admin2 = _create_test_user(
+        db_session, "admin_y@admin-test.com", role=AuthRole.ADMIN
+    )
 
     token = create_session_token(admin1.id, admin1.role)
     client.cookies.set("veditor_session", token)
@@ -418,13 +447,13 @@ def test_deactivated_user_immediate_session_and_login_rejection(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_deact_mgr@admin-test.com", role="admin"
+        db_session, "admin_deact_mgr@admin-test.com", role=AuthRole.ADMIN
     )
     user_password = "KnownUserPassword123!"
     user = models.User(
         email="deact_target@admin-test.com",
         hashed_password=hash_password(user_password),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
         created_at=datetime.now(UTC),
@@ -526,19 +555,19 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
             s.execute(
                 update(models.User)
                 .where(models.User.id.in_(other_admin_ids))
-                .values(role="organizer")
+                .values(role=AuthRole.ORGANIZER)
             )
         s.commit()
         admin1 = models.User(
             email="admin1@concurrent-test.com",
             hashed_password=hash_password("pw1"),
-            role="admin",
+            role=AuthRole.ADMIN,
             is_active=True,
         )
         admin2 = models.User(
             email="admin2@concurrent-test.com",
             hashed_password=hash_password("pw2"),
-            role="admin",
+            role=AuthRole.ADMIN,
             is_active=True,
         )
         s.add_all([admin1, admin2])
@@ -591,7 +620,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
                 s.execute(
                     update(models.User)
                     .where(models.User.id.in_(other_admin_ids))
-                    .values(role="admin")
+                    .values(role=AuthRole.ADMIN)
                 )
             s.commit()
 
@@ -599,7 +628,9 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
 def test_admin_events_list_empty(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_e1@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_e1@admin-test.com", role=AuthRole.ADMIN
+    )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
@@ -634,9 +665,11 @@ def test_admin_events_list_empty(
 def test_admin_events_list_and_aggregation(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_e2@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_e2@admin-test.com", role=AuthRole.ADMIN
+    )
     creator_user = _create_test_user(
-        db_session, "creator@admin-test.com", role="organizer"
+        db_session, "creator@admin-test.com", role=AuthRole.ORGANIZER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -731,7 +764,9 @@ def test_admin_events_list_and_aggregation(
 def test_admin_event_detail_not_found(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_e3@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_e3@admin-test.com", role=AuthRole.ADMIN
+    )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
 
@@ -743,9 +778,11 @@ def test_admin_event_detail_not_found(
 def test_admin_event_detail_success(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_e4@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_e4@admin-test.com", role=AuthRole.ADMIN
+    )
     creator_user = _create_test_user(
-        db_session, "creator2@admin-test.com", role="organizer"
+        db_session, "creator2@admin-test.com", role=AuthRole.ORGANIZER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -806,9 +843,11 @@ def test_admin_event_detail_success(
 def test_admin_studio_editor_bypass(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_e5@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_e5@admin-test.com", role=AuthRole.ADMIN
+    )
     other_organizer = _create_test_user(
-        db_session, "other_org@admin-test.com", role="organizer"
+        db_session, "other_org@admin-test.com", role=AuthRole.ORGANIZER
     )
 
     event = models.Event(
@@ -844,10 +883,10 @@ def test_admin_event_detail_empty_talks(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_empty_talks@admin-test.com", role="admin"
+        db_session, "admin_empty_talks@admin-test.com", role=AuthRole.ADMIN
     )
     creator_user = _create_test_user(
-        db_session, "creator_empty@admin-test.com", role="organizer"
+        db_session, "creator_empty@admin-test.com", role=AuthRole.ORGANIZER
     )
     event = models.Event(
         name="Empty Talks Conference",
@@ -871,9 +910,11 @@ def test_admin_event_detail_empty_talks(
 def test_admin_events_pagination(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    admin_user = _create_test_user(db_session, "admin_pag@admin-test.com", role="admin")
+    admin_user = _create_test_user(
+        db_session, "admin_pag@admin-test.com", role=AuthRole.ADMIN
+    )
     creator_user = _create_test_user(
-        db_session, "creator_pag@admin-test.com", role="organizer"
+        db_session, "creator_pag@admin-test.com", role=AuthRole.ORGANIZER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -939,7 +980,9 @@ def test_admin_settings_unauthenticated(
 def test_admin_settings_forbidden_for_non_admin(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
-    user = _create_test_user(db_session, "user_settings@admin-test.com", role="user")
+    user = _create_test_user(
+        db_session, "user_settings@admin-test.com", role=AuthRole.USER
+    )
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
@@ -968,7 +1011,7 @@ def test_admin_settings_get_html(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_get_settings@admin-test.com", role="admin"
+        db_session, "admin_get_settings@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -988,7 +1031,7 @@ def test_admin_settings_post_form_bulk(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_post_bulk@admin-test.com", role="admin"
+        db_session, "admin_post_bulk@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1058,7 +1101,7 @@ def test_admin_settings_api_get(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_api_settings@admin-test.com", role="admin"
+        db_session, "admin_api_settings@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1077,7 +1120,7 @@ def test_admin_settings_post_form_and_reset(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_post_settings@admin-test.com", role="admin"
+        db_session, "admin_post_settings@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1121,7 +1164,7 @@ def test_admin_settings_post_json(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_post_json@admin-test.com", role="admin"
+        db_session, "admin_post_json@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1157,7 +1200,7 @@ def test_admin_settings_post_invalid_validation(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_invalid_val@admin-test.com", role="admin"
+        db_session, "admin_invalid_val@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1181,7 +1224,7 @@ def test_admin_settings_post_forbidden_secret(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_secret_mod@admin-test.com", role="admin"
+        db_session, "admin_secret_mod@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1212,7 +1255,7 @@ def test_admin_settings_post_malformed_payloads(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_malformed@admin-test.com", role="admin"
+        db_session, "admin_malformed@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1240,7 +1283,7 @@ def test_admin_settings_excluded_keys_hidden_from_listing(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_hidden_keys@admin-test.com", role="admin"
+        db_session, "admin_hidden_keys@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1266,7 +1309,7 @@ def test_admin_dashboard_overview_configuration_summary(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin = _create_test_user(
-        db_session, "admin_overview_summary@admin-test.com", role="admin"
+        db_session, "admin_overview_summary@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1285,16 +1328,19 @@ def test_admin_users_html_view_rendering(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_ui_user@admin-test.com", role="admin"
+        db_session, "admin_ui_user@admin-test.com", role=AuthRole.ADMIN
     )
     managed_user = _create_test_user(
-        db_session, "managed_one@admin-test.com", role="user"
+        db_session, "managed_one@admin-test.com", role=AuthRole.USER
     )
     managed_two = _create_test_user(
-        db_session, "managed_two@admin-test.com", role="organizer", is_active=False
+        db_session,
+        "managed_two@admin-test.com",
+        role=AuthRole.ORGANIZER,
+        is_active=False,
     )
     speaker_user = _create_test_user(
-        db_session, "managed_speaker@admin-test.com", role="speaker"
+        db_session, "managed_speaker@admin-test.com", role=AuthRole.SPEAKER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -1383,10 +1429,10 @@ def test_admin_users_search_filter_html_and_json(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_search_mgr@admin-test.com", role="admin"
+        db_session, "admin_search_mgr@admin-test.com", role=AuthRole.ADMIN
     )
-    _create_test_user(db_session, "findme_special@admin-test.com", role="user")
-    _create_test_user(db_session, "other_normal@admin-test.com", role="user")
+    _create_test_user(db_session, "findme_special@admin-test.com", role=AuthRole.USER)
+    _create_test_user(db_session, "other_normal@admin-test.com", role=AuthRole.USER)
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1415,7 +1461,7 @@ def test_admin_users_search_empty_state(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_search_empty@admin-test.com", role="admin"
+        db_session, "admin_search_empty@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1440,10 +1486,10 @@ def test_activate_user_endpoint_success(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_act_mgr@admin-test.com", role="admin"
+        db_session, "admin_act_mgr@admin-test.com", role=AuthRole.ADMIN
     )
     inactive_user = _create_test_user(
-        db_session, "inactive_test@admin-test.com", role="user", is_active=False
+        db_session, "inactive_test@admin-test.com", role=AuthRole.USER, is_active=False
     )
     assert inactive_user.is_active is False
 
@@ -1464,7 +1510,7 @@ def test_activate_user_not_found(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_act_nf@admin-test.com", role="admin"
+        db_session, "admin_act_nf@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1478,10 +1524,10 @@ def test_promote_demote_to_user_role(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_demote_mgr@admin-test.com", role="admin"
+        db_session, "admin_demote_mgr@admin-test.com", role=AuthRole.ADMIN
     )
     target_user = _create_test_user(
-        db_session, "target_demote@admin-test.com", role="organizer"
+        db_session, "target_demote@admin-test.com", role=AuthRole.ORGANIZER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -1500,10 +1546,10 @@ def test_promote_rejects_speaker_role(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_no_spk@admin-test.com", role="admin"
+        db_session, "admin_no_spk@admin-test.com", role=AuthRole.ADMIN
     )
     target_user = _create_test_user(
-        db_session, "target_no_spk@admin-test.com", role="user"
+        db_session, "target_no_spk@admin-test.com", role=AuthRole.USER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -1520,10 +1566,10 @@ def test_admin_users_role_alias_endpoint(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_alias@admin-test.com", role="admin"
+        db_session, "admin_alias@admin-test.com", role=AuthRole.ADMIN
     )
     target_user = _create_test_user(
-        db_session, "target_alias@admin-test.com", role="user"
+        db_session, "target_alias@admin-test.com", role=AuthRole.USER
     )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -1542,7 +1588,7 @@ def test_admin_nav_includes_users_link(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_nav_test@admin-test.com", role="admin"
+        db_session, "admin_nav_test@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1563,10 +1609,10 @@ def test_admin_users_search_wildcard_escaping(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_escape_test@admin-test.com", role="admin"
+        db_session, "admin_escape_test@admin-test.com", role=AuthRole.ADMIN
     )
-    _create_test_user(db_session, "user_abc@admin-test.com", role="user")
-    _create_test_user(db_session, "userXabc@admin-test.com", role="user")
+    _create_test_user(db_session, "user_abc@admin-test.com", role=AuthRole.USER)
+    _create_test_user(db_session, "userXabc@admin-test.com", role=AuthRole.USER)
 
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1589,13 +1635,13 @@ def test_admin_users_pagination_url_encoding(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_urlenc@admin-test.com", role="admin"
+        db_session, "admin_urlenc@admin-test.com", role=AuthRole.ADMIN
     )
-    _create_test_user(db_session, "other_normal@admin-test.com", role="user")
+    _create_test_user(db_session, "other_normal@admin-test.com", role=AuthRole.USER)
     # Create 3 users matching a tag search
     for i in range(3):
         _create_test_user(
-            db_session, f"tag_user_{i}+special@admin-test.com", role="user"
+            db_session, f"tag_user_{i}+special@admin-test.com", role=AuthRole.USER
         )
 
     token = create_session_token(admin_user.id, admin_user.role)
@@ -1628,7 +1674,7 @@ def test_admin_users_html_skip_out_of_range_raises_404(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     admin_user = _create_test_user(
-        db_session, "admin_skip_test@admin-test.com", role="admin"
+        db_session, "admin_skip_test@admin-test.com", role=AuthRole.ADMIN
     )
     token = create_session_token(admin_user.id, admin_user.role)
     client.cookies.set("veditor_session", token)
@@ -1660,7 +1706,7 @@ def test_request_organizer_role_success(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Standard user can submit an organizer request."""
-    user = _create_test_user(db_session, "req_org_1@admin-test.com", role="user")
+    user = _create_test_user(db_session, "req_org_1@admin-test.com", role=AuthRole.USER)
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
@@ -1682,7 +1728,7 @@ def test_request_organizer_role_idempotency_rejected(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Cannot submit a second organizer request when one is already pending."""
-    user = _create_test_user(db_session, "req_org_2@admin-test.com", role="user")
+    user = _create_test_user(db_session, "req_org_2@admin-test.com", role=AuthRole.USER)
     user.organizer_requested = True
     db_session.commit()
 
@@ -1698,7 +1744,9 @@ def test_request_organizer_role_rejected_for_organizer(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Organizers cannot submit a request (they already have access)."""
-    user = _create_test_user(db_session, "req_org_3@admin-test.com", role="organizer")
+    user = _create_test_user(
+        db_session, "req_org_3@admin-test.com", role=AuthRole.ORGANIZER
+    )
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
@@ -1722,7 +1770,7 @@ def test_request_organizer_role_sso_rejected(
     """SSO sessions are forbidden from requesting organizer access."""
 
     sso_token = create_sso_token(
-        scope_type="event", scope_id=1, role="speaker", email="sso@example.com"
+        scope_type="event", scope_id=1, role=AuthRole.SPEAKER, email="sso@example.com"
     )
     client.cookies.set("veditor_session", sso_token)
 
@@ -1744,7 +1792,7 @@ def test_request_organizer_optional_note_empty_string(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Empty note is treated as None."""
-    user = _create_test_user(db_session, "req_org_4@admin-test.com", role="user")
+    user = _create_test_user(db_session, "req_org_4@admin-test.com", role=AuthRole.USER)
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
@@ -1758,7 +1806,9 @@ def test_request_organizer_note_exceeding_max_length_rejected(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Note exceeding 500 characters is rejected with 422 Unprocessable Entity."""
-    user = _create_test_user(db_session, "req_org_len@admin-test.com", role="user")
+    user = _create_test_user(
+        db_session, "req_org_len@admin-test.com", role=AuthRole.USER
+    )
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
@@ -1770,8 +1820,10 @@ def test_admin_approve_clears_pending_request(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Admin promoting a user to organizer clears the pending request flag."""
-    admin = _create_test_user(db_session, "admin_appv@admin-test.com", role="admin")
-    user = _create_test_user(db_session, "req_org_5@admin-test.com", role="user")
+    admin = _create_test_user(
+        db_session, "admin_appv@admin-test.com", role=AuthRole.ADMIN
+    )
+    user = _create_test_user(db_session, "req_org_5@admin-test.com", role=AuthRole.USER)
     user.organizer_requested = True
     user.organizer_request_note = "Please approve"
     db_session.commit()
@@ -1794,8 +1846,12 @@ def test_admin_demotion_does_not_clear_already_false_request(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Demoting a user (no pending request) doesn't error."""
-    admin = _create_test_user(db_session, "admin_dem@admin-test.com", role="admin")
-    user = _create_test_user(db_session, "req_org_6@admin-test.com", role="organizer")
+    admin = _create_test_user(
+        db_session, "admin_dem@admin-test.com", role=AuthRole.ADMIN
+    )
+    user = _create_test_user(
+        db_session, "req_org_6@admin-test.com", role=AuthRole.ORGANIZER
+    )
 
     token = create_session_token(admin.id, admin.role)
     client.cookies.set("veditor_session", token)
@@ -1809,13 +1865,15 @@ def test_admin_users_pending_requests_filter(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:
     """Admin can filter user list by pending organizer requests."""
-    admin = _create_test_user(db_session, "admin_filter@admin-test.com", role="admin")
+    admin = _create_test_user(
+        db_session, "admin_filter@admin-test.com", role=AuthRole.ADMIN
+    )
     user_pending = _create_test_user(
-        db_session, "pending_user@admin-test.com", role="user"
+        db_session, "pending_user@admin-test.com", role=AuthRole.USER
     )
     user_pending.organizer_requested = True
     user_pending.organizer_request_note = "I am a summit organizer"
-    _create_test_user(db_session, "normal_user@admin-test.com", role="user")
+    _create_test_user(db_session, "normal_user@admin-test.com", role=AuthRole.USER)
     db_session.commit()
 
     token = create_session_token(admin.id, admin.role)

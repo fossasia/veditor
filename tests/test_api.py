@@ -73,7 +73,7 @@ def _create_talk(
     event_id: int,
     *,
     title: str = "Test Talk",
-    status: str = "waiting_for_files",
+    status: TalkStatus = TalkStatus.WAITING_FILES,
     raw_duration_seconds: float | None = None,
     cut_start: float | None = None,
     cut_end: float | None = None,
@@ -144,13 +144,13 @@ def test_health_check_database_failure() -> None:
 @pytest.mark.parametrize(
     "blocked_status",
     [
-        "waiting_for_files",
-        "detecting",
-        "pending_approval",
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
     ],
 )
 def test_raw_preview_gated_before_pending_bounds(
-    db_session: Session, blocked_status: str
+    db_session: Session, blocked_status: TalkStatus
 ) -> None:
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id, status=blocked_status)
@@ -163,19 +163,19 @@ def test_raw_preview_gated_before_pending_bounds(
 @pytest.mark.parametrize(
     "allowed_status",
     [
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "preview",
-        "needs_work",
-        "pending_intro_outro",
-        "transcoding",
-        "uploading",
-        "done",
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
+        TalkStatus.NEEDS_WORK,
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
     ],
 )
 def test_raw_preview_accessible_from_pending_bounds_onwards(
-    db_session: Session, allowed_status: str
+    db_session: Session, allowed_status: TalkStatus
 ) -> None:
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id, status=allowed_status)
@@ -199,7 +199,7 @@ def test_raw_preview_accessible_from_pending_bounds_onwards(
 
 def test_raw_preview_no_file(db_session: Session) -> None:
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="pending_bounds")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.PENDING_BOUNDS)
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
@@ -222,7 +222,7 @@ def test_raw_preview_no_file(db_session: Session) -> None:
 
 def test_approve_wrong_state(db_session: Session) -> None:
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="pending_bounds")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.PENDING_BOUNDS)
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(f"/talks/{talk.id}/approve", headers={"X-API-Key": API_KEY})
@@ -232,7 +232,7 @@ def test_approve_wrong_state(db_session: Session) -> None:
 def test_rejected_talk_has_no_raw_preview_access(db_session: Session) -> None:
     """After rejection, raw-preview must remain gated (403)."""
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="rejected")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.REJECTED)
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
@@ -256,7 +256,10 @@ def test_rejected_talk_has_no_raw_preview_access(db_session: Session) -> None:
 def test_cut_bounds_happy_path(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -276,7 +279,7 @@ def test_cut_bounds_happy_path(db_session: Session) -> None:
 
             db_session.expire_all()
             reloaded = _talk(db_session, talk.id)
-            assert reloaded.status == "cutting"
+            assert reloaded.status == TalkStatus.CUTTING
             assert reloaded.cut_start == 10.0
             assert reloaded.cut_end == 2700.0
 
@@ -294,7 +297,10 @@ def test_cut_bounds_happy_path(db_session: Session) -> None:
 def test_cut_bounds_with_note(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -329,7 +335,10 @@ def test_cut_bounds_with_note(db_session: Session) -> None:
 def test_cut_bounds_subsecond_precision(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -357,7 +366,10 @@ def test_cut_bounds_subsecond_precision(db_session: Session) -> None:
 def test_cut_bounds_end_before_start(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -372,7 +384,10 @@ def test_cut_bounds_end_before_start(db_session: Session) -> None:
 def test_cut_bounds_equal_start_end(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -387,7 +402,10 @@ def test_cut_bounds_equal_start_end(db_session: Session) -> None:
 def test_cut_bounds_exceeds_duration(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=60.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=60.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -401,7 +419,7 @@ def test_cut_bounds_exceeds_duration(db_session: Session) -> None:
 
 def test_cut_bounds_missing_raw_duration(db_session: Session) -> None:
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="pending_bounds")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.PENDING_BOUNDS)
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
@@ -428,7 +446,10 @@ def test_cut_bounds_invalid_time_formats(
 ) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_bounds", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -442,7 +463,7 @@ def test_cut_bounds_invalid_time_formats(
 
 def test_cut_bounds_wrong_state(db_session: Session) -> None:
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="pending_approval")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.PENDING_APPROVAL)
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
@@ -462,7 +483,10 @@ def test_full_phase4_happy_path(db_session: Session) -> None:
     """Drive a talk from pending_approval to cutting via approve → raw-preview → cut-bounds."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, status="pending_approval", raw_duration_seconds=3600.0
+        db_session,
+        event.id,
+        status=TalkStatus.PENDING_APPROVAL,
+        raw_duration_seconds=3600.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -476,7 +500,7 @@ def test_full_phase4_happy_path(db_session: Session) -> None:
         # 1. Approve → pending_intro_outro
         resp = client.post(f"/talks/{talk.id}/approve", headers={"X-API-Key": API_KEY})
         assert resp.status_code == 200
-        assert _talk(db_session, talk.id).status == "pending_intro_outro"
+        assert _talk(db_session, talk.id).status == TalkStatus.PENDING_INTRO_OUTRO
 
         # 1b. Handoff → pending_bounds
         resp = client.post(
@@ -485,7 +509,7 @@ def test_full_phase4_happy_path(db_session: Session) -> None:
             headers={"X-API-Key": API_KEY},
         )
         assert resp.status_code == 200
-        assert _talk(db_session, talk.id).status == "pending_bounds"
+        assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
         # 2. Raw preview accessible
         resp = client.get(
@@ -505,7 +529,7 @@ def test_full_phase4_happy_path(db_session: Session) -> None:
 
             db_session.expire_all()
             reloaded = _talk(db_session, talk.id)
-            assert reloaded.status == "cutting"
+            assert reloaded.status == TalkStatus.CUTTING
             # cut_start/cut_end on the talk row — not scheduled start/end
             assert reloaded.cut_start == 10.0
             assert reloaded.cut_end == 3600.0
@@ -520,7 +544,7 @@ def test_abort_talk_success(db_session: Session) -> None:
     talk = _create_talk(
         db_session,
         event.id,
-        status="cutting",
+        status=TalkStatus.CUTTING,
         raw_duration_seconds=3600.0,
         cut_start=10.0,
         cut_end=1800.0,
@@ -561,7 +585,7 @@ def test_abort_talk_success(db_session: Session) -> None:
             # Talk state persisted
             db_session.expire_all()
             reloaded = _talk(db_session, talk.id)
-            assert reloaded.status == "waiting_for_files"
+            assert reloaded.status == TalkStatus.WAITING_FILES
             assert reloaded.raw_duration_seconds is None
             assert reloaded.cut_start is None
             assert reloaded.cut_end is None
@@ -592,7 +616,7 @@ def test_abort_talk_cancels_jobs_in_registries(db_session: Session) -> None:
     talk = _create_talk(
         db_session,
         event.id,
-        status="cutting",
+        status=TalkStatus.CUTTING,
         raw_duration_seconds=3600.0,
         cut_start=10.0,
         cut_end=1800.0,
@@ -648,7 +672,7 @@ def test_abort_talk_not_found(db_session: Session) -> None:
 def test_abort_talk_unauthorized_event(db_session: Session) -> None:
     event = _create_event(db_session)
     other_event = _create_event(db_session, "Other Event")
-    talk = _create_talk(db_session, other_event.id, status="cutting")
+    talk = _create_talk(db_session, other_event.id, status=TalkStatus.CUTTING)
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(f"/talks/{talk.id}/abort", headers={"X-API-Key": API_KEY})
@@ -658,11 +682,11 @@ def test_abort_talk_unauthorized_event(db_session: Session) -> None:
 def test_abort_talk_from_any_state(db_session: Session) -> None:
     """Verify abort works seamlessly from terminal states (e.g. broken, rejected) as well."""
     for initial_status in (
-        "broken",
-        "rejected",
-        "done",
-        "waiting_for_files",
-        "detecting",
+        TalkStatus.BROKEN,
+        TalkStatus.REJECTED,
+        TalkStatus.DONE,
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
     ):
         event = _create_event(db_session, f"Abort Event {initial_status}")
         talk = _create_talk(db_session, event.id, status=initial_status)
@@ -685,7 +709,7 @@ def test_abort_talk_from_any_state(db_session: Session) -> None:
                     f"/talks/{talk.id}/abort", headers={"X-API-Key": status_api_key}
                 )
                 assert resp.status_code == 200
-                assert _talk(db_session, talk.id).status == "waiting_for_files"
+                assert _talk(db_session, talk.id).status == TalkStatus.WAITING_FILES
                 mock_storage.delete.assert_called_once_with(str(talk.id))
             finally:
                 app.dependency_overrides.pop(get_storage_backend, None)
@@ -697,7 +721,7 @@ def test_abort_talk_from_any_state(db_session: Session) -> None:
 
 
 def test_lifecycle_full_ingest_to_done(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Mock-driven orchestration test covering the complete talk processing lifecycle.
 
@@ -750,7 +774,7 @@ def test_lifecycle_full_ingest_to_done(
             headers={"X-API-Key": API_KEY},
         )
         assert resp1.status_code == 202
-        assert _talk(db_session, talk.id).status == "detecting"
+        assert _talk(db_session, talk.id).status == TalkStatus.DETECTING
         mock_light_queue.enqueue.assert_called_once()
         queued_task, *_ = mock_light_queue.enqueue.call_args[0]
         assert queued_task == job_detect
@@ -759,7 +783,7 @@ def test_lifecycle_full_ingest_to_done(
         job_detect(talk.id, raw_key)
         db_session.expire_all()
         reloaded = _talk(db_session, talk.id)
-        assert reloaded.status == "pending_approval"
+        assert reloaded.status == TalkStatus.PENDING_APPROVAL
         assert reloaded.raw_duration_seconds == 3600.0
         assert any(
             j.kind == "detect" and j.status == "done"
@@ -773,7 +797,7 @@ def test_lifecycle_full_ingest_to_done(
             headers={"X-API-Key": API_KEY},
         )
         assert resp2.status_code == 200
-        assert _talk(db_session, talk.id).status == "pending_intro_outro"
+        assert _talk(db_session, talk.id).status == TalkStatus.PENDING_INTRO_OUTRO
 
         # 3b. Handoff to speaker -> transitions talk to 'pending_bounds'
         resp_handoff = client.post(
@@ -786,7 +810,7 @@ def test_lifecycle_full_ingest_to_done(
             headers={"X-API-Key": API_KEY},
         )
         assert resp_handoff.status_code == 200
-        assert _talk(db_session, talk.id).status == "pending_bounds"
+        assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
         # 4. Submit cut bounds -> transitions talk to 'cutting' and enqueues job_cut
         mock_light_queue.reset_mock()
@@ -797,7 +821,7 @@ def test_lifecycle_full_ingest_to_done(
         )
         assert resp3.status_code == 202
         reloaded = _talk(db_session, talk.id)
-        assert reloaded.status == "cutting"
+        assert reloaded.status == TalkStatus.CUTTING
         assert reloaded.cut_start == 10.0
         assert reloaded.cut_end == 3000.0
         mock_light_queue.enqueue.assert_called_once()
@@ -808,7 +832,7 @@ def test_lifecycle_full_ingest_to_done(
         mock_light_queue.reset_mock()
         job_cut(talk.id, raw_key)
         db_session.expire_all()
-        assert _talk(db_session, talk.id).status == "generating_previews"
+        assert _talk(db_session, talk.id).status == TalkStatus.GENERATING_PREVIEWS
         assert any(
             j.kind == "cut" and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
@@ -820,7 +844,7 @@ def test_lifecycle_full_ingest_to_done(
         # 6. Execute job_preview -> transitions talk to 'preview'
         job_preview(talk.id, cut_key)
         db_session.expire_all()
-        assert _talk(db_session, talk.id).status == "preview"
+        assert _talk(db_session, talk.id).status == TalkStatus.PREVIEW
         assert any(
             j.kind == "preview" and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
@@ -834,7 +858,7 @@ def test_lifecycle_full_ingest_to_done(
             headers={"X-API-Key": API_KEY},
         )
         assert resp4.status_code == 200
-        assert _talk(db_session, talk.id).status == "assembling"
+        assert _talk(db_session, talk.id).status == TalkStatus.ASSEMBLING
         mock_light_queue.enqueue.assert_called_once()
         queued_intro_task, *_ = mock_light_queue.enqueue.call_args[0]
         assert queued_intro_task == job_intro
@@ -876,7 +900,7 @@ def test_lifecycle_full_ingest_to_done(
             f"{talk.id}/assemble/assemble_loud.mp4",
         )
         db_session.expire_all()
-        assert _talk(db_session, talk.id).status == "transcoding"
+        assert _talk(db_session, talk.id).status == TalkStatus.TRANSCODING
         assert any(
             j.kind == "loudness" and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
@@ -894,7 +918,7 @@ def test_lifecycle_full_ingest_to_done(
             f"{talk.id}/final/final.mp4",
         )
         db_session.expire_all()
-        assert _talk(db_session, talk.id).status == "uploading"
+        assert _talk(db_session, talk.id).status == TalkStatus.UPLOADING
         assert any(
             j.kind == "transcode" and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
@@ -907,7 +931,7 @@ def test_lifecycle_full_ingest_to_done(
         mock_light_queue.reset_mock()
         job_publish(talk.id, f"{talk.id}/final/final.mp4")
         db_session.expire_all()
-        assert _talk(db_session, talk.id).status == "done"
+        assert _talk(db_session, talk.id).status == TalkStatus.DONE
         assert any(
             j.kind == "publish" and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
@@ -1122,14 +1146,14 @@ def test_lifecycle_disk_guard_insufficient_storage(db_session: Session) -> None:
             )
             assert resp.status_code == 507
             assert "Insufficient storage" in resp.json()["detail"]
-            assert _talk(db_session, talk.id).status == "waiting_for_files"
+            assert _talk(db_session, talk.id).status == TalkStatus.WAITING_FILES
             mock_light_q.enqueue.assert_not_called()
         finally:
             app.dependency_overrides.pop(get_storage_backend, None)
 
 
 def test_lifecycle_full_approve_review_flow_to_done(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Drive a talk from preview through review approve, assembly, and publishing to done.
 
@@ -1142,7 +1166,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
         db_session,
         event.id,
         title="Review Flow Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
         raw_duration_seconds=3600.0,
@@ -1191,7 +1215,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
                 headers={"X-API-Key": API_KEY},
             )
             assert review_resp.status_code == 200
-            assert _talk(db_session, talk.id).status == "assembling"
+            assert _talk(db_session, talk.id).status == TalkStatus.ASSEMBLING
 
             review = db_session.scalar(
                 select(models.Review).where(models.Review.talk_id == talk.id)
@@ -1226,7 +1250,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
                 f"{talk.id}/assemble/assemble_loud.mp4",
             )
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "transcoding"
+            assert _talk(db_session, talk.id).status == TalkStatus.TRANSCODING
             mock_hq.enqueue.assert_called_once()
             queued_transcode, *_ = mock_hq.enqueue.call_args[0]
             assert queued_transcode == job_transcode
@@ -1240,7 +1264,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
                 f"{talk.id}/final/final.mp4",
             )
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "uploading"
+            assert _talk(db_session, talk.id).status == TalkStatus.UPLOADING
             mock_lq.enqueue.assert_called_once()
             queued_publish, *_ = mock_lq.enqueue.call_args[0]
             assert queued_publish == job_publish
@@ -1248,7 +1272,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
             # 6. Execute job_publish -> transitions talk to 'done' and verifies final storage artifact
             job_publish(talk.id, f"{talk.id}/final/final.mp4")
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "done"
+            assert _talk(db_session, talk.id).status == TalkStatus.DONE
             assert mock_storage.exists(f"{talk.id}/final/final.mp4")
 
             # 7. Final GET /talks/{id} verification
@@ -1261,7 +1285,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
 
 
 def test_lifecycle_needs_work_review_loop(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Drive consecutive needs_work cycles, verifying return to preview without stale jobs."""
 
@@ -1270,7 +1294,7 @@ def test_lifecycle_needs_work_review_loop(
         db_session,
         event.id,
         title="Needs Work Loop Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
         raw_duration_seconds=3600.0,
@@ -1303,7 +1327,7 @@ def test_lifecycle_needs_work_review_loop(
                 headers={"X-API-Key": API_KEY},
             )
             assert r1.status_code == 200
-            assert _talk(db_session, talk.id).status == "pending_bounds"
+            assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
             # Operator resubmits cut bounds
             cut1 = client.post(
@@ -1313,17 +1337,17 @@ def test_lifecycle_needs_work_review_loop(
             )
             assert cut1.status_code == 202
             reloaded = _talk(db_session, talk.id)
-            assert reloaded.status == "cutting"
+            assert reloaded.status == TalkStatus.CUTTING
             assert reloaded.cut_start == 15.0
             assert reloaded.cut_end == 2700.0
 
             # Execute cycle 1 pipeline jobs
             job_cut(talk.id, raw_key)
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "generating_previews"
+            assert _talk(db_session, talk.id).status == TalkStatus.GENERATING_PREVIEWS
             job_preview(talk.id, cut_key)
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "preview"
+            assert _talk(db_session, talk.id).status == TalkStatus.PREVIEW
 
             # === CYCLE 2: needs_work -> pending_bounds -> cutting -> preview ===
             # Speaker requests second rework
@@ -1333,7 +1357,7 @@ def test_lifecycle_needs_work_review_loop(
                 headers={"X-API-Key": API_KEY},
             )
             assert r2.status_code == 200
-            assert _talk(db_session, talk.id).status == "pending_bounds"
+            assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
             # Operator resubmits revised cut bounds
             cut2 = client.post(
@@ -1343,17 +1367,17 @@ def test_lifecycle_needs_work_review_loop(
             )
             assert cut2.status_code == 202
             reloaded = _talk(db_session, talk.id)
-            assert reloaded.status == "cutting"
+            assert reloaded.status == TalkStatus.CUTTING
             assert reloaded.cut_start == 15.0
             assert reloaded.cut_end == 2760.0
 
             # Execute cycle 2 pipeline jobs
             job_cut(talk.id, raw_key)
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "generating_previews"
+            assert _talk(db_session, talk.id).status == TalkStatus.GENERATING_PREVIEWS
             job_preview(talk.id, cut_key)
             db_session.expire_all()
-            assert _talk(db_session, talk.id).status == "preview"
+            assert _talk(db_session, talk.id).status == TalkStatus.PREVIEW
 
             # Verify review count and notes
             reviews = list(
@@ -1373,7 +1397,10 @@ def test_lifecycle_initial_approval_reject_flow(db_session: Session) -> None:
     """Verify initial approve reject transitions talk from pending_approval to terminal rejected."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Reject Flow Talk", status="pending_approval"
+        db_session,
+        event.id,
+        title="Reject Flow Talk",
+        status=TalkStatus.PENDING_APPROVAL,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -1387,7 +1414,7 @@ def test_lifecycle_initial_approval_reject_flow(db_session: Session) -> None:
             headers={"X-API-Key": API_KEY},
         )
         assert r1.status_code == 200
-        assert _talk(db_session, talk.id).status == "rejected"
+        assert _talk(db_session, talk.id).status == TalkStatus.REJECTED
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -1401,7 +1428,7 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup(
         db_session,
         event.id,
         title="Reject Cleanup Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
     )
@@ -1420,7 +1447,7 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup(
 
         db_session.expire_all()
         reloaded = _talk(db_session, talk.id)
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.cut_start is None
         assert reloaded.cut_end is None
 
@@ -1442,7 +1469,7 @@ def test_job_progress_tracking_transcode_polling(db_session: Session) -> None:
     now = datetime.now(UTC)
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Progress Talk", status="transcoding"
+        db_session, event.id, title="Progress Talk", status=TalkStatus.TRANSCODING
     )
     _create_api_client(db_session, event_ids=[event.id])
 

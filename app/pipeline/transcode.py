@@ -13,9 +13,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import av
 import numpy as np
+from av.audio.frame import AudioFrame
+from av.audio.stream import AudioStream
+from av.packet import Packet
+from av.video.stream import VideoStream
 
 from app.pipeline.loudness import (
     DEFAULT_LRA,
@@ -201,7 +206,12 @@ def transcode(
         in_v = video_streams[0] if video_streams else None
         in_a = audio_streams[0] if audio_streams else None
 
-        fps = in_v.average_rate or in_v.guessed_rate or 24 if in_v else 24
+        fps_source = (in_v.average_rate or in_v.guessed_rate) if in_v else None
+        fps = (
+            Fraction(fps_source.numerator, fps_source.denominator)
+            if fps_source
+            else Fraction(24, 1)
+        )
         sample_rate = in_a.codec_context.sample_rate or 44100 if in_a else 44100
         channels = in_a.codec_context.channels or 2 if in_a else 2
         if in_a and in_a.codec_context.layout:
@@ -263,7 +273,7 @@ def transcode(
     ) as out_container:
         out_video = None
         out_audio = None
-        video_time_base = Fraction(1, 1) / Fraction(fps) if fps else Fraction(1, 24)
+        video_time_base = Fraction(1, 1) / fps
 
         # 1. Configure Video Stream if present
         if video_streams:
@@ -276,10 +286,13 @@ def transcode(
             if active_threads is not None:
                 video_options["threads"] = str(active_threads)
 
-            out_video = out_container.add_stream(
-                active_preset.video_codec,
-                rate=fps,
-                options=video_options,
+            out_video = cast(
+                VideoStream,
+                out_container.add_stream(
+                    active_preset.video_codec,
+                    rate=fps,
+                    options=video_options,
+                ),
             )
             out_video.width = out_width
             out_video.height = out_height
@@ -290,9 +303,12 @@ def transcode(
         # 2. Configure Audio Stream if present
         audio_layout = "stereo" if target_lufs is not None else layout_name
         if audio_streams:
-            out_audio = out_container.add_stream(
-                active_preset.audio_codec,
-                rate=sample_rate,
+            out_audio = cast(
+                AudioStream,
+                out_container.add_stream(
+                    active_preset.audio_codec,
+                    rate=sample_rate,
+                ),
             )
             out_audio.bit_rate = active_preset.audio_bitrate
             out_audio.layout = audio_layout
@@ -364,7 +380,7 @@ def transcode(
                 while True:
                     try:
                         out_f = audio_graph.pull()
-                        emit_audio_frame(out_f)
+                        emit_audio_frame(cast(AudioFrame, out_f))
                     except av.BlockingIOError, av.EOFError:
                         break
             else:
@@ -459,8 +475,9 @@ def transcode(
                                 last_reported_pct = reported_pct
 
                     if packet.stream.type == "video" and out_video is not None:
+                        vpacket = cast("Packet[VideoStream]", packet)
                         try:
-                            decoded_frames = packet.decode()
+                            decoded_frames = vpacket.decode()
                         except (av.error.InvalidDataError, av.FFmpegError) as exc:
                             logger.warning(
                                 "Skipping unparseable video packet in transcode: %s",
@@ -495,25 +512,26 @@ def transcode(
                                 fps_graph.push(frame)
                                 while True:
                                     try:
-                                        emit_video_frame(fps_graph.pull())
+                                        emit_video_frame(fps_graph.vpull())
                                     except av.BlockingIOError, av.EOFError:
                                         break
                             else:
                                 emit_video_frame(frame)
 
                     elif packet.stream.type == "audio" and out_audio is not None:
+                        apacket = cast("Packet[AudioStream]", packet)
                         try:
-                            decoded_frames = packet.decode()
+                            decoded_audio_frames = apacket.decode()
                         except (av.error.InvalidDataError, av.FFmpegError) as exc:
                             logger.warning(
                                 "Skipping unparseable audio packet in transcode: %s",
                                 exc,
                             )
                             continue
-                        for frame in decoded_frames:
+                        for a_frame in decoded_audio_frames:
                             time_base = (
-                                float(frame.time_base)
-                                if frame.time_base is not None
+                                float(a_frame.time_base)
+                                if a_frame.time_base is not None
                                 else (
                                     float(packet.stream.time_base)
                                     if packet.stream.time_base is not None
@@ -521,10 +539,12 @@ def transcode(
                                 )
                             )
                             frame_time_s = (
-                                float(frame.pts * time_base)
-                                if frame.pts is not None
+                                float(a_frame.pts * time_base)
+                                if a_frame.pts is not None
                                 else (
-                                    float(frame.time) if frame.time is not None else 0.0
+                                    float(a_frame.time)
+                                    if a_frame.time is not None
+                                    else 0.0
                                 )
                             )
                             if seg_end is not None and frame_time_s > seg_end:
@@ -535,17 +555,17 @@ def transcode(
 
                             seg_had_audio = True
                             if seg_resampler is not None:
-                                for r_frame in seg_resampler.resample(frame):
+                                for r_frame in seg_resampler.resample(a_frame):
                                     feed_audio_frame(r_frame)
                             else:
-                                feed_audio_frame(frame)
+                                feed_audio_frame(a_frame)
 
                 # Flush segment's fps_graph if any
                 if fps_graph is not None and out_video is not None:
                     fps_graph.push(None)
                     while True:
                         try:
-                            emit_video_frame(fps_graph.pull())
+                            emit_video_frame(fps_graph.vpull())
                         except av.BlockingIOError, av.EOFError:
                             break
 
@@ -598,7 +618,7 @@ def transcode(
             while True:
                 try:
                     out_f = audio_graph.pull()
-                    emit_audio_frame(out_f)
+                    emit_audio_frame(cast(AudioFrame, out_f))
                 except av.BlockingIOError, av.EOFError:
                     break
 

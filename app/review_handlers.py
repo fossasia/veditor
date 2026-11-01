@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app import tasks as app_tasks
+from app.consts import TalkStatus
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates
 from app.webhook import dispatch_talk_webhook
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _record_review_and_advance(
     talk: models.Talk,
     payload: schemas.ReviewRequest,
-    target_state: str,
+    target_state: TalkStatus,
     db: Session,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
@@ -82,13 +83,13 @@ def handle_approve(
     cut_key = cut_keys[0] if cut_keys else f"{talk.id}/cut/cut.mp4"
 
     response = _record_review_and_advance(
-        talk, payload, "assembling", db, user_id=user_id
+        talk, payload, TalkStatus.ASSEMBLING, db, user_id=user_id
     )
 
     try:
         app_tasks.dispatch_assembly(talk.id, cut_key)
     except Exception:
-        advance(talk, "broken")
+        advance(talk, TalkStatus.BROKEN)
         log_key: str | None = None
         if storage is not None:
             log_key = f"{talk.id}/logs/assembly.log"
@@ -121,7 +122,7 @@ def handle_needs_work(
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
     return _record_review_and_advance(
-        talk, payload, "pending_bounds", db, user_id=user_id
+        talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
 
 
@@ -135,7 +136,7 @@ def handle_reject(
     talk.cut_start = None
     talk.cut_end = None
     response = _record_review_and_advance(
-        talk, payload, "pending_bounds", db, user_id=user_id
+        talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
     if storage is not None:
         cleanup_intermediates(storage, talk.id)

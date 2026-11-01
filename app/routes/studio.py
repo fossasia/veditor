@@ -309,9 +309,7 @@ def get_evaluated_milestones(status: str) -> list[dict]:
 def _get_sso_cookie_max_age(sso_payload: SSOTokenPayload) -> int:
     """Calculate the remaining validity period in seconds for the session cookie based on token expiration."""
     exp_timestamp = sso_payload.exp
-    if isinstance(exp_timestamp, (int, float)):
-        return max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
-    return settings.sso_token_expire_seconds
+    return max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -624,8 +622,7 @@ ALLOWED_MEDIA_CATEGORIES = frozenset(
 
 def _download_filename(talk: models.Talk, filename: str) -> str:
     safe_title = "".join(
-        c if c.isalnum() or c in ("-", "_") else "_"
-        for c in (getattr(talk, "title", "") or "")
+        c if c.isalnum() or c in ("-", "_") else "_" for c in (talk.title or "")
     ).strip("_")
     return f"{safe_title}_{filename}" if safe_title else f"talk_{talk.id}_{filename}"
 
@@ -717,9 +714,7 @@ def get_talk_media_categorized(
         else None
     )
 
-    is_public_final = (
-        safe_category == "final" and getattr(talk, "status", None) == TalkStatus.DONE
-    )
+    is_public_final = safe_category == "final" and talk.status == TalkStatus.DONE
     cache_control = "no-cache" if is_public_final else "no-store"
 
     return FileResponse(
@@ -978,12 +973,12 @@ def studio(
                 )
                 if sso_user
                 else (
-                    getattr(user, "role", None) == AuthRole.SPEAKER
+                    (user is not None and user.role == AuthRole.SPEAKER)
                     or bool(
                         talk.speaker_email
-                        and getattr(user, "email", None)
-                        and talk.speaker_email.lower()
-                        == getattr(user, "email", "").lower()
+                        and user is not None
+                        and user.email
+                        and talk.speaker_email.lower() == user.email.lower()
                     )
                 )
             ),

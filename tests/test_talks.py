@@ -182,7 +182,7 @@ def test_post_talks_upsert_update_success(db_session: Session) -> None:
     assert reloaded is not None
     assert reloaded.room == "Updated Room"
     assert reloaded.end == updated_end
-    assert reloaded.status == "cutting"
+    assert reloaded.status == TalkStatus.CUTTING
 
 
 def test_post_talks_concurrent_race_handled(db_session: Session) -> None:
@@ -696,7 +696,7 @@ def test_submit_cut_bounds_needs_work_accepted(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "cutting"
+        assert reloaded.status == TalkStatus.CUTTING
         mock_enqueue.assert_called_once()
 
 
@@ -915,7 +915,7 @@ def test_full_pipeline_flow_recordings_to_preview_halt(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_approval"
+        assert reloaded.status == TalkStatus.PENDING_APPROVAL
         assert reloaded.raw_duration_seconds == 1800.0
         mock_enqueue_after_detect.assert_not_called()  # Halts at pending_approval gate
 
@@ -955,7 +955,7 @@ def test_full_pipeline_flow_recordings_to_preview_halt(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "cutting"
+        assert reloaded.status == TalkStatus.CUTTING
         assert reloaded.cut_start == 10.0
         assert reloaded.cut_end == 1800.0
         mock_enqueue_cut.assert_called_once_with(
@@ -1094,7 +1094,7 @@ def test_post_recording_with_recording_start_enqueues_detect(
             db_session.expire_all()
             reloaded = db_session.get(models.Talk, talk.id)
             assert reloaded is not None
-            assert reloaded.status == "pending_approval"
+            assert reloaded.status == TalkStatus.PENDING_APPROVAL
             assert reloaded.raw_duration_seconds == room_rec_duration
             assert reloaded.cut_start == pytest.approx(
                 900.0
@@ -1134,7 +1134,7 @@ def test_handoff_with_speaker_email_enqueues_email(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.speaker_email == "speaker@example.com"
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
@@ -1222,7 +1222,7 @@ def test_handoff_eventyay_synced_talk_does_not_send_mail(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.handed_off_at is None
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
@@ -1263,7 +1263,7 @@ def test_handoff_sso_session_does_not_send_mail(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.handed_off_at is None
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
@@ -1367,7 +1367,7 @@ def test_handoff_platform_user_on_regular_event_sends_email(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.handed_off_at is not None
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]

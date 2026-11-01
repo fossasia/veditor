@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -174,13 +175,14 @@ def test_pydantic_schema_validation() -> None:
     with pytest.raises(ValidationError):
         EventCreate(
             name="Bad Event",
-            retention_overrides="string",
+            retention_overrides=cast("dict[str, Any]", "string"),
         )
 
     with pytest.raises(ValidationError):
+        bad_key_overrides = cast(dict[str, Any], {123: 14})
         EventCreate(
             name="Bad Event",
-            retention_overrides={123: 14},
+            retention_overrides=bad_key_overrides,
         )
 
 
@@ -207,7 +209,8 @@ def test_model_in_place_mutation_validation() -> None:
         event.retention_overrides.update({"final_retention_days": -10})
 
     with pytest.raises(TypeError):
-        event.retention_overrides.update({456: 30})  # type: ignore[dict-item]
+        bad_update: dict[str, Any] = {456: 30}  # type: ignore[dict-item]
+        event.retention_overrides.update(bad_update)
 
     # In-place setdefault rejection when setting new key with non-string key
     with pytest.raises(TypeError):
@@ -235,7 +238,8 @@ def test_model_in_place_mutation_validation() -> None:
         event.retention_overrides |= {"final_retention_days": -20}
 
     with pytest.raises(TypeError):
-        event.retention_overrides |= {999: 10}  # type: ignore[dict-item]
+        bad_merge: dict[str, Any] = {999: 10}  # type: ignore[dict-item]
+        event.retention_overrides |= bad_merge
 
     # In-place |= operator valid mutation succeeds
     event.retention_overrides |= {"final_retention_days": 45, "or_key": "val"}
@@ -630,11 +634,13 @@ def test_sweep_sets_final_cleaned_at_and_skips_subsequent(
     db_session.flush()
 
     fake_storage.put(f"{talk.id}/final/test.mp4", b"data")
-    assert talk.final_cleaned_at is None
+    cleaned_before: datetime | None = talk.final_cleaned_at
+    assert cleaned_before is None
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
     assert talk.id in swept
-    assert talk.final_cleaned_at is not None
+    cleaned_after: datetime | None = talk.final_cleaned_at
+    assert cleaned_after is not None
 
     # Subsequent sweep does not re-process the talk
     swept2 = run_retention_sweep(db=db_session, storage=fake_storage)

@@ -344,7 +344,7 @@ def test_job_deliver_webhook_logs_redacted_url(
         (123, "<invalid url>"),
     ],
 )
-def test_redact_url_ipv6_and_non_strings(url: str, expected: str) -> None:
+def test_redact_url_ipv6_and_non_strings(url: object, expected: str) -> None:
     assert _redact_url(url) == expected
 
 
@@ -663,7 +663,7 @@ def test_review_needs_work_triggers_bounds_pending_webhook(db_session: Session) 
 
 
 def test_job_preview_dispatches_preview_ready_webhook(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Completing job_preview transitions talk to preview and dispatches talk.preview_ready."""
     event = _create_event(db_session)
@@ -717,7 +717,7 @@ def test_job_preview_dispatches_preview_ready_webhook(
 
 
 def test_job_publish_dispatches_talk_published_webhook(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Completing job_publish transitions talk to done and dispatches talk.published with video_url and duration."""
     event = _create_event(db_session)
@@ -771,7 +771,7 @@ def test_job_publish_dispatches_talk_published_webhook(
 
 
 def test_job_publish_uses_custom_base_url(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """When settings.base_url is configured, video_url is prefixed accordingly."""
     event = _create_event(db_session)

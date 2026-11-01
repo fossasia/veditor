@@ -245,7 +245,8 @@ def test_talk_speaker_email_normalization() -> None:
     assert talk.speaker_email == "speaker.name@example.com"
 
     talk.speaker_email = "   "
-    assert talk.speaker_email is None
+    stripped_email: str | None = talk.speaker_email
+    assert stripped_email is None
 
     talk.speaker_email = None
     assert talk.speaker_email is None

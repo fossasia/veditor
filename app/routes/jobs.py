@@ -37,8 +37,7 @@ def get_job(
         not job
         or not job.talk
         or (
-            not getattr(client, "is_platform", False)
-            and job.talk.event_id not in (client.event_ids or [])
+            not client.is_platform and job.talk.event_id not in (client.event_ids or [])
         )
     ):
         raise HTTPException(

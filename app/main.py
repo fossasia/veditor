@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.db import get_db
 from app.queue import redis_conn
@@ -88,7 +89,8 @@ def _add_vary_accept(headers: MutableHeaders | MutableMapping[str, str]) -> None
 
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: Exception) -> Response:
-    exc_headers = dict(getattr(exc, "headers", None) or {})
+    http_exc = exc if isinstance(exc, StarletteHTTPException) else None
+    exc_headers = dict(http_exc.headers or {}) if http_exc else {}
 
     if _prefers_html(request.headers.get("accept")):
         response = templates.TemplateResponse(
@@ -102,7 +104,7 @@ async def not_found_handler(request: Request, exc: Exception) -> Response:
 
     _add_vary_accept(exc_headers)
     return JSONResponse(
-        {"detail": getattr(exc, "detail", "Not Found")},
+        {"detail": http_exc.detail if http_exc else "Not Found"},
         status_code=404,
         headers=exc_headers,
     )

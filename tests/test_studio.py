@@ -2791,10 +2791,10 @@ def test_attach_room_recording_multi_talk(
             db_session.refresh(talk3)
             db_session.refresh(talk_other)
 
-            assert talk1.status == "detecting"
-            assert talk2.status == "detecting"
-            assert talk3.status == "detecting"
-            assert talk_other.status == "waiting_for_files"
+            assert talk1.status == TalkStatus.DETECTING
+            assert talk2.status == TalkStatus.DETECTING
+            assert talk3.status == TalkStatus.DETECTING
+            assert talk_other.status == TalkStatus.WAITING_FILES
 
             # Check zero-copy hardlink: same inode on local disk backend
             p1 = temp_storage.get(f"{talk1.id}/raw/raw.mp4")
@@ -2869,8 +2869,8 @@ def test_attach_room_recording_with_recording_start_filter(
 
             db_session.refresh(talk_morning)
             db_session.refresh(talk_afternoon)
-            assert talk_morning.status == "detecting"
-            assert talk_afternoon.status == "waiting_for_files"
+            assert talk_morning.status == TalkStatus.DETECTING
+            assert talk_afternoon.status == TalkStatus.WAITING_FILES
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3263,7 +3263,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     temp_storage.put(f"{t1_id}/raw/raw.mp4", t1_orig_bytes)
 
     real_link_or_copy = temp_storage.link_or_copy
-    calls = []
+    calls: list[str] = []
 
     def mock_link_or_copy(key: str, source: Path) -> None:
         calls.append(key)
@@ -3421,8 +3421,8 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
 
             db_session.refresh(talk_day1)
             db_session.refresh(talk_day2)
-            assert talk_day1.status == "detecting"
-            assert talk_day2.status == "waiting_for_files"
+            assert talk_day1.status == TalkStatus.DETECTING
+            assert talk_day2.status == TalkStatus.WAITING_FILES
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3608,8 +3608,8 @@ def test_attach_room_recording_with_video_url(
 
         db_session.refresh(talk1)
         db_session.refresh(talk2)
-        assert talk1.status == "detecting"
-        assert talk2.status == "detecting"
+        assert talk1.status == TalkStatus.DETECTING
+        assert talk2.status == TalkStatus.DETECTING
 
         mock_heavy_q.enqueue.assert_called_once()
         call_args = mock_heavy_q.enqueue.call_args
@@ -4124,9 +4124,9 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         db_session.refresh(t1_d1)
         db_session.refresh(t2_d1)
         db_session.refresh(t3_d2)
-        assert t1_d1.status == "detecting"
-        assert t2_d1.status == "detecting"
-        assert t3_d2.status == "waiting_for_files"
+        assert t1_d1.status == TalkStatus.DETECTING
+        assert t2_d1.status == TalkStatus.DETECTING
+        assert t3_d2.status == TalkStatus.WAITING_FILES
 
     # 4. Attaching with invalid JSON target_date returns 400
     res_invalid_json_date = client.post(

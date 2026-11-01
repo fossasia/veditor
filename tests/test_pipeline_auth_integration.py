@@ -326,7 +326,8 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     assert deact_resp.status_code == 200
     assert deact_resp.json()["is_active"] is False
     db_session.refresh(user1)
-    assert user1.is_active is False
+    active_after_deactivation: bool = user1.is_active
+    assert active_after_deactivation is False
 
     # Pre-existing cookies and bearer tokens for Organizer 1 are immediately rejected (401)
     client.cookies.set("veditor_session", org1_cookie)

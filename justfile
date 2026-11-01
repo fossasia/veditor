@@ -1,13 +1,18 @@
 set default-list := true
 
+# Developers are expected to always activate Python environment, so `uv run` is not necessary.
+
 # Run dev server
 serve:
     fastapi dev
 
 # Migrate DB forward
 db-migrate:
-    uv run alembic upgrade head
+    alembic upgrade head
 
 # Run RQ worker
 rq-worker:
-    uv run scripts/run_worker.py light heavy
+    scripts/run_worker.py light heavy
+
+type-check:
+    mypy app migrations scripts tests

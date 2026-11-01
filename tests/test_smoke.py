@@ -27,6 +27,7 @@ from sqlalchemy import delete, select
 
 from app import models
 from app.config import settings
+from app.consts import TalkStatus
 from app.db import SessionLocal
 from app.states import advance
 
@@ -153,17 +154,17 @@ def test_end_to_end_smoke(clean_db: None) -> None:
 
     # 6. Exercise advance() through a happy-path sequence of transitions
     states = [
-        "detecting",
-        "pending_approval",
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "preview",
-        "pending_intro_outro",
-        "assembling",
-        "transcoding",
-        "uploading",
-        "done",
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.ASSEMBLING,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
     ]
 
     for state in states:
@@ -175,7 +176,7 @@ def test_end_to_end_smoke(clean_db: None) -> None:
             assert talk_row is not None
 
             # Advance state and commit
-            talk_row = advance(talk_row, state)
+            advance(talk_row, state)
             session.commit()
         finally:
             session.close()

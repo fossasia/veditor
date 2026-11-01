@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.consts import TalkStatus
 from app.ingest import download_media_url, resolve_direct_media_url
 from app.models import Event, Job, Talk
 from app.pipeline.detect import DetectResult
@@ -33,7 +34,10 @@ def mock_storage() -> MagicMock:
 
 
 def test_job_ingest_success(
-    db_session: Session, out_of_band_sessions, mock_storage: MagicMock, tmp_path: Path
+    db_session: Session,
+    out_of_band_sessions: None,
+    mock_storage: MagicMock,
+    tmp_path: Path,
 ) -> None:
     event = Event(name="Test Event")
     db_session.add(event)
@@ -64,7 +68,7 @@ def test_job_ingest_success(
     db_session.expire_all()
     reloaded = db_session.get(Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "detecting"
+    assert reloaded.status == TalkStatus.DETECTING
     job = db_session.scalars(select(Job)).one()
     assert job.status == "done"
     assert job.kind == "ingest"
@@ -82,7 +86,7 @@ def test_job_ingest_success(
 
 def test_dispatch_assembly_generated_intro_enqueues_job_intro(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
 ) -> None:
     event = Event(name="Test Event")
     db_session.add(event)
@@ -117,7 +121,7 @@ def test_dispatch_assembly_generated_intro_enqueues_job_intro(
 
 def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
 ) -> None:
     event = Event(name="Test Event")
     db_session.add(event)
@@ -223,7 +227,7 @@ def test_job_waveform_generates_when_needed() -> None:
 
 
 def test_job_ingest_room_url_success(
-    db_session: Session, out_of_band_sessions, tmp_path: Path
+    db_session: Session, out_of_band_sessions: None, tmp_path: Path
 ) -> None:
     clip = generate_clip(1.0, output_dir=tmp_path)
     now = datetime(2026, 9, 25, 10, 0, 0, tzinfo=UTC)
@@ -272,8 +276,8 @@ def test_job_ingest_room_url_success(
     reloaded2 = db_session.get(Talk, talk2.id)
     assert reloaded1 is not None
     assert reloaded2 is not None
-    assert reloaded1.status == "detecting"
-    assert reloaded2.status == "detecting"
+    assert reloaded1.status == TalkStatus.DETECTING
+    assert reloaded2.status == TalkStatus.DETECTING
     assert reloaded1.cut_start == 0.0
     assert reloaded1.cut_end == 1800.0
     assert reloaded2.cut_start == 1800.0
@@ -284,7 +288,7 @@ def test_job_ingest_room_url_success(
 
 def test_job_ingest_room_url_download_failure_handles_cleanup(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
 ) -> None:
     now = datetime(2026, 9, 25, 10, 0, 0, tzinfo=UTC)
     event = Event(name="Test Event")
@@ -319,7 +323,7 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
     db_session.expire_all()
     reloaded = db_session.get(Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "broken"
+    assert reloaded.status == TalkStatus.BROKEN
     job = db_session.scalars(select(Job)).one()
     assert job.status == "failed"
 
@@ -463,7 +467,9 @@ def _run_detect_with_seed(
         job_detect(talk_id, "1/raw/raw.mp4", recording_start)
 
 
-def test_seed_cut_bounds_happy_path(db_session: Session, out_of_band_sessions) -> None:
+def test_seed_cut_bounds_happy_path(
+    db_session: Session, out_of_band_sessions: None
+) -> None:
     """Seeds cut_start/cut_end from schedule offsets when both are unset."""
     # Recording started at 09:00 UTC; talk is 09:15–09:55
     talk = _create_talk(
@@ -480,11 +486,11 @@ def test_seed_cut_bounds_happy_path(db_session: Session, out_of_band_sessions) -
     assert reloaded is not None
     assert reloaded.cut_start == pytest.approx(900.0)  # 15 min
     assert reloaded.cut_end == pytest.approx(3300.0)  # 55 min
-    assert reloaded.status == "pending_approval"
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
 
 
 def test_seed_cut_bounds_no_overwrite_when_already_set(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Does not overwrite existing cut_start/cut_end if user already set them."""
     talk = _create_talk(
@@ -507,7 +513,7 @@ def test_seed_cut_bounds_no_overwrite_when_already_set(
 
 
 def test_seed_cut_bounds_no_op_without_recording_start(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Bounds stay None when recording_start is not provided (graceful degradation)."""
     talk = _create_talk(
@@ -523,11 +529,11 @@ def test_seed_cut_bounds_no_op_without_recording_start(
     assert reloaded is not None
     assert reloaded.cut_start is None
     assert reloaded.cut_end is None
-    assert reloaded.status == "pending_approval"
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
 
 
 def test_seed_cut_bounds_talk_entirely_outside_recording(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Skips seeding when offset_e <= offset_s (talk is before the recording start)."""
     # Recording started at 10:00; talk ended before that
@@ -549,7 +555,7 @@ def test_seed_cut_bounds_talk_entirely_outside_recording(
 
 
 def test_seed_cut_bounds_clamped_to_duration(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """cut_end is clamped to raw_duration_seconds when talk extends past the recording."""
     # Recording started at 09:00; 4 h long (14400 s); talk goes until 13:15 → end at 15300 s > 14400
