@@ -9,8 +9,13 @@ keep their data in named Docker volumes.
 1. Install Docker Engine and the Compose plugin.
 2. Create a deployment directory and copy `docker-compose.yml` and `env.sample`
    into it as `docker-compose.yml` and `.env`.
-3. Set a strong database password and `SESSION_SECRET` (at least 32 bytes).
-4. Log in to Docker Hub if the repository is private.
+3. Set a strong database password and generate a secure `SESSION_SECRET` (at least 32 bytes):
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+4. If pulling from a private repository, set `REPO_USER` and `REPO_PASS` in `.env` so Watchtower can authenticate to pull image updates.
 5. Start the stack:
 
    ```bash
@@ -29,10 +34,6 @@ deadline so active RQ jobs can drain before replacement.
 Watchtower talks to Docker through a restricted socket-proxy service rather
 than mounting the Docker socket directly. The proxy permits only the container,
 image, info, and required write operations used for image replacement.
-
-Workers also wait for the API health endpoint at startup. This remains
-effective during Watchtower restarts, ensuring migrations finish before a
-restarted worker can consume queued jobs.
 
 Redis uses `appendfsync always` so an acknowledged enqueue is persisted before
 the write returns. This reduces throughput, so monitor Redis latency and
@@ -79,5 +80,17 @@ docker volume ls | grep veditor
 
 Set `POSTGRES_VOLUME_NAME`, `REDIS_VOLUME_NAME`, `DATA_VOLUME_NAME`, and
 `INGEST_VOLUME_NAME` in `.env` to those existing names. Use unique names for an
-isolated test stack. Never run `docker compose down -v` until the volume
-migration has been verified.
+isolated test stack.
+
+**Important**: Always stop the existing root-Compose stack completely before
+starting the new deployment stack:
+
+```bash
+# In the repository root directory
+docker compose down
+```
+
+Never run both stacks concurrently when pointing to the same named volumes;
+concurrent access to the same database and queue files will corrupt persistent
+data. Never run `docker compose down -v` until the volume migration has been
+verified.

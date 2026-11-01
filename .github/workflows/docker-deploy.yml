@@ -15,6 +15,7 @@ jobs:
   publish:
     name: Build and push image
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     permissions:
       contents: read
     steps:

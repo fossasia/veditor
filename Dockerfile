@@ -27,7 +27,7 @@ COPY alembic.ini .
 # Expose the API port
 EXPOSE 8000
 
-# Wait for dependencies and optionally run migrations before starting a process.
+# Optionally run migrations before starting a process.
 ENTRYPOINT ["/app/deployment/entrypoint.sh"]
 
 # Default command

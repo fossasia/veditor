@@ -47,8 +47,6 @@ services:
       DATA_DIR: /app/data
       INGEST_ROOTS: '["/app/ingest"]'
       RUN_MIGRATIONS: "false"
-      WAIT_FOR_API: "true"
-      API_HEALTH_URL: http://api:8000/health
       ENCODER_THREADS: 2
     volumes:
       - veditor_data:/app/data
@@ -80,8 +78,6 @@ services:
       DATA_DIR: /app/data
       INGEST_ROOTS: '["/app/ingest"]'
       RUN_MIGRATIONS: "false"
-      WAIT_FOR_API: "true"
-      API_HEALTH_URL: http://api:8000/health
       ENCODER_THREADS: 2
     volumes:
       - veditor_data:/app/data
@@ -137,6 +133,8 @@ services:
       WATCHTOWER_POLL_INTERVAL: 300
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_TIMEOUT: 1h
+      REPO_USER: ${REPO_USER:-}
+      REPO_PASS: ${REPO_PASS:-}
     depends_on:
       docker-socket-proxy:
         condition: service_started
@@ -153,7 +151,7 @@ services:
       INFO: "1"
       NETWORKS: "1"
       POST: "1"
-      VOLUMES: "1"
+      DELETE: "1"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
