@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -21,12 +22,6 @@ from app.main import app
 from app.security import create_session_token
 
 client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def clean_dependency_overrides():
-    yield
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -63,7 +58,7 @@ def scoped_client_and_key(db_session: Session) -> tuple[models.Client, str]:
 
 def test_schedule_import_auto_provisions_event_by_slug(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """POST /talks/schedule/import with an external event slug dynamically provisions the event."""
     _, api_key = platform_client_and_key
 
@@ -95,23 +90,19 @@ def test_schedule_import_auto_provisions_event_by_slug(
     assert data["source"] == "platform"
     internal_event_id = data["event_id"]
 
-    event = (
-        db_session.query(models.Event)
-        .filter(models.Event.id == internal_event_id)
-        .first()
+    event = db_session.scalar(
+        select(models.Event).where(models.Event.id == internal_event_id)
     )
     assert event is not None
     assert event.name == "Codemania Auckland 2026"
     assert event.external_id == "codemania-2026"
     assert event.source == "platform"
 
-    talk = (
-        db_session.query(models.Talk)
-        .filter(
+    talk = db_session.scalar(
+        select(models.Talk).where(
             models.Talk.event_id == internal_event_id,
             models.Talk.external_id == "TALK_01",
         )
-        .first()
     )
     assert talk is not None
     assert talk.title == "Async Python Mastery"
@@ -120,7 +111,7 @@ def test_schedule_import_auto_provisions_event_by_slug(
 
 def test_schedule_import_is_idempotent_and_updates_in_place(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """Re-syncing an updated schedule updates talk title, room, and times in place without duplicates."""
     _, api_key = platform_client_and_key
 
@@ -153,11 +144,12 @@ def test_schedule_import_is_idempotent_and_updates_in_place(
     assert resp1.status_code == 200
     ev_id = resp1.json()["event_id"]
 
-    orig_talk1 = (
-        db_session.query(models.Talk)
-        .filter(models.Talk.event_id == ev_id, models.Talk.external_id == "3DDH7B")
-        .first()
+    orig_talk1 = db_session.scalar(
+        select(models.Talk).where(
+            models.Talk.event_id == ev_id, models.Talk.external_id == "3DDH7B"
+        )
     )
+    assert orig_talk1 is not None
     orig_talk1_id = orig_talk1.id
 
     # 2. Re-sync with modified title, changed room, and rescheduled time for 3DDH7B
@@ -190,18 +182,19 @@ def test_schedule_import_is_idempotent_and_updates_in_place(
     assert resp2.json()["imported_count"] == 2
 
     # Verify total talk count is unchanged
-    all_talks = (
-        db_session.query(models.Talk).filter(models.Talk.event_id == ev_id).all()
-    )
+    all_talks = db_session.scalars(
+        select(models.Talk).where(models.Talk.event_id == ev_id)
+    ).all()
     assert len(all_talks) == 2
 
     # Verify talk 3DDH7B was updated in place with identical primary key
     db_session.expire_all()
-    updated_talk1 = (
-        db_session.query(models.Talk)
-        .filter(models.Talk.event_id == ev_id, models.Talk.external_id == "3DDH7B")
-        .first()
+    updated_talk1 = db_session.scalar(
+        select(models.Talk).where(
+            models.Talk.event_id == ev_id, models.Talk.external_id == "3DDH7B"
+        )
     )
+    assert updated_talk1 is not None
     assert updated_talk1.id == orig_talk1_id
     assert updated_talk1.title == "Renamed & Advanced Title"
     assert updated_talk1.room == "Auditorium Grand"
@@ -211,7 +204,7 @@ def test_schedule_import_is_idempotent_and_updates_in_place(
 
 def test_schedule_import_batch_deduplication(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """Duplicate talks in incoming payload are deduplicated in-memory, retaining the latest entry."""
     _, api_key = platform_client_and_key
 
@@ -245,7 +238,9 @@ def test_schedule_import_batch_deduplication(
     assert data["imported_count"] == 1
 
     ev_id = data["event_id"]
-    talks = db_session.query(models.Talk).filter(models.Talk.event_id == ev_id).all()
+    talks = db_session.scalars(
+        select(models.Talk).where(models.Talk.event_id == ev_id)
+    ).all()
     assert len(talks) == 1
     assert talks[0].title == "Overwritten Latest Version"
     assert talks[0].room == "Room 2"
@@ -253,7 +248,7 @@ def test_schedule_import_batch_deduplication(
 
 def test_event_sso_token_via_slug_with_platform_client(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """POST /events/{event_slug}/sso-token resolves event by slug and issues organizer SSO token."""
     _, api_key = platform_client_and_key
 
@@ -281,7 +276,7 @@ def test_event_sso_token_via_slug_with_platform_client(
 
 def test_talk_sso_token_via_external_id_with_platform_client(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """POST /talks/{external_id}/sso-token resolves talk by external_id and issues speaker SSO token."""
     _, api_key = platform_client_and_key
 
@@ -322,7 +317,7 @@ def test_talk_sso_token_via_external_id_with_platform_client(
 
 def test_get_talk_by_external_id(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """GET /talks/{external_id} allows retrieving talk details via external_id."""
     _, api_key = platform_client_and_key
 
@@ -356,7 +351,7 @@ def test_get_talk_by_external_id(
 
 def test_scoped_client_cannot_access_arbitrary_event_or_slug(
     db_session: Session, scoped_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """Non-platform scoped clients cannot access events outside their client.event_ids."""
     scoped_client, api_key = scoped_client_and_key
 
@@ -382,7 +377,7 @@ def test_scoped_client_cannot_access_arbitrary_event_or_slug(
 
 def test_platform_client_lists_all_events(
     db_session: Session, platform_client_and_key: tuple[models.Client, str]
-):
+) -> None:
     """Platform client calling GET /events retrieves all events across the instance."""
     _, api_key = platform_client_and_key
 
@@ -401,7 +396,7 @@ def test_platform_client_lists_all_events(
     assert "Event 2" in event_names
 
 
-def test_talk_composite_external_id_scoping_per_event(db_session: Session):
+def test_talk_composite_external_id_scoping_per_event(db_session: Session) -> None:
     """Ensure composite ('event_id', 'external_id') talk resolution does not cross-contaminate scoped clients."""
     e1 = models.Event(name="Conference A", source="eventyay", external_id="conf-a")
     e2 = models.Event(name="Conference B", source="eventyay", external_id="conf-b")
@@ -462,7 +457,7 @@ def test_talk_composite_external_id_scoping_per_event(db_session: Session):
     assert get_resp.json()["title"] == "Keynote B"
 
 
-def test_create_event_api_key_returns_created_at(db_session: Session):
+def test_create_event_api_key_returns_created_at(db_session: Session) -> None:
     """Ensure ApiKeyCreatedResponse returns non-null created_at timestamp upon key generation."""
     organizer = models.User(
         email="org_apikey@test.com",

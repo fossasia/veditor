@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import jwt
 from argon2 import PasswordHasher
@@ -15,6 +15,8 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 
 from app.config import ALLOWED_JWT_ALGORITHMS, settings
 from app.consts import AuthRole, SSOScopeType
+from app.db import new_session
+from app.models import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,10 +157,20 @@ def create_session_token(
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
+class _RevocationStateProvider(Protocol):
+    """Anything that exposes a user's password hash and revocation timestamp."""
+
+    @property
+    def hashed_password(self) -> str: ...
+
+    @property
+    def session_revoked_at(self) -> datetime: ...
+
+
 def verify_session_token_not_revoked(
     payload: dict,
     current_password_hash: str | None = None,
-    user: object | None = None,
+    user: _RevocationStateProvider | None = None,
     session_revoked_at: datetime | float | None = None,
 ) -> bool:
     """Verifies that a session token has not been revoked by password change or marker."""
@@ -168,7 +180,7 @@ def verify_session_token_not_revoked(
     token_pwh = payload.get("pwh")
     if token_pwh:
         if not current_password_hash and user is not None:
-            current_password_hash = getattr(user, "hashed_password", None)
+            current_password_hash = user.hashed_password
         if not current_password_hash:
             return False
         current_pwh = get_password_fingerprint(current_password_hash)
@@ -176,16 +188,13 @@ def verify_session_token_not_revoked(
 
     # For tokens without pwh: consult persisted revocation state
     if session_revoked_at is None and user is not None:
-        session_revoked_at = getattr(user, "session_revoked_at", None)
+        session_revoked_at = user.session_revoked_at
 
     if session_revoked_at is None:
         user_id = payload.get("user_id")
         if user_id:
             try:
-                from app.db import SessionLocal
-                from app.models import User
-
-                with SessionLocal() as db:
+                with new_session() as db:
                     db_user = db.get(User, user_id)
                     if db_user:
                         session_revoked_at = db_user.session_revoked_at
@@ -211,10 +220,8 @@ def verify_session_token_not_revoked(
 
         if isinstance(session_revoked_at, datetime):
             revoked_ts = int(session_revoked_at.timestamp())
-        elif isinstance(session_revoked_at, (int, float)):
-            revoked_ts = int(session_revoked_at)
         else:
-            return False
+            revoked_ts = int(session_revoked_at)
 
         if token_ts <= revoked_ts:
             return False
@@ -540,14 +547,19 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             return None
         if "user_id" in payload or "sub" in payload:
             return None
+        raw_scope_type = payload.get("scope_type")
+        if not isinstance(raw_scope_type, str):
+            return None
         try:
-            scope_type_enum = SSOScopeType(payload.get("scope_type"))
+            scope_type_enum = SSOScopeType(raw_scope_type)
         except ValueError, TypeError:
             return None
         scope_id = payload.get("scope_id")
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
         raw_role = payload.get("role")
+        if not isinstance(raw_role, str):
+            return None
         try:
             role = AuthRole(raw_role)
         except ValueError, TypeError:

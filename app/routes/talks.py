@@ -4,11 +4,10 @@ import math
 import shutil
 import traceback
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
-from typing import Annotated, TypeIs
-from zoneinfo import ZoneInfo
+from typing import Annotated, Any, TypeIs
 
 import anyio.to_thread
 import av
@@ -26,7 +25,8 @@ from fastapi import (
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
 from rq.job import Job
-from sqlalchemy import func
+from rq.registry import StartedJobRegistry
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -40,7 +40,6 @@ from app.auth import (
     require_role,
 )
 from app.config import get_setting, settings
-from app.consts import AuthRole
 from app.db import get_db
 from app.ingest import (
     IngestPathRejectedError,
@@ -51,8 +50,16 @@ from app.ingest import (
     stage_recording,
     validate_media_file,
 )
+from app.models import Talk
 from app.pipeline.detect import container_duration_seconds
 from app.queue import heavy_queue, light_queue
+from app.schemas import (
+    JobRead,
+    RoomRecordingAttachResponse,
+    SSOTokenResponse,
+    TalkRead,
+    TalkWithJobsRead,
+)
 from app.security import create_sso_token
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
@@ -67,6 +74,8 @@ from app.tasks import (
 )
 from app.webhook import dispatch_talk_webhook
 
+from ..consts import AuthRole, SSOScopeType, TalkStatus
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -77,9 +86,7 @@ router = APIRouter(
 
 def _lock_event_for_room_operation(db: Session, event_id: int) -> None:
     """Serialize room lifecycle changes and talk assignments per event."""
-    if not isinstance(db, Session):
-        return
-    db.query(models.Event).filter(models.Event.id == event_id).with_for_update().first()
+    db.scalar(select(models.Event).where(models.Event.id == event_id).with_for_update())
 
 
 def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str | None:
@@ -90,21 +97,20 @@ def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str 
     if not name:
         return None
     _lock_event_for_room_operation(db, event_id)
-    for pending in getattr(db, "new", ()):
+    for pending in db.new:
         if (
             isinstance(pending, models.Room)
             and pending.event_id == event_id
             and pending.name.lower() == name.lower()
         ):
             return pending.name
-    room = (
-        db.query(models.Room)
-        .filter(
+    room = db.scalar(
+        select(models.Room)
+        .where(
             models.Room.event_id == event_id,
             func.lower(models.Room.name) == func.lower(name),
         )
         .with_for_update()
-        .first()
     )
     if room is not None:
         return room.name if isinstance(room, models.Room) else name
@@ -114,14 +120,13 @@ def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str 
             db.add(new_room)
             db.flush()
     except IntegrityError:
-        room = (
-            db.query(models.Room)
-            .filter(
+        room = db.scalar(
+            select(models.Room)
+            .where(
                 models.Room.event_id == event_id,
                 func.lower(models.Room.name) == func.lower(name),
             )
             .with_for_update()
-            .first()
         )
         if room is not None:
             return room.name if isinstance(room, models.Room) else name
@@ -135,7 +140,7 @@ def create_or_update_talk(
     response: Response,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Talk:
     """
     Creates or updates a Talk row scoped to the caller's authorized event.
     Idempotent on the natural key (event_id, title, start).
@@ -148,14 +153,12 @@ def create_or_update_talk(
         )
     check_event_access(payload.event_id, user, db)
 
-    talk = (
-        db.query(models.Talk)
-        .filter(
+    talk = db.scalar(
+        select(models.Talk).where(
             models.Talk.event_id == payload.event_id,
             models.Talk.title == payload.title,
             models.Talk.start == payload.start,
         )
-        .first()
     )
 
     room_name = _ensure_event_room(db, payload.event_id, payload.room)
@@ -176,7 +179,7 @@ def create_or_update_talk(
         start=payload.start,
         end=payload.end,
         speaker_email=payload.speaker_email,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db.add(talk)
     try:
@@ -186,14 +189,12 @@ def create_or_update_talk(
         return talk
     except IntegrityError:
         db.rollback()
-        talk = (
-            db.query(models.Talk)
-            .filter(
+        talk = db.scalar(
+            select(models.Talk).where(
                 models.Talk.event_id == payload.event_id,
                 models.Talk.title == payload.title,
                 models.Talk.start == payload.start,
             )
-            .first()
         )
         if not talk:
             raise
@@ -207,7 +208,7 @@ def create_or_update_talk(
         return talk
 
 
-def _talk_local_date(talk: models.Talk, tz: ZoneInfo) -> date:
+def _talk_local_date(talk: models.Talk, tz: tzinfo) -> date:
     """Return the calendar date of a talk's start time in the given timezone."""
     dt = talk.start
     if dt.tzinfo is None:
@@ -221,7 +222,7 @@ def get_room_days(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     event_id: int | None = None,
-):
+) -> list[dict[str, Any]]:
     """Retrieve distinct scheduled days and session counts for a room."""
     if not room or not room.strip():
         raise HTTPException(
@@ -234,19 +235,19 @@ def get_room_days(
         check_event_access(event_id, user, db)
     else:
         query = (
-            db.query(models.Event)
+            select(models.Event)
             .join(models.Talk, models.Talk.event_id == models.Event.id)
-            .filter(models.Talk.room == room)
+            .where(models.Talk.room == room)
             .distinct()
         )
         if user.is_platform or user.is_human_admin:
             pass
         elif user.source in ("api_key", "sso"):
-            query = query.filter(models.Event.id.in_(user.event_ids))
+            query = query.where(models.Event.id.in_(user.event_ids))
         elif user.role != "admin":
-            query = query.filter(models.Event.created_by_user_id == user.user_id)
+            query = query.where(models.Event.created_by_user_id == user.user_id)
 
-        matching_events = query.all()
+        matching_events = list(db.scalars(query))
         if not matching_events:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -259,14 +260,20 @@ def get_room_days(
             )
         event_id = matching_events[0].id
 
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    event = db.get(models.Event, event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Event {event_id} not found",
+        )
     tz = event.event_tz
 
-    talks = (
-        db.query(models.Talk)
-        .filter(models.Talk.event_id == event_id, models.Talk.room == room)
-        .order_by(models.Talk.start)
-        .all()
+    talks = list(
+        db.scalars(
+            select(models.Talk)
+            .where(models.Talk.event_id == event_id, models.Talk.room == room)
+            .order_by(models.Talk.start)
+        )
     )
 
     days_map: dict[date, list[models.Talk]] = {}
@@ -280,7 +287,12 @@ def get_room_days(
         waiting_count = sum(
             1
             for t in day_talks
-            if t.status in ("waiting_for_files", "detecting", "broken")
+            if t.status
+            in (
+                TalkStatus.WAITING_FILES,
+                TalkStatus.DETECTING,
+                TalkStatus.BROKEN,
+            )
         )
         formatted_date = f"{d.strftime('%b')} {d.day}, {d.year}"
         # Compute day number from the event's start_date so the label matches
@@ -310,14 +322,14 @@ def get_talk(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkWithJobsRead:
     """
     Retrieves talk metadata, current status, associated jobs with progress/timing, and preview URLs.
     Returns 404 if the talk does not exist or is not authorized under caller's event_ids.
     """
     talk = None
     if talk_id.isdigit():
-        talk = db.query(models.Talk).filter(models.Talk.id == int(talk_id)).first()
+        talk = db.scalar(select(models.Talk).where(models.Talk.id == int(talk_id)))
     if not talk:
         talk_filters = [models.Talk.external_id == talk_id]
         if (
@@ -330,7 +342,7 @@ def get_talk(
             and user.event_ids
         ):
             talk_filters.append(models.Talk.event_id.in_(user.event_ids))
-        talk = db.query(models.Talk).filter(*talk_filters).first()
+        talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -355,11 +367,11 @@ def get_talk_jobs(
     talk_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> dict[str, str | list[JobRead]]:
     """Returns the current talk status along with recent jobs and active progress."""
     talk = None
     if talk_id.isdigit():
-        talk = db.query(models.Talk).filter(models.Talk.id == int(talk_id)).first()
+        talk = db.scalar(select(models.Talk).where(models.Talk.id == int(talk_id)))
     if not talk:
         talk_filters = [models.Talk.external_id == talk_id]
         if (
@@ -372,22 +384,25 @@ def get_talk_jobs(
             and user.event_ids
         ):
             talk_filters.append(models.Talk.event_id.in_(user.event_ids))
-        talk = db.query(models.Talk).filter(*talk_filters).first()
+        talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
     check_talk_access(talk, user, db)
-    jobs = (
-        db.query(models.Job)
-        .filter(models.Job.talk_id == talk.id)
-        .order_by(models.Job.id.desc())
-        .limit(10)
-        .all()
+    jobs = list(
+        db.scalars(
+            select(models.Job)
+            .where(models.Job.talk_id == talk.id)
+            .order_by(models.Job.id.desc())
+            .limit(10)
+        )
     )
     can_view_logs = (
-        user.is_machine or user.is_platform or user.role in ("organizer", "admin")
-    ) and user.role != "speaker"
+        user.is_machine
+        or user.is_platform
+        or user.role in (AuthRole.ORGANIZER, AuthRole.ADMIN)
+    ) and user.role != AuthRole.SPEAKER
     job_reads = [schemas.JobRead.model_validate(j) for j in jobs]
     if not can_view_logs:
         for j in job_reads:
@@ -411,7 +426,7 @@ def ingest_recording(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Ingests a recording file for the given talk and queues the detect job.
     Returns 404 if talk not found or not in caller's event_ids.
@@ -419,14 +434,14 @@ def ingest_recording(
     Returns 400 if ingest path validation fails.
     Returns 507 if storage space is insufficient.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
     check_event_access(talk.event_id, user, db)
 
-    if talk.status != "waiting_for_files":
+    if talk.status != TalkStatus.WAITING_FILES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
@@ -451,7 +466,7 @@ def ingest_recording(
             detail=str(exc),
         ) from exc
 
-    advance(talk, "detecting")
+    advance(talk, TalkStatus.DETECTING)
     db.commit()
     db.refresh(talk)
 
@@ -478,7 +493,7 @@ def approve_talk(
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
     payload: schemas.ApproveRequest | None = None,
-):
+) -> TalkRead:
     """
     Approves or rejects a talk in pending_approval state.
     - decision=approve (default): transitions to pending_intro_outro.
@@ -486,11 +501,8 @@ def approve_talk(
     Returns 404 if talk not found or not in caller's event_ids.
     Returns 409 if talk status is not 'pending_approval'.
     """
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
@@ -498,7 +510,7 @@ def approve_talk(
         )
     check_event_access(talk.event_id, user, db)
 
-    if talk.status != "pending_approval":
+    if talk.status != TalkStatus.PENDING_APPROVAL:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot approve/reject talk in status '{talk.status}'",
@@ -507,9 +519,9 @@ def approve_talk(
     decision = payload.decision if payload else "approve"
 
     if decision == "reject":
-        advance(talk, "rejected")
+        advance(talk, TalkStatus.REJECTED)
     else:
-        advance(talk, "pending_intro_outro")
+        advance(talk, TalkStatus.PENDING_INTRO_OUTRO)
 
     db.commit()
     db.refresh(talk)
@@ -522,16 +534,16 @@ def approve_talk(
 
 RAW_PREVIEW_ALLOWED_STATES = frozenset(
     {
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "preview",
-        "needs_work",
-        "pending_intro_outro",
-        "assembling",
-        "transcoding",
-        "uploading",
-        "done",
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
+        TalkStatus.NEEDS_WORK,
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.ASSEMBLING,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
     }
 )
 
@@ -545,14 +557,14 @@ def raw_preview(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> dict[str, str]:
     """
     Returns the raw-file storage URL for human review.
     Only accessible once the talk has been approved (pending_bounds or later).
     Returns 403 for any state before pending_bounds.
     Returns 404 if talk not found or no raw file exists.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -585,34 +597,34 @@ def submit_cut_bounds(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Submits file-relative cut bounds for a talk in pending_bounds state.
     Validates cut_end > cut_start and both within the detected file duration.
     Persists bounds on Talk, advances state to cutting, enqueues job_cut.
     Returns 409 if not in pending_bounds. Returns 422 if bounds are invalid.
     """
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
         )
-    if user.source == "sso" or user.role == "speaker":
+    if user.source == "sso" or user.role == AuthRole.SPEAKER:
         check_talk_access(talk, user, db)
     else:
-        if user.role not in ("organizer", "admin") and not user.is_machine:
+        if (
+            user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN)
+            and not user.is_machine
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operation requires minimum role 'organizer'",
             )
         check_event_access(talk.event_id, user, db)
 
-    if talk.status not in ("pending_bounds", "needs_work"):
+    if talk.status not in (TalkStatus.PENDING_BOUNDS, TalkStatus.NEEDS_WORK):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot submit cut bounds for talk in status '{talk.status}'",
@@ -648,7 +660,7 @@ def submit_cut_bounds(
 
     talk.cut_start = cut_start_s
     talk.cut_end = cut_end_s
-    advance(talk, "cutting")
+    advance(talk, TalkStatus.CUTTING)
     if payload.note:
         user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
         review = models.Review(
@@ -681,9 +693,9 @@ def upload_bumper_file(
     file: Annotated[UploadFile, File()],
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     kind: Annotated[str, Form()] = "intro",
-):
+) -> dict[str, str]:
     """Upload a custom bumper and return an opaque key understood by assembly."""
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -728,7 +740,7 @@ def upload_bumper_file(
 
     return {
         "path": f"bumpers/{staged_path.name}",
-        "filename": file.filename,
+        "filename": file.filename or "no-name.bin",
     }
 
 
@@ -752,6 +764,13 @@ def _apply_intro_outro_config(
         ),
     ]:
         if inc and src == "custom":
+            if not path:
+                # Guaranteed non-empty by IntroOutroRequest.validate_custom_paths;
+                # this guard keeps `path` a `str` for stage_custom_clip.
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Custom {kind} clip path is required",
+                )
             try:
                 stage_custom_clip(talk.id, path, kind, storage)
             except IngestPathRejectedError as exc:
@@ -787,16 +806,13 @@ def handoff_talk(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Configures intro and outro bumpers and hands off talk to speaker.
     Advances talk from 'pending_intro_outro' to 'pending_bounds'.
     """
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
@@ -804,33 +820,27 @@ def handoff_talk(
         )
     check_event_access(talk.event_id, user, db)
 
-    if talk.status not in ("pending_intro_outro", "pending_bounds"):
+    if talk.status not in (TalkStatus.PENDING_INTRO_OUTRO, TalkStatus.PENDING_BOUNDS):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot handoff talk in status '{talk.status}'; talk must be in 'pending_intro_outro' or 'pending_bounds'",
         )
 
-    if talk.status == "pending_intro_outro":
+    if talk.status == TalkStatus.PENDING_INTRO_OUTRO:
         _apply_intro_outro_config(talk, payload, storage)
     if payload.speaker_email is not None:
         talk.speaker_email = payload.speaker_email.strip() or None
 
     event = (
         talk.event
-        if getattr(talk, "event", None)
-        else db.query(models.Event).filter(models.Event.id == talk.event_id).first()
+        if talk.event is not None
+        else db.scalar(select(models.Event).where(models.Event.id == talk.event_id))
     )
-    event_synced = False
-    if event is not None and isinstance(event, models.Event):
-        event_synced = event.is_eventyay_synced
-    elif event is not None:
-        src = getattr(event, "source", None)
-        if isinstance(src, str) and src.strip():
-            event_synced = src.strip().lower() in ("eventyay", "platform")
+    event_synced = event.is_eventyay_synced if event is not None else False
 
-    is_eventyay = getattr(user, "is_sso", False) is True or event_synced
+    is_eventyay = user.is_sso or event_synced
 
-    if talk.status == "pending_bounds":
+    if talk.status == TalkStatus.PENDING_BOUNDS:
         if is_eventyay:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -859,9 +869,9 @@ def handoff_talk(
             detail="A handoff email was sent recently; please wait before resending",
         )
 
-    is_initial_handoff = talk.status == "pending_intro_outro"
+    is_initial_handoff = talk.status == TalkStatus.PENDING_INTRO_OUTRO
     if is_initial_handoff:
-        advance(talk, "pending_bounds")
+        advance(talk, TalkStatus.PENDING_BOUNDS)
 
     send_email = bool(talk.speaker_email) and not is_eventyay
     if send_email:
@@ -892,7 +902,7 @@ def configure_assembly(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Configures intro and outro selection for a talk in pending_intro_outro state.
     - Validates custom clip paths against allowed ingest roots and video format.
@@ -903,11 +913,8 @@ def configure_assembly(
     Returns 409 if talk status is not 'pending_intro_outro'.
     Returns 400 if custom path validation fails.
     """
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
@@ -915,7 +922,7 @@ def configure_assembly(
         )
     check_event_access(talk.event_id, user, db)
 
-    if talk.status != "pending_intro_outro":
+    if talk.status != TalkStatus.PENDING_INTRO_OUTRO:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot configure intro/outro for talk in status '{talk.status}'; talk must be in 'pending_intro_outro'",
@@ -935,28 +942,29 @@ def configure_assembly(
 
     _apply_intro_outro_config(talk, payload, storage)
 
-    advance(talk, "assembling")
+    advance(talk, TalkStatus.ASSEMBLING)
     db.commit()
     db.refresh(talk)
 
     try:
         dispatch_assembly(talk.id, cut_key)
     except Exception:
-        advance(talk, "broken")
+        advance(talk, TalkStatus.BROKEN)
         log_key = f"{talk.id}/logs/assembly.log"
         log_content = traceback.format_exc()
+        job_log_path: str | None = log_key
         try:
             storage.put(log_key, log_content.encode("utf-8"))
         except Exception as log_err:  # noqa: BLE001
             logger.warning(
                 "Failed to persist dispatch failure log to storage: %s", log_err
             )
-            log_key = None
+            job_log_path = None
         job = models.Job(
             talk_id=talk.id,
             kind="assembly",
             status="failed",
-            log_path=log_key,
+            log_path=job_log_path,
         )
         db.add(job)
         db.commit()
@@ -983,8 +991,6 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
         return bool(rq_job.args and rq_job.args[0] == talk_id)
 
     try:
-        from rq.registry import StartedJobRegistry
-
         for q in (light_queue, heavy_queue):
             # 1. Cancel queued jobs
             for job_id in list(q.job_ids):
@@ -998,9 +1004,9 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
 
             # 2. Stop running/started/deferred/scheduled jobs
             registries = [
-                getattr(q, "started_job_registry", None),
-                getattr(q, "deferred_job_registry", None),
-                getattr(q, "scheduled_job_registry", None),
+                q.started_job_registry,
+                q.deferred_job_registry,
+                q.scheduled_job_registry,
             ]
             for reg in registries:
                 if reg is None:
@@ -1056,13 +1062,13 @@ def abort_talk(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Aborts in-flight pipeline operations for a talk, cancels RQ jobs,
     clears DB jobs and reviews, and resets talk status back to 'waiting_for_files'.
     Returns 404 if talk is not found or not authorized for caller's events.
     """
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -1072,11 +1078,11 @@ def abort_talk(
     _cancel_talk_jobs(talk.id, storage)
 
     # Clear DB jobs and reviews
-    db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
-    db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
+    db.execute(delete(models.Job).where(models.Job.talk_id == talk.id))
+    db.execute(delete(models.Review).where(models.Review.talk_id == talk.id))
 
     # Reset talk state and bounds back to waiting_for_files
-    talk.status = "waiting_for_files"
+    talk.status = TalkStatus.WAITING_FILES
     talk.raw_duration_seconds = None
     talk.cut_start = None
     talk.cut_end = None
@@ -1106,7 +1112,7 @@ def update_talk(
     payload: schemas.TalkUpdate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Talk:
     """
     Updates editable talk metadata (title, room).
     Returns 404 if talk is not found or not in caller's event_ids.
@@ -1116,7 +1122,7 @@ def update_talk(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="SSO sessions are not permitted to modify talk metadata",
         )
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -1157,9 +1163,9 @@ def update_talk(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Talk end time must be after start time",
         )
-    if "start" in update_data:
+    if "start" in update_data and new_start is not None:
         talk.start = new_start
-    if "end" in update_data:
+    if "end" in update_data and new_end is not None:
         talk.end = new_end
     if "speaker_email" in update_data:
         talk.speaker_email = payload.speaker_email if payload.speaker_email else None
@@ -1182,7 +1188,7 @@ def delete_talk(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> dict[str, int | str]:
     """
     Deletes a talk and all associated storage artifacts, jobs, and reviews.
     Returns 404 if talk is not found or not in caller's event_ids.
@@ -1192,7 +1198,7 @@ def delete_talk(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="SSO sessions are not permitted to delete talks",
         )
-    talk = db.query(models.Talk).filter(models.Talk.id == talk_id).first()
+    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
@@ -1200,8 +1206,8 @@ def delete_talk(
     check_event_access(talk.event_id, user, db)
 
     _cancel_talk_jobs(talk_id, storage)
-    db.query(models.Review).filter(models.Review.talk_id == talk_id).delete()
-    db.query(models.Job).filter(models.Job.talk_id == talk_id).delete()
+    db.execute(delete(models.Review).where(models.Review.talk_id == talk_id))
+    db.execute(delete(models.Job).where(models.Job.talk_id == talk_id))
     db.delete(talk)
     db.commit()
 
@@ -1214,7 +1220,7 @@ def bulk_delete_talks(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> dict[str, int | str]:
     """
     Deletes multiple talks and cleans up their storage, jobs, and reviews.
     Only talks belonging to the caller's authorized event_ids are deleted.
@@ -1229,39 +1235,40 @@ def bulk_delete_talks(
         )
 
     if user.is_machine:
-        valid_talks = (
-            db.query(models.Talk)
-            .filter(
-                models.Talk.id.in_(payload.talk_ids),
-                models.Talk.event_id.in_(user.event_ids),
+        valid_talks = list(
+            db.scalars(
+                select(models.Talk).where(
+                    models.Talk.id.in_(payload.talk_ids),
+                    models.Talk.event_id.in_(user.event_ids),
+                )
             )
-            .all()
         )
-    elif user.role == "admin":
-        valid_talks = (
-            db.query(models.Talk).filter(models.Talk.id.in_(payload.talk_ids)).all()
+    elif user.role == AuthRole.ADMIN:
+        valid_talks = list(
+            db.scalars(select(models.Talk).where(models.Talk.id.in_(payload.talk_ids)))
         )
     else:
-        org_event_ids = [
-            e.id
-            for e in db.query(models.Event.id)
-            .filter(models.Event.created_by_user_id == user.user_id)
-            .all()
-        ]
-        valid_talks = (
-            db.query(models.Talk)
-            .filter(
-                models.Talk.id.in_(payload.talk_ids),
-                models.Talk.event_id.in_(org_event_ids),
+        org_event_ids = list(
+            db.scalars(
+                select(models.Event.id).where(
+                    models.Event.created_by_user_id == user.user_id
+                )
             )
-            .all()
+        )
+        valid_talks = list(
+            db.scalars(
+                select(models.Talk).where(
+                    models.Talk.id.in_(payload.talk_ids),
+                    models.Talk.event_id.in_(org_event_ids),
+                )
+            )
         )
 
     deleted_count = 0
     for talk in valid_talks:
         _cancel_talk_jobs(talk.id, storage)
-        db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
-        db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
+        db.execute(delete(models.Review).where(models.Review.talk_id == talk.id))
+        db.execute(delete(models.Job).where(models.Job.talk_id == talk.id))
         db.delete(talk)
         deleted_count += 1
 
@@ -1280,16 +1287,13 @@ async def upload_recording(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> TalkRead:
     """
     Uploads a video recording file directly via multipart form, streams to temporary
     staging, and enqueues an ingest/validation job on the light queue.
     """
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.id == talk_id)
-        .with_for_update()
-        .first()
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(
@@ -1297,7 +1301,7 @@ async def upload_recording(
         )
     check_event_access(talk.event_id, user, db)
 
-    if talk.status != "waiting_for_files":
+    if talk.status != TalkStatus.WAITING_FILES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
@@ -1385,7 +1389,6 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
             return parsed if math.isfinite(parsed) and parsed > 0 else None
         except ValueError, TypeError:
             return None
-    return None
 
 
 MAX_SCHEDULE_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
@@ -1397,7 +1400,7 @@ async def import_schedule(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile | None, File()] = None,
-):
+) -> dict[str, int | str | None]:
     """
     Imports talks in bulk from Frab/Pretalx JSON or simple JSON lists.
     """
@@ -1522,7 +1525,7 @@ async def import_schedule(
             detail="No sessions found to import",
         )
 
-    validated_talks = []
+    validated_talks: list[dict[str, Any]] = []
     now = datetime.now(UTC)
     for t_info in talks_to_create:
         if not isinstance(t_info, dict):
@@ -1625,10 +1628,11 @@ async def import_schedule(
         )
 
     # In-memory batch deduplication (keeps latest entry for duplicate keys)
-    deduped_talks = []
-    seen_keys = {}
+    deduped_talks: list[dict[str, Any]] = []
+    seen_keys: dict[tuple[Any, ...], int] = {}
     for t in validated_talks:
         ext_id = t.get("external_id")
+        key: tuple[Any, ...]
         if ext_id:
             key = ("ext", ext_id)
         else:
@@ -1662,7 +1666,7 @@ async def import_schedule(
         if not target_source:
             target_source = talks_to_create[0].get("source")
 
-    is_platform = getattr(user, "is_platform", False)
+    is_platform = user.is_platform
     if (
         target_source
         or is_platform
@@ -1680,13 +1684,11 @@ async def import_schedule(
         target_str = str(target_identifier).strip()
         if is_explicit_external:
             if target_source:
-                existing_event = (
-                    db.query(models.Event)
-                    .filter(
+                existing_event = db.scalar(
+                    select(models.Event).where(
                         models.Event.source == target_source,
                         models.Event.external_id == target_str,
                     )
-                    .first()
                 )
                 if existing_event:
                     if not is_platform:
@@ -1694,10 +1696,8 @@ async def import_schedule(
                     event = existing_event
 
             if not event:
-                existing_event = (
-                    db.query(models.Event)
-                    .filter(models.Event.external_id == target_str)
-                    .first()
+                existing_event = db.scalar(
+                    select(models.Event).where(models.Event.external_id == target_str)
                 )
                 if existing_event:
                     if not is_platform:
@@ -1717,10 +1717,8 @@ async def import_schedule(
                 is_new_event = True
         else:
             if target_str.isdigit():
-                existing_event = (
-                    db.query(models.Event)
-                    .filter(models.Event.id == int(target_str))
-                    .first()
+                existing_event = db.scalar(
+                    select(models.Event).where(models.Event.id == int(target_str))
                 )
                 if existing_event:
                     if not is_platform:
@@ -1735,39 +1733,33 @@ async def import_schedule(
 
     if not event:
         # Check if caller already has an event with matching name
-        if getattr(user, "is_platform", False):
-            event = (
-                db.query(models.Event).filter(models.Event.name == event_name).first()
+        if user.is_platform:
+            event = db.scalar(
+                select(models.Event).where(models.Event.name == event_name)
             )
         elif user.is_machine:
-            event = (
-                db.query(models.Event)
-                .filter(
+            event = db.scalar(
+                select(models.Event).where(
                     models.Event.name == event_name,
                     models.Event.id.in_(user.event_ids),
                 )
-                .first()
             )
-        elif user.role == "admin":
-            event = (
-                db.query(models.Event).filter(models.Event.name == event_name).first()
+        elif user.role == AuthRole.ADMIN:
+            event = db.scalar(
+                select(models.Event).where(models.Event.name == event_name)
             )
         else:
-            event = (
-                db.query(models.Event)
-                .filter(
+            event = db.scalar(
+                select(models.Event).where(
                     models.Event.name == event_name,
                     models.Event.created_by_user_id == user.user_id,
                 )
-                .first()
             )
 
     if not event and user.is_machine:
-        if not getattr(user, "is_platform", False) and len(user.event_ids) == 1:
-            event = (
-                db.query(models.Event)
-                .filter(models.Event.id == user.event_ids[0])
-                .first()
+        if not user.is_platform and len(user.event_ids) == 1:
+            event = db.scalar(
+                select(models.Event).where(models.Event.id == user.event_ids[0])
             )
         elif len(user.event_ids) > 1:
             raise HTTPException(
@@ -1783,14 +1775,12 @@ async def import_schedule(
         is_new_event = True
 
     # Ensure non-platform machine client has access to this newly created event
-    if is_new_event and user.is_machine and not getattr(user, "is_platform", False):
+    if is_new_event and user.is_machine and not user.is_platform:
         if event.id not in user.event_ids:
             user.event_ids.append(event.id)
         if user.client_id:
-            client_record = (
-                db.query(models.Client)
-                .filter(models.Client.id == user.client_id)
-                .first()
+            client_record = db.scalar(
+                select(models.Client).where(models.Client.id == user.client_id)
             )
             if client_record and event.id not in (client_record.event_ids or []):
                 client_record.event_ids = list(
@@ -1798,9 +1788,11 @@ async def import_schedule(
                 )
 
     _lock_event_for_room_operation(db, event.id)
-    import_room_names = {
+    import_room_names: dict[str, str | None] = {
         room.name.lower(): room.name
-        for room in db.query(models.Room).filter(models.Room.event_id == event.id).all()
+        for room in db.scalars(
+            select(models.Room).where(models.Room.event_id == event.id)
+        )
     }
 
     def resolve_import_room(raw_name: str | None) -> str | None:
@@ -1817,36 +1809,30 @@ async def import_schedule(
         ext_id = v_talk.get("external_id")
         existing = None
         if ext_id:
-            existing = (
-                db.query(models.Talk)
-                .filter(
+            existing = db.scalar(
+                select(models.Talk).where(
                     models.Talk.event_id == event.id,
                     models.Talk.external_id == ext_id,
                 )
-                .first()
             )
             if not existing:
-                existing = (
-                    db.query(models.Talk)
-                    .filter(
+                existing = db.scalar(
+                    select(models.Talk).where(
                         models.Talk.event_id == event.id,
                         models.Talk.external_id.is_(None),
                         models.Talk.title == v_talk["title"],
                         models.Talk.start == v_talk["start"],
                     )
-                    .first()
                 )
                 if existing:
                     existing.external_id = ext_id
         else:
-            existing = (
-                db.query(models.Talk)
-                .filter(
+            existing = db.scalar(
+                select(models.Talk).where(
                     models.Talk.event_id == event.id,
                     models.Talk.title == v_talk["title"],
                     models.Talk.start == v_talk["start"],
                 )
-                .first()
             )
 
         if existing:
@@ -1869,7 +1855,7 @@ async def import_schedule(
             start=v_talk["start"],
             end=v_talk["end"],
             speaker_email=v_talk.get("speaker_email"),
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
         db.add(talk)
         imported_count += 1
@@ -1895,7 +1881,7 @@ def create_talk_sso_token(
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
     payload: schemas.TalkSSOTokenRequest | None = None,
-):
+) -> SSOTokenResponse:
     """
     Issues a short-lived, talk-scoped SSO token carrying role=speaker.
     Resolves talk by integer ID or external_id.
@@ -1907,8 +1893,8 @@ def create_talk_sso_token(
 
     talk = None
     if talk_identifier.isdigit():
-        talk = (
-            db.query(models.Talk).filter(models.Talk.id == int(talk_identifier)).first()
+        talk = db.scalar(
+            select(models.Talk).where(models.Talk.id == int(talk_identifier))
         )
     if not talk:
         talk_filters = [models.Talk.external_id == talk_identifier]
@@ -1916,17 +1902,15 @@ def create_talk_sso_token(
         if target_event_id is not None:
             target_str = str(target_event_id).strip()
             # Match by Event.external_id first to prevent numeric external IDs from clashing with internal PKs
-            event_match = (
-                db.query(models.Event)
-                .filter(models.Event.external_id == target_str)
-                .first()
+            event_match = db.scalar(
+                select(models.Event).where(models.Event.external_id == target_str)
             )
             if event_match:
                 resolved_event_id = event_match.id
             elif target_str.isdigit():
                 resolved_event_id = int(target_str)
 
-        if not getattr(client, "is_platform", False) and client.event_ids:
+        if not client.is_platform and client.event_ids:
             if resolved_event_id is not None:
                 if resolved_event_id in client.event_ids:
                     talk_filters.append(models.Talk.event_id == resolved_event_id)
@@ -1937,15 +1921,13 @@ def create_talk_sso_token(
         elif resolved_event_id is not None:
             talk_filters.append(models.Talk.event_id == resolved_event_id)
 
-        talk = db.query(models.Talk).filter(*talk_filters).first()
+        talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Talk not found",
         )
-    if not getattr(client, "is_platform", False) and talk.event_id not in (
-        client.event_ids or []
-    ):
+    if not client.is_platform and talk.event_id not in (client.event_ids or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this talk",
@@ -1967,9 +1949,9 @@ def create_talk_sso_token(
         expires_in = int(global_hours) * 3600
 
     token = create_sso_token(
-        scope_type="talk",
+        scope_type=SSOScopeType.TALK,
         scope_id=talk.id,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         expires_in_seconds=expires_in,
         email=target_email,
         display_name=target_display_name,
@@ -1977,9 +1959,9 @@ def create_talk_sso_token(
     return schemas.SSOTokenResponse(
         token=token,
         token_type="bearer",
-        scope_type="talk",
+        scope_type=SSOScopeType.TALK,
         scope_id=talk.id,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         expires_in_seconds=expires_in,
         url=f"/studio/talks/{talk.id}?sso_token={token}",
     )
@@ -2003,7 +1985,7 @@ async def attach_room_recording(
     source_path: Annotated[str | None, Form()] = None,
     recording_start: Annotated[datetime | None, Form()] = None,
     target_date: Annotated[date | None, Form()] = None,
-):
+) -> RoomRecordingAttachResponse:
     """Attach a continuous room recording to scheduled sessions in that room.
 
     If target_date is specified, only sessions on that date are attached.
@@ -2055,20 +2037,20 @@ async def attach_room_recording(
     if event_id is not None:
         check_event_access(event_id, user, db)
     else:
-        query = (
-            db.query(models.Event)
+        stmt = (
+            select(models.Event)
             .join(models.Talk, models.Talk.event_id == models.Event.id)
-            .filter(models.Talk.room == room)
+            .where(models.Talk.room == room)
             .distinct()
         )
         if user.is_platform or user.is_human_admin:
             pass
         elif user.source in ("api_key", "sso"):
-            query = query.filter(models.Event.id.in_(user.event_ids))
-        elif user.role != "admin":
-            query = query.filter(models.Event.created_by_user_id == user.user_id)
+            stmt = stmt.where(models.Event.id.in_(user.event_ids))
+        elif user.role != AuthRole.ADMIN:
+            stmt = stmt.where(models.Event.created_by_user_id == user.user_id)
 
-        matching_events = query.all()
+        matching_events = list(db.scalars(stmt))
         if not matching_events:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2082,14 +2064,20 @@ async def attach_room_recording(
         event_id = matching_events[0].id
 
     # Query talks in this room and event
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    event = db.get(models.Event, event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Event {event_id} not found",
+        )
     tz = event.event_tz
 
-    all_room_talks = (
-        db.query(models.Talk)
-        .filter(models.Talk.event_id == event_id, models.Talk.room == room)
-        .order_by(models.Talk.start)
-        .all()
+    all_room_talks = list(
+        db.scalars(
+            select(models.Talk)
+            .where(models.Talk.event_id == event_id, models.Talk.room == room)
+            .order_by(models.Talk.start)
+        )
     )
     if not all_room_talks:
         raise HTTPException(
@@ -2103,7 +2091,12 @@ async def attach_room_recording(
             t
             for t in all_room_talks
             if _talk_local_date(t, tz) == target_date
-            and t.status in ("waiting_for_files", "detecting", "broken")
+            and t.status
+            in (
+                TalkStatus.WAITING_FILES,
+                TalkStatus.DETECTING,
+                TalkStatus.BROKEN,
+            )
         ]
         if not eligible_talks:
             day_talks = [
@@ -2127,7 +2120,12 @@ async def attach_room_recording(
         eligible_talks = [
             t
             for t in all_room_talks
-            if t.status in ("waiting_for_files", "detecting", "broken")
+            if t.status
+            in (
+                TalkStatus.WAITING_FILES,
+                TalkStatus.DETECTING,
+                TalkStatus.BROKEN,
+            )
         ]
         if not eligible_talks:
             raise HTTPException(
@@ -2161,13 +2159,15 @@ async def attach_room_recording(
             )
 
         talk_ids = [t.id for t in eligible_talks]
-        talks_to_cancel = [t.id for t in eligible_talks if t.status == "detecting"]
+        talks_to_cancel = [
+            t.id for t in eligible_talks if t.status == TalkStatus.DETECTING
+        ]
         for tid in talks_to_cancel:
             _cancel_talk_jobs(tid)
 
         prev_statuses = {t.id: t.status for t in eligible_talks}
         for talk in eligible_talks:
-            talk.status = "detecting"
+            talk.status = TalkStatus.DETECTING
         db.commit()
 
         rec_start_iso = recording_start.isoformat() if recording_start else None
@@ -2184,7 +2184,7 @@ async def attach_room_recording(
         except (OSError, RedisError, RuntimeError) as exc:
             logger.error("Failed to enqueue room URL ingest job: %s", exc)
             for talk in eligible_talks:
-                talk.status = prev_statuses.get(talk.id, "waiting_for_files")
+                talk.status = prev_statuses.get(talk.id, TalkStatus.WAITING_FILES)
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2218,13 +2218,13 @@ async def attach_room_recording(
         staged_path = get_upload_staging_dir() / f"room_upload_{uuid.uuid4().hex}{ext}"
         try:
 
-            def _write_upload() -> None:
+            def _write_upload(staged: Path) -> None:
                 # storage-boundary-exempt: upload staging
-                with open(staged_path, "wb") as f_out:
+                with open(staged, "wb") as f_out:
                     # storage-boundary-exempt: upload staging
                     shutil.copyfileobj(file.file, f_out)
 
-            await anyio.to_thread.run_sync(_write_upload)
+            await anyio.to_thread.run_sync(_write_upload, staged_path)
         except Exception:
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
@@ -2239,7 +2239,7 @@ async def attach_room_recording(
             )
     elif relative_key or source_path:
         target_path_str = source_path or relative_key
-        if "\x00" in target_path_str:
+        if not target_path_str or "\x00" in target_path_str:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid path string",
@@ -2395,7 +2395,7 @@ async def attach_room_recording(
     talk_ids = []
     staged_keys = []
     replaced_backups: dict[str, str] = {}
-    talks_to_cancel = [t.id for t in matched_talks if t.status == "detecting"]
+    talks_to_cancel = [t.id for t in matched_talks if t.status == TalkStatus.DETECTING]
 
     # Cancel previous detection jobs before modifying or overwriting storage assets
     for tid in talks_to_cancel:
@@ -2414,7 +2414,7 @@ async def attach_room_recording(
             await anyio.to_thread.run_sync(storage.link_or_copy, raw_key, staged_path)
             staged_keys.append(raw_key)
 
-            talk.status = "detecting"
+            talk.status = TalkStatus.DETECTING
             talk.raw_duration_seconds = duration
 
             talk_start_utc = (
@@ -2488,8 +2488,8 @@ async def attach_room_recording(
         except (OSError, RedisError, RuntimeError) as exc:
             for failed_tid in talk_ids[index:]:
                 failed_talk = db.get(models.Talk, failed_tid)
-                if failed_talk and failed_talk.status == "detecting":
-                    advance(failed_talk, "broken")
+                if failed_talk and failed_talk.status == TalkStatus.DETECTING:
+                    advance(failed_talk, TalkStatus.BROKEN)
             db.commit()
             logger.exception("Failed to enqueue detection jobs")
             raise HTTPException(

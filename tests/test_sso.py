@@ -1,6 +1,6 @@
 """Comprehensive test suite for scoped SSO tokens and external client handoff."""
 
-from collections.abc import Generator
+import re
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -19,7 +20,7 @@ from app.auth import (
     get_current_user,
 )
 from app.config import settings
-from app.consts import AuthRole, SSOScopeType
+from app.consts import AuthRole, SSOScopeType, TalkStatus
 from app.main import app
 from app.security import (
     create_access_token,
@@ -30,13 +31,6 @@ from app.security import (
 from app.storage import get_storage_backend
 
 client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def clean_dependency_overrides() -> Generator:
-    """Ensure dependency overrides are cleaned up after each test."""
-    yield
-    app.dependency_overrides.clear()
 
 
 def add_event(
@@ -403,9 +397,9 @@ def test_check_talk_access_sso(db_session: Session) -> None:
     add_talk(db_session, id=11, event_id=1, title="Talk B", room="Room 2")
     add_talk(db_session, id=20, event_id=2, title="Talk C", room="Room 3")
 
-    talk_in_event1 = db_session.query(models.Talk).filter(models.Talk.id == 10).first()
-    talk2_in_event1 = db_session.query(models.Talk).filter(models.Talk.id == 11).first()
-    talk_in_event2 = db_session.query(models.Talk).filter(models.Talk.id == 20).first()
+    talk_in_event1 = db_session.scalar(select(models.Talk).where(models.Talk.id == 10))
+    talk2_in_event1 = db_session.scalar(select(models.Talk).where(models.Talk.id == 11))
+    talk_in_event2 = db_session.scalar(select(models.Talk).where(models.Talk.id == 20))
 
     # Event-scoped organizer can access any talk in its event
     event_user = CurrentUser(
@@ -470,7 +464,7 @@ def test_sso_speaker_submits_review_success(db_session: Session) -> None:
     assert data["review"]["user_id"] is None
 
     # Verify Review model persisted to DB had user_id = None
-    review = db_session.query(models.Review).filter(models.Review.talk_id == 10).first()
+    review = db_session.scalar(select(models.Review).where(models.Review.talk_id == 10))
     assert review is not None
     assert review.user_id is None
 
@@ -525,9 +519,10 @@ def test_sso_speaker_submits_cut_bounds_success(db_session: Session) -> None:
 
     # Verify the talk was updated in the DB
     db_session.expire_all()
-    talk = db_session.query(models.Talk).filter(models.Talk.id == 10).first()
+    talk = db_session.scalar(select(models.Talk).where(models.Talk.id == 10))
+
     assert talk is not None
-    assert talk.status == "cutting"
+    assert talk.status == TalkStatus.CUTTING
     assert talk.cut_start == 60.0
     assert talk.cut_end == 1800.0
 
@@ -656,7 +651,6 @@ def test_studio_talk_landing_with_talk_sso_token() -> None:
     set_cookie = response.headers.get("set-cookie", "")
     assert "Max-Age=" in set_cookie
     # Should be well above default 300s
-    import re
 
     m = re.search(r"Max-Age=(\d+)", set_cookie)
     assert m is not None
