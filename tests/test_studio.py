@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import CurrentUser, check_talk_access, get_current_user, hash_api_key
 from app.config import settings
-from app.consts import TalkStatus
+from app.consts import AuthRole, TalkStatus
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -3082,9 +3082,8 @@ def test_attach_room_recording_sso_discovery_without_event_id(
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=888,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         source="sso",
-        is_sso=True,
         event_ids=[event.id],
     )
 
@@ -3200,7 +3199,7 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
     # Platform client has empty event_ids but is_platform=True
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=1,
-        role="admin",
+        role=AuthRole.ADMIN,
         source="api_key",
         event_ids=[],
         is_platform=True,
@@ -3455,7 +3454,7 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=888,
-        role="admin",
+        role=AuthRole.ADMIN,
         source="jwt",
         event_ids=[event.id],
     )
@@ -3876,11 +3875,11 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
     current_user = CurrentUser(
         user_id=user.id,
         email="promoted_speaker@example.com",
-        role="user",
+        role=AuthRole.USER,
         source="cookie",
     )
     check_talk_access(talk, current_user, db_session)
-    assert current_user.role == "speaker"
+    assert current_user.role == AuthRole.SPEAKER
 
     # Reload directly from database to verify persistence
     persisted = db_session.scalar(select(models.User).where(models.User.id == user.id))

@@ -20,6 +20,9 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+# Importing app.models registers every ORM model on Base.metadata before
+# Base.metadata.create_all() runs in setup_test_database, so the test schema
+# includes all tables (a bare `from app.db import Base` would know none of them).
 from app import models as _models  # noqa: F401
 from app.config import settings
 from app.db import Base, get_db
