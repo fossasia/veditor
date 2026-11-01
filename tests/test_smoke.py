@@ -21,11 +21,13 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
+from sqlalchemy import delete, select
 
 from app import models
 from app.config import settings
+from app.consts import TalkStatus
 from app.db import SessionLocal
 from app.states import advance
 
@@ -54,11 +56,11 @@ def wipe_all_records() -> None:
 
     session = SessionLocal()
     try:
-        session.query(models.Review).delete()
-        session.query(models.Job).delete()
-        session.query(models.Talk).delete()
-        session.query(models.Client).delete()
-        session.query(models.Event).delete()
+        session.execute(delete(models.Review))
+        session.execute(delete(models.Job))
+        session.execute(delete(models.Talk))
+        session.execute(delete(models.Client))
+        session.execute(delete(models.Event))
         session.commit()
     finally:
         session.close()
@@ -70,7 +72,7 @@ def clean_db() -> None:
     wipe_all_records()
 
 
-def run_bootstrap_cli():
+def run_bootstrap_cli() -> tuple[str, int]:
     """Runs the bootstrap CLI to get an Event, Client, and raw API key."""
     # Run the CLI using the current python executable so it runs in the same environment.
     result = subprocess.run(
@@ -104,7 +106,7 @@ def run_bootstrap_cli():
     reason="This test wipes the database; run only against a disposable DB "
     "(see smoke-test.yml, which sets ALLOW_SMOKE_DB_WIPE=1).",
 )
-def test_end_to_end_smoke(clean_db):
+def test_end_to_end_smoke(clean_db: None) -> None:
     # 1. Clean DB is handled by the fixture
 
     # 2. Run bootstrap CLI
@@ -113,7 +115,7 @@ def test_end_to_end_smoke(clean_db):
     assert event_id > 0
 
     # 3. Hit GET /health
-    health_resp = httpx.get(f"{API_BASE_URL}/health", timeout=10.0)
+    health_resp = httpx2.get(f"{API_BASE_URL}/health", timeout=10.0)
     assert health_resp.status_code == 200, f"Health check failed: {health_resp.text}"
     assert health_resp.json().get("status") == "ok"
 
@@ -142,7 +144,7 @@ def test_end_to_end_smoke(clean_db):
 
     # 5. Call the ops endpoints with the API key and confirm the Talk is visible
     headers = {"X-API-Key": api_key}
-    talks_resp = httpx.get(f"{API_BASE_URL}/ops/talks", headers=headers)
+    talks_resp = httpx2.get(f"{API_BASE_URL}/ops/talks", headers=headers)
     assert talks_resp.status_code == 200, f"Ops talks failed: {talks_resp.text}"
 
     talks_data = talks_resp.json()
@@ -152,32 +154,34 @@ def test_end_to_end_smoke(clean_db):
 
     # 6. Exercise advance() through a happy-path sequence of transitions
     states = [
-        "detecting",
-        "pending_approval",
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "preview",
-        "pending_intro_outro",
-        "assembling",
-        "transcoding",
-        "uploading",
-        "done",
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.ASSEMBLING,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
     ]
 
     for state in states:
         session = SessionLocal()
         try:
-            talk = session.query(models.Talk).filter(models.Talk.id == talk_id).first()
-            assert talk is not None
+            talk_row = session.scalar(
+                select(models.Talk).where(models.Talk.id == talk_id)
+            )
+            assert talk_row is not None
 
             # Advance state and commit
-            talk = advance(talk, state)
+            advance(talk_row, state)
             session.commit()
         finally:
             session.close()
 
         # Verify via ops endpoint
-        talk_resp = httpx.get(f"{API_BASE_URL}/ops/talks/{talk_id}", headers=headers)
+        talk_resp = httpx2.get(f"{API_BASE_URL}/ops/talks/{talk_id}", headers=headers)
         assert talk_resp.status_code == 200, f"Ops talk fetch failed: {talk_resp.text}"
         assert talk_resp.json()["status"] == state

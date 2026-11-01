@@ -1,17 +1,19 @@
 import logging
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 import jinja2
-from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.requests import Request
 
 from app import models
 from app.auth import CurrentUser
 from app.config import settings
-from app.db import SessionLocal, get_db
+from app.db import get_db, new_session
 from app.security import (
     decode_session_token,
     decode_sso_token,
@@ -27,7 +29,8 @@ _env = jinja2.Environment(
     autoescape=jinja2.select_autoescape(["html", "jinja", "xml"]),
     cache_size=0,
 )
-_env.globals["UTC"] = UTC
+_env_globals: dict[str, Any] = _env.globals
+_env_globals["UTC"] = UTC
 
 
 def format_duration(seconds: float | None) -> str:
@@ -66,7 +69,7 @@ _env.filters["timecode"] = format_timecode_filter
 
 
 def auth_context_processor(request: Request) -> dict[str, Any]:
-    user = getattr(getattr(request, "state", None), "user", None)
+    user = getattr(request.state, "user", None)
     if user is None:
         token = request.cookies.get("veditor_session")
         if token:
@@ -88,22 +91,16 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
             else:
                 payload = decode_session_token(token)
                 user_id = payload.get("user_id") if isinstance(payload, dict) else None
-                if user_id:
-                    app_instance = getattr(request, "app", None)
-                    overrides = (
-                        getattr(app_instance, "dependency_overrides", {})
-                        if app_instance
-                        else {}
-                    )
-                    db_factory = overrides.get(get_db, SessionLocal)
+                if user_id and isinstance(payload, dict):
+                    app_instance = request.app
+                    overrides = app_instance.dependency_overrides
+                    db_factory = overrides.get(get_db, new_session)
                     res = db_factory()
                     gen = res if hasattr(res, "__next__") else None
                     db = next(gen) if gen is not None else res
                     try:
-                        candidate = (
-                            db.query(models.User)
-                            .filter(models.User.id == user_id)
-                            .first()
+                        candidate = db.scalar(
+                            select(models.User).where(models.User.id == user_id)
                         )
                         if (
                             candidate is not None
@@ -121,7 +118,7 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
                     finally:
                         if gen is not None:
                             gen.close()
-                        elif db_factory is SessionLocal:
+                        elif db_factory is new_session:
                             db.close()
         if hasattr(request, "state"):
             request.state.user = user
@@ -138,4 +135,7 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
     }
 
 
-templates = Jinja2Templates(env=_env, context_processors=[auth_context_processor])
+auth_context_processors: list[Callable[[Request], dict[str, Any]]] = [
+    auth_context_processor
+]
+templates = Jinja2Templates(env=_env, context_processors=auth_context_processors)
