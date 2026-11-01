@@ -2970,7 +2970,9 @@ def test_attach_room_recording_studio_alias(
         clip.unlink(missing_ok=True)
 
 
-def test_link_or_copy_fallback_preserves_source_for_multiple_talks(tmp_path):
+def test_link_or_copy_fallback_preserves_source_for_multiple_talks(
+    tmp_path: Path,
+) -> None:
     from app.storage import LocalDiskBackend
 
     storage = LocalDiskBackend(data_dir=tmp_path / "storage")
