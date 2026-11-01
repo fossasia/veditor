@@ -52,7 +52,7 @@ def _create_stored_talk(db: Session, **overrides: Any) -> models.Talk:
         room="Auditorium A",
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status=overrides.pop("status", "pending_intro_outro"),
+        status=overrides.pop("status", TalkStatus.PENDING_INTRO_OUTRO),
         cut_start=0.0,
         cut_end=1800.0,
         raw_duration_seconds=1800.0,
@@ -123,19 +123,19 @@ def test_intro_outro_unauthorized_event(
 @pytest.mark.parametrize(
     "invalid_status",
     [
-        "waiting_for_files",
-        "detecting",
-        "pending_approval",
-        "cutting",
-        "generating_previews",
-        "preview",
-        "needs_work",
-        "assembling",
-        "transcoding",
-        "uploading",
-        "done",
-        "rejected",
-        "broken",
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
+        TalkStatus.NEEDS_WORK,
+        TalkStatus.ASSEMBLING,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
+        TalkStatus.REJECTED,
+        TalkStatus.BROKEN,
     ],
 )
 def test_intro_outro_invalid_status_conflict(
@@ -143,7 +143,7 @@ def test_intro_outro_invalid_status_conflict(
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
-    invalid_status: str,
+    invalid_status: TalkStatus,
 ) -> None:
     """POST /talks/{id}/assemble when talk status != 'pending_intro_outro' returns 409."""
     stored_talk.status = invalid_status
@@ -379,7 +379,7 @@ def test_intro_outro_skip_both_success(
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
     assert persisted is not None
-    assert persisted.status == "assembling"
+    assert persisted.status == TalkStatus.ASSEMBLING
     assert persisted.include_intro is False
     assert persisted.include_outro is False
 
@@ -477,7 +477,7 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
     assert persisted is not None
-    assert persisted.status == "assembling"
+    assert persisted.status == TalkStatus.ASSEMBLING
     assert persisted.custom_intro_path == str(valid_intro)
 
     mock_enqueue.assert_called_once_with(
@@ -525,7 +525,7 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
     assert persisted is not None
-    assert persisted.status == "assembling"
+    assert persisted.status == TalkStatus.ASSEMBLING
     assert persisted.custom_outro_path == str(valid_outro)
 
     mock_enqueue.assert_called_once_with(
@@ -635,7 +635,7 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
     """dispatch_assembly enqueues job_concat when both intro and outro jobs are completed."""
     talk = _create_stored_talk(
         db_session,
-        status="assembling",
+        status=TalkStatus.ASSEMBLING,
         include_intro=True,
         intro_source="generated",
         include_outro=True,
@@ -669,7 +669,7 @@ def test_job_concat_success_enqueues_job_loudness(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_concat executes concat, leaves talk in assembling, and enqueues job_loudness."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
@@ -697,7 +697,7 @@ def test_job_concat_success_enqueues_job_loudness(
     db_session.expire_all()
     reloaded = db_session.get(models.Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "assembling"
+    assert reloaded.status == TalkStatus.ASSEMBLING
     job = db_session.scalars(
         select(models.Job).where(
             models.Job.talk_id == talk.id, models.Job.kind == "concat"
@@ -717,7 +717,7 @@ def test_job_loudness_success_advances_to_transcoding(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_loudness executes normalize, advances talk to transcoding, and enqueues job_transcode."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_concat.mp4")
@@ -737,7 +737,7 @@ def test_job_loudness_success_advances_to_transcoding(
     db_session.expire_all()
     reloaded = db_session.get(models.Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "transcoding"
+    assert reloaded.status == TalkStatus.TRANSCODING
     job = db_session.scalars(
         select(models.Job).where(
             models.Job.talk_id == talk.id, models.Job.kind == "loudness"
@@ -757,7 +757,7 @@ def test_job_loudness_failure_marks_talk_broken(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_loudness failure invokes _handle_failure and marks talk broken."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_concat.mp4")
@@ -788,7 +788,7 @@ def test_job_concat_failure_marks_talk_broken(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_concat failure invokes _handle_failure and marks talk broken."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
@@ -821,7 +821,7 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_intro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
 
@@ -850,7 +850,7 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
     db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_outro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
-    talk = _create_stored_talk(db_session, status="assembling")
+    talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
 

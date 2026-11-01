@@ -149,23 +149,23 @@ def test_review_forbidden_event(db_session: Session, preview_talk: models.Talk) 
 @pytest.mark.parametrize(
     "invalid_status",
     [
-        "waiting_for_files",
-        "detecting",
-        "pending_approval",
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "transcoding",
-        "uploading",
-        "done",
-        "rejected",
-        "broken",
-        "needs_work",
-        "pending_intro_outro",
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.TRANSCODING,
+        TalkStatus.UPLOADING,
+        TalkStatus.DONE,
+        TalkStatus.REJECTED,
+        TalkStatus.BROKEN,
+        TalkStatus.NEEDS_WORK,
+        TalkStatus.PENDING_INTRO_OUTRO,
     ],
 )
 def test_review_conflict_non_preview_state(
-    db_session: Session, preview_talk: models.Talk, invalid_status: str
+    db_session: Session, preview_talk: models.Talk, invalid_status: TalkStatus
 ) -> None:
     """POST /talks/{id}/review returns 409 if talk status is not 'preview'."""
     preview_talk.status = invalid_status
@@ -186,12 +186,12 @@ def test_review_conflict_non_preview_state(
 @pytest.mark.parametrize(
     ("decision", "note", "expected_status"),
     [
-        ("approve", None, "assembling"),
-        ("approve", "Looks great!", "assembling"),
-        ("needs_work", None, "pending_bounds"),
-        ("needs_work", "Audio is cut off at the start", "pending_bounds"),
-        ("reject", None, "pending_bounds"),
-        ("reject", "Not suitable for publication", "pending_bounds"),
+        ("approve", None, TalkStatus.ASSEMBLING),
+        ("approve", "Looks great!", TalkStatus.ASSEMBLING),
+        ("needs_work", None, TalkStatus.PENDING_BOUNDS),
+        ("needs_work", "Audio is cut off at the start", TalkStatus.PENDING_BOUNDS),
+        ("reject", None, TalkStatus.PENDING_BOUNDS),
+        ("reject", "Not suitable for publication", TalkStatus.PENDING_BOUNDS),
     ],
 )
 def test_review_valid_decisions_success(
@@ -199,7 +199,7 @@ def test_review_valid_decisions_success(
     preview_talk: models.Talk,
     decision: str,
     note: str | None,
-    expected_status: str,
+    expected_status: TalkStatus,
 ) -> None:
     """POST /talks/{id}/review returns 200 with ReviewResponse and atomic Review audit trail."""
     _create_api_client(db_session, event_ids=[preview_talk.event_id])
@@ -377,7 +377,7 @@ def test_handle_reject_clears_cut_bounds_reset_to_raw(
         assert reloaded is not None
         assert reloaded.cut_start is None
         assert reloaded.cut_end is None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
 
         assert not fake_storage.exists(f"{talk.id}/cut/cut.mp4")
         assert not fake_storage.exists(f"{talk.id}/preview/preview.mp4")
@@ -421,7 +421,7 @@ def test_handle_reject_storage_delete_error_resilient(
     db_session.expire_all()
     reloaded = db_session.get(models.Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "pending_bounds"
+    assert reloaded.status == TalkStatus.PENDING_BOUNDS
     assert reloaded.cut_start is None
     assert reloaded.cut_end is None
 
@@ -657,7 +657,7 @@ def test_approve_advances_to_assembling_and_dispatches_assembly(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, preview_talk.id)
         assert reloaded is not None
-        assert reloaded.status == "assembling"
+        assert reloaded.status == TalkStatus.ASSEMBLING
         assert _review_count(db_session, preview_talk.id) == 1
 
 
@@ -693,7 +693,7 @@ def test_review_needs_work_transitions_to_pending_bounds_retains_offsets_and_no_
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, preview_talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.cut_start == 12.5
         assert reloaded.cut_end == 75.0
 
@@ -740,7 +740,7 @@ def test_needs_work_subsequent_cut_overwrites_outputs(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "pending_bounds"
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS
         assert reloaded.cut_start == 10.0
         assert reloaded.cut_end == 60.0
 
@@ -775,7 +775,7 @@ def test_needs_work_subsequent_cut_overwrites_outputs(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "cutting"
+        assert reloaded.status == TalkStatus.CUTTING
         assert reloaded.cut_start == 20.0
         assert reloaded.cut_end == 50.0
 
@@ -808,7 +808,7 @@ def test_needs_work_subsequent_cut_overwrites_outputs(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "generating_previews"
+        assert reloaded.status == TalkStatus.GENERATING_PREVIEWS
 
         mock_preview_enqueue.assert_called_once()
         queued_preview = mock_preview_enqueue.call_args[0][0]
@@ -818,7 +818,7 @@ def test_needs_work_subsequent_cut_overwrites_outputs(
         db_session.expire_all()
         reloaded = db_session.get(models.Talk, talk.id)
         assert reloaded is not None
-        assert reloaded.status == "preview"
+        assert reloaded.status == TalkStatus.PREVIEW
         assert mock_preview_enqueue.call_count == 1
 
     assert fake_storage.get(f"{talk.id}/cut/cut.mp4").read_bytes() == (
@@ -1044,7 +1044,7 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
     db_session.expire_all()
     reloaded = db_session.get(models.Talk, preview_talk.id)
     assert reloaded is not None
-    assert reloaded.status == "broken"
+    assert reloaded.status == TalkStatus.BROKEN
 
     job = db_session.scalar(
         select(models.Job).where(

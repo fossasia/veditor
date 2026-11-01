@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.consts import TalkStatus
 from app.ingest import download_media_url, resolve_direct_media_url
 from app.models import Event, Job, Talk
 from app.pipeline.detect import DetectResult
@@ -67,7 +68,7 @@ def test_job_ingest_success(
     db_session.expire_all()
     reloaded = db_session.get(Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "detecting"
+    assert reloaded.status == TalkStatus.DETECTING
     job = db_session.scalars(select(Job)).one()
     assert job.status == "done"
     assert job.kind == "ingest"
@@ -275,8 +276,8 @@ def test_job_ingest_room_url_success(
     reloaded2 = db_session.get(Talk, talk2.id)
     assert reloaded1 is not None
     assert reloaded2 is not None
-    assert reloaded1.status == "detecting"
-    assert reloaded2.status == "detecting"
+    assert reloaded1.status == TalkStatus.DETECTING
+    assert reloaded2.status == TalkStatus.DETECTING
     assert reloaded1.cut_start == 0.0
     assert reloaded1.cut_end == 1800.0
     assert reloaded2.cut_start == 1800.0
@@ -322,7 +323,7 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
     db_session.expire_all()
     reloaded = db_session.get(Talk, talk.id)
     assert reloaded is not None
-    assert reloaded.status == "broken"
+    assert reloaded.status == TalkStatus.BROKEN
     job = db_session.scalars(select(Job)).one()
     assert job.status == "failed"
 
@@ -485,7 +486,7 @@ def test_seed_cut_bounds_happy_path(
     assert reloaded is not None
     assert reloaded.cut_start == pytest.approx(900.0)  # 15 min
     assert reloaded.cut_end == pytest.approx(3300.0)  # 55 min
-    assert reloaded.status == "pending_approval"
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
 
 
 def test_seed_cut_bounds_no_overwrite_when_already_set(
@@ -528,7 +529,7 @@ def test_seed_cut_bounds_no_op_without_recording_start(
     assert reloaded is not None
     assert reloaded.cut_start is None
     assert reloaded.cut_end is None
-    assert reloaded.status == "pending_approval"
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
 
 
 def test_seed_cut_bounds_talk_entirely_outside_recording(

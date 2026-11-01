@@ -49,11 +49,11 @@ TRANSITIONS: dict[TalkStatus, list[TalkStatus]] = {
 class TalkLike(Protocol):
     """Structural view of a talk that advance() needs to mutate."""
 
-    status: str
+    status: TalkStatus
     updated_at: datetime
 
 
-def advance(talk: TalkLike, new_state: str) -> TalkLike:
+def advance(talk: TalkLike, new_state: TalkStatus) -> TalkLike:
     current_state = talk.status
 
     try:

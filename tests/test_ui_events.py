@@ -1015,7 +1015,7 @@ def test_room_page_supports_status_and_search_filters(
     client: TestClient, db_session: Session
 ) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
-    talks["main_2"].status = "done"
+    talks["main_2"].status = TalkStatus.DONE
     db_session.commit()
     authenticate_client(client, org)
 
@@ -1319,7 +1319,7 @@ def test_login_next_keeps_dashboard_filters(
     client: TestClient, db_session: Session
 ) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
-    talks["main_2"].status = "done"
+    talks["main_2"].status = TalkStatus.DONE
     db_session.commit()
 
     resp = _login_via_redirect(
