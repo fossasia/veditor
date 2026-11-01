@@ -1,9 +1,10 @@
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import hash_api_key
@@ -15,31 +16,35 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
-def test_unauthenticated_studio_dashboard_redirects(client: TestClient, db_session):
+def test_unauthenticated_studio_dashboard_redirects(
+    client: TestClient, db_session: Session
+) -> None:
     """GET /studio without active session redirects to /login?next=/studio (HTTP 302)."""
     response = client.get("/studio", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["location"] == "/login?next=/studio"
 
 
-def test_unauthenticated_studio_events_redirects(client: TestClient):
+def test_unauthenticated_studio_events_redirects(client: TestClient) -> None:
     """GET /studio/events without active session redirects to /login?next=/studio/events (HTTP 302)."""
     response = client.get("/studio/events", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["location"] == "/login?next=/studio/events"
 
 
-def test_unauthenticated_studio_talk_detail_redirects(client: TestClient, db_session):
+def test_unauthenticated_studio_talk_detail_redirects(
+    client: TestClient, db_session: Session
+) -> None:
     """GET /studio/talks/{id} without active session redirects to /login?next=/studio/talks/{id} (HTTP 302)."""
     event = models.Event(name="Redirect Event")
     db_session.add(event)
@@ -62,7 +67,9 @@ def test_unauthenticated_studio_talk_detail_redirects(client: TestClient, db_ses
     assert response.headers["location"] == f"/login?next=/studio/talks/{talk.id}"
 
 
-def test_unauthenticated_dashboard_no_talk_data_leakage(client: TestClient, db_session):
+def test_unauthenticated_dashboard_no_talk_data_leakage(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify no talk data, event statistics, or room information is returned to unauthenticated callers."""
     event = models.Event(name="Confidential Event Secret-12345")
     db_session.add(event)
@@ -97,8 +104,8 @@ def test_unauthenticated_dashboard_no_talk_data_leakage(client: TestClient, db_s
 
 
 def test_authenticated_user_studio_dashboard_returns_200(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Authenticated organizer/admin session accessing /studio returns 200."""
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
@@ -117,7 +124,9 @@ def test_authenticated_user_studio_dashboard_returns_200(
     assert "text/html" in response.headers.get("content-type", "")
 
 
-def test_api_key_studio_dashboard_returns_200(client: TestClient, db_session):
+def test_api_key_studio_dashboard_returns_200(
+    client: TestClient, db_session: Session
+) -> None:
     """Machine clients sending X-API-Key continue to return HTTP 200 on /studio."""
     event = models.Event(name="API Key Event")
     db_session.add(event)
@@ -133,7 +142,9 @@ def test_api_key_studio_dashboard_returns_200(client: TestClient, db_session):
     assert "text/html" in response.headers.get("content-type", "")
 
 
-def test_api_key_cookie_studio_dashboard_returns_200(client: TestClient, db_session):
+def test_api_key_cookie_studio_dashboard_returns_200(
+    client: TestClient, db_session: Session
+) -> None:
     """Machine clients with veditor_api_key cookie continue to return HTTP 200 on /studio."""
     event = models.Event(name="Cookie API Key Event")
     db_session.add(event)
@@ -150,7 +161,9 @@ def test_api_key_cookie_studio_dashboard_returns_200(client: TestClient, db_sess
     client.cookies.clear()
 
 
-def test_sso_token_studio_dashboard_returns_200(client: TestClient, db_session):
+def test_sso_token_studio_dashboard_returns_200(
+    client: TestClient, db_session: Session
+) -> None:
     """Valid SSO token parameter ?sso_token=... operates and lands on studio dashboard."""
     event = models.Event(name="SSO Event")
     db_session.add(event)
@@ -163,8 +176,8 @@ def test_sso_token_studio_dashboard_returns_200(client: TestClient, db_session):
 
 
 def test_sso_cookie_session_studio_dashboard_returns_200(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """User with valid event-scoped SSO token in veditor_session cookie accesses /studio directly without query string."""
     event = models.Event(name="SSO Direct Cookie Event")
     db_session.add(event)
@@ -190,7 +203,9 @@ def test_sso_cookie_session_studio_dashboard_returns_200(
     client.cookies.clear()
 
 
-def test_sso_token_studio_talk_detail_returns_200(client: TestClient, db_session):
+def test_sso_token_studio_talk_detail_returns_200(
+    client: TestClient, db_session: Session
+) -> None:
     """Valid SSO token allows viewing talk detail without redirection."""
     event = models.Event(name="SSO Talk Event")
     db_session.add(event)
@@ -216,7 +231,7 @@ def test_sso_token_studio_talk_detail_returns_200(client: TestClient, db_session
     assert "SSO Talk" in response.text
 
 
-def test_invalid_api_key_studio_dashboard_returns_401(client: TestClient):
+def test_invalid_api_key_studio_dashboard_returns_401(client: TestClient) -> None:
     """Invalid API key header on /studio returns 401 and does not redirect to /login."""
     response = client.get(
         "/studio",
@@ -227,7 +242,9 @@ def test_invalid_api_key_studio_dashboard_returns_401(client: TestClient):
     assert "Invalid API Key" in response.json()["detail"]
 
 
-def test_invalid_api_key_cookie_studio_dashboard_redirects_to_login(client: TestClient):
+def test_invalid_api_key_cookie_studio_dashboard_redirects_to_login(
+    client: TestClient,
+) -> None:
     """Invalid or stale veditor_api_key cookie on /studio redirects browser to /login?next=/studio."""
     client.cookies.set("veditor_api_key", "stale_or_invalid_cookie_key")
     response = client.get("/studio", follow_redirects=False)
@@ -236,7 +253,9 @@ def test_invalid_api_key_cookie_studio_dashboard_redirects_to_login(client: Test
     client.cookies.clear()
 
 
-def test_invalid_api_key_studio_talk_detail_returns_401(client: TestClient, db_session):
+def test_invalid_api_key_studio_talk_detail_returns_401(
+    client: TestClient, db_session: Session
+) -> None:
     """Invalid API key on /studio/talks/{id} returns 401 and does not redirect to /login."""
     event = models.Event(name="Talk Detail API Key Event")
     db_session.add(event)
@@ -264,8 +283,8 @@ def test_invalid_api_key_studio_talk_detail_returns_401(client: TestClient, db_s
 
 
 def test_invalid_session_cookie_studio_talk_detail_redirects_to_login(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Caller with an invalid/expired session cookie accessing /studio/talks/{id} redirects to login."""
     event = models.Event(name="Cookie Redirect Event")
     db_session.add(event)
@@ -289,7 +308,9 @@ def test_invalid_session_cookie_studio_talk_detail_redirects_to_login(
     client.cookies.clear()
 
 
-def test_api_key_studio_dashboard_renders_scoped_talks(client: TestClient, db_session):
+def test_api_key_studio_dashboard_renders_scoped_talks(
+    client: TestClient, db_session: Session
+) -> None:
     """API key machine client on /studio sees talks for authorized events and not other events."""
     event1 = models.Event(name="Authorized Event")
     event2 = models.Event(name="Unauthorized Event")
@@ -328,8 +349,8 @@ def test_api_key_studio_dashboard_renders_scoped_talks(client: TestClient, db_se
 
 
 def test_normal_user_accessing_studio_events_redirects_to_studio_with_error(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Normal user accessing /studio/events is redirected back to /studio with error notification."""
     user = models.User(
         email="normal_user@test.com",
@@ -363,8 +384,8 @@ def test_normal_user_accessing_studio_events_redirects_to_studio_with_error(
 
 
 def test_admin_viewing_other_organizer_talk_renders_view_only_mode(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """When an admin views a talk from another organizer's event, it renders in View-Only Mode."""
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:6]}@example.com",
@@ -432,7 +453,9 @@ def test_admin_viewing_other_organizer_talk_renders_view_only_mode(
     client.cookies.clear()
 
 
-def test_admin_viewing_own_talk_renders_editable_mode(client: TestClient, db_session):
+def test_admin_viewing_own_talk_renders_editable_mode(
+    client: TestClient, db_session: Session
+) -> None:
     """When an admin views a talk from their own event, it does not enable View-Only Mode."""
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
@@ -496,8 +519,8 @@ def test_admin_viewing_own_talk_renders_editable_mode(client: TestClient, db_ses
 
 
 def test_organizer_viewing_own_talk_renders_editable_mode(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """When an organizer views their own talk, it does not enable View-Only Mode."""
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:6]}@example.com",

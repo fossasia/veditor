@@ -2,11 +2,12 @@ import hashlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Cookie, Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -95,14 +96,13 @@ def _normalize_auth_value(value: str | None) -> str | None:
 
 def lock_active_admins(session: Session) -> list[int]:
     """Locks active administrator rows in ascending ID order and returns their IDs."""
-    rows = (
-        session.query(models.User.id)
-        .filter(models.User.role == "admin", models.User.is_active.is_(True))
+    rows = session.scalars(
+        select(models.User.id)
+        .where(models.User.role == "admin", models.User.is_active.is_(True))
         .order_by(models.User.id.asc())
         .with_for_update()
-        .all()
-    )
-    return [int(row[0]) for row in rows]
+    ).all()
+    return [int(row) for row in rows]
 
 
 def get_client(
@@ -117,8 +117,8 @@ def get_client(
         )
 
     hashed_key = hash_api_key(api_key)
-    client = (
-        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    client = db.scalar(
+        select(models.Client).where(models.Client.hashed_key == hashed_key)
     )
 
     if not client:
@@ -142,13 +142,17 @@ def get_client(
 
     if should_update:
         client.last_used_at = now
-        # Update last_used_at out-of-band using an isolated session so we never
+        # Update last_used_at out-of-band using an isolated transaction so we never
         # prematurely commit the request session or risk detaching models on rollback.
+        # Binding to db.get_bind() yields a fresh pooled connection in production and
+        # joins the test transaction under the db_session fixture.
         try:
-            with SessionLocal() as separate_db:
-                separate_db.query(models.Client).filter(
-                    models.Client.id == client.id
-                ).update({"last_used_at": now}, synchronize_session=False)
+            with SessionLocal(bind=db.get_bind()) as separate_db:
+                separate_db.execute(
+                    update(models.Client)
+                    .where(models.Client.id == client.id)
+                    .values(last_used_at=now)
+                )
                 separate_db.commit()
         except SQLAlchemyError as exc:
             logger.debug("Failed to update client last_used_at: %s", exc)
@@ -161,7 +165,7 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
     Validates that the provided client has access to the specified event_id.
     Raises a 403 Forbidden exception if the client does not have access.
     """
-    if getattr(client, "is_platform", False):
+    if client.is_platform:
         return
     if event_id not in client.event_ids:
         raise HTTPException(
@@ -178,8 +182,8 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
             headers={"WWW-Authenticate": "Bearer"},
         )
     hashed_key = hash_api_key(raw_key)
-    client = (
-        db.query(models.Client).filter(models.Client.hashed_key == hashed_key).first()
+    client = db.scalar(
+        select(models.Client).where(models.Client.hashed_key == hashed_key)
     )
     if not client:
         raise HTTPException(
@@ -194,7 +198,7 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
         role=AuthRole.ADMIN,
         source="api_key",
         event_ids=list(client.event_ids or []),
-        is_platform=bool(getattr(client, "is_platform", False)),
+        is_platform=client.is_platform,
     )
 
 
@@ -222,27 +226,23 @@ def get_current_user(
     if db is None:
         raise RuntimeError("Database session is required")
 
-    app_overrides = (
-        getattr(getattr(request, "app", None), "dependency_overrides", {})
-        if request
-        else {}
-    )
+    app_overrides: dict[Any, Any] = request.app.dependency_overrides if request else {}
     if get_client in app_overrides:
         client_fn = app_overrides[get_client]
         client = client_fn() if callable(client_fn) else client_fn
         if client:
             return CurrentUser(
                 user_id=None,
-                client_id=getattr(client, "id", None),
+                client_id=client.id,
                 email=None,
                 role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
-                is_platform=bool(getattr(client, "is_platform", False)),
+                is_platform=bool(client.is_platform),
             )
 
-    req_headers = getattr(request, "headers", {}) or {}
-    req_cookies = getattr(request, "cookies", {}) or {}
+    req_headers = request.headers
+    req_cookies = request.cookies
 
     # 1. Explicit machine client header (X-API-Key)
     header_key = _normalize_auth_value(
@@ -311,10 +311,8 @@ def get_current_user(
 
             payload = decode_session_token(raw_cookie)
             if payload:
-                user = (
-                    db.query(models.User)
-                    .filter(models.User.id == payload["user_id"])
-                    .first()
+                user = db.scalar(
+                    select(models.User).where(models.User.id == payload["user_id"])
                 )
                 if (
                     not user
@@ -346,10 +344,10 @@ def get_current_user(
     if cookie_api is None:
         cookie_api = _normalize_auth_value(req_cookies.get("veditor_api_key"))
     if cookie_api:
-        client = (
-            db.query(models.Client)
-            .filter(models.Client.hashed_key == hash_api_key(cookie_api))
-            .first()
+        client = db.scalar(
+            select(models.Client).where(
+                models.Client.hashed_key == hash_api_key(cookie_api)
+            )
         )
         if client:
             return CurrentUser(
@@ -359,7 +357,7 @@ def get_current_user(
                 role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
-                is_platform=bool(getattr(client, "is_platform", False)),
+                is_platform=client.is_platform,
             )
         # Ignore stale machine cookies so a later bearer credential can be used.
 
@@ -390,10 +388,8 @@ def get_current_user(
             )
         payload = decode_access_token(token)
         if payload:
-            user = (
-                db.query(models.User)
-                .filter(models.User.id == payload["user_id"])
-                .first()
+            user = db.scalar(
+                select(models.User).where(models.User.id == payload["user_id"])
             )
             if (
                 not user
@@ -500,7 +496,7 @@ def check_event_access(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Client is not authorized to access this event",
             )
-        event = db.query(models.Event).filter(models.Event.id == event_id).first()
+        event = db.scalar(select(models.Event).where(models.Event.id == event_id))
         if not event:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -508,7 +504,7 @@ def check_event_access(
             )
         return event
 
-    event = db.query(models.Event).filter(models.Event.id == event_id).first()
+    event = db.scalar(select(models.Event).where(models.Event.id == event_id))
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -557,7 +553,7 @@ def check_talk_access(
     target_talk = (
         talk
         if isinstance(talk, models.Talk)
-        else db.query(models.Talk).filter(models.Talk.id == talk).first()
+        else db.scalar(select(models.Talk).where(models.Talk.id == talk))
     )
     if not target_talk:
         raise HTTPException(
@@ -587,10 +583,8 @@ def check_talk_access(
                 if user.role == AuthRole.USER:
                     user.role = AuthRole.SPEAKER
                     if user.user_id:
-                        db_u = (
-                            db.query(models.User)
-                            .filter(models.User.id == user.user_id)
-                            .first()
+                        db_u = db.scalar(
+                            select(models.User).where(models.User.id == user.user_id)
                         )
                         if db_u and db_u.role == AuthRole.USER:
                             db_u.role = AuthRole.SPEAKER
@@ -625,16 +619,16 @@ def check_talk_access(
         if user.role == AuthRole.USER:
             user.role = AuthRole.SPEAKER
             if user.user_id:
-                db_u = (
-                    db.query(models.User).filter(models.User.id == user.user_id).first()
+                db_u = db.scalar(
+                    select(models.User).where(models.User.id == user.user_id)
                 )
                 if db_u and db_u.role == AuthRole.USER:
                     db_u.role = AuthRole.SPEAKER
             db.commit()
         return target_talk
 
-    event = (
-        db.query(models.Event).filter(models.Event.id == target_talk.event_id).first()
+    event = db.scalar(
+        select(models.Event).where(models.Event.id == target_talk.event_id)
     )
     if event and user.user_id is not None and event.created_by_user_id == user.user_id:
         return target_talk

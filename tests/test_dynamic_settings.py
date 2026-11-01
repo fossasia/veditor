@@ -1,30 +1,45 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, delete
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.config import (
     EXCLUDED_SETTING_KEYS,
+    PREVIEW_PRESETS,
+    PreviewPreset,
+    _cast_setting_value,
     get_setting,
     settings,
 )
+from app.consts import TalkStatus
 from app.db import Base
-from app.routes.admin import _validate_system_setting
+from app.pipeline.detect import DetectResult
+from app.routes.admin import _get_all_settings_data, _validate_system_setting
+from app.tasks import (
+    TRANSCODE_PRESETS,
+    job_detect,
+    job_loudness,
+    job_preview,
+    job_transcode,
+)
 
 engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
-def test_system_setting_model_crud(db_session):
+def test_system_setting_model_crud(db_session: Session) -> None:
     setting = models.SystemSetting(
         key="test_key",
         value="42",
@@ -42,14 +57,16 @@ def test_system_setting_model_crud(db_session):
 
     retrieved.value = "99"
     db_session.flush()
-    assert db_session.get(models.SystemSetting, "test_key").value == "99"
+    reloaded = db_session.get(models.SystemSetting, "test_key")
+    assert reloaded is not None
+    assert reloaded.value == "99"
 
     db_session.delete(retrieved)
     db_session.flush()
     assert db_session.get(models.SystemSetting, "test_key") is None
 
 
-def test_get_setting_fallback(db_session):
+def test_get_setting_fallback(db_session: Session) -> None:
     # Without any DB override, should return definition default
     keys = (
         "detect_duration_tolerance_seconds",
@@ -57,9 +74,9 @@ def test_get_setting_fallback(db_session):
         "default_preview_preset",
         "default_transcode_preset",
     )
-    db_session.query(models.SystemSetting).filter(
-        models.SystemSetting.key.in_(keys)
-    ).delete(synchronize_session=False)
+    db_session.execute(
+        delete(models.SystemSetting).where(models.SystemSetting.key.in_(keys))
+    )
     db_session.flush()
 
     val = get_setting("detect_duration_tolerance_seconds", db=db_session)
@@ -77,7 +94,7 @@ def test_get_setting_fallback(db_session):
     assert val_transcode == "1080p_default"
 
 
-def test_get_setting_db_override(db_session):
+def test_get_setting_db_override(db_session: Session) -> None:
     # Insert override into DB
     override = models.SystemSetting(
         key="detect_duration_tolerance_seconds",
@@ -94,7 +111,7 @@ def test_get_setting_db_override(db_session):
     assert isinstance(val, float)
 
 
-def test_dynamic_settings_override(db_session):
+def test_dynamic_settings_override(db_session: Session) -> None:
     # Test that get_setting respects DB override for default_preview_preset
     override = models.SystemSetting(
         key="default_preview_preset",
@@ -108,9 +125,10 @@ def test_dynamic_settings_override(db_session):
     assert get_setting("default_preview_preset", db=db_session) == "big_video"
 
 
-def test_preview_preset_options_includes_configured_presets(db_session, monkeypatch):
-    from app.config import PreviewPreset
-    from app.routes.admin import _get_all_settings_data
+def test_preview_preset_options_includes_configured_presets(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
 
     custom = dict(settings.preview_presets)
     custom["custom_hd_preview"] = PreviewPreset(
@@ -134,7 +152,7 @@ def test_preview_preset_options_includes_configured_presets(db_session, monkeypa
     assert "1280x720" in custom_opt.label
 
 
-def test_secrets_exclusion(db_session):
+def test_secrets_exclusion(db_session: Session) -> None:
     # Attempting to override a secret key in DB should be ignored by get_setting
     override = models.SystemSetting(
         key="session_secret",
@@ -149,7 +167,7 @@ def test_secrets_exclusion(db_session):
     assert val != "malicious_override_key"
 
 
-def test_validate_system_setting():
+def test_validate_system_setting() -> None:
     # Valid values
     _validate_system_setting("detect_duration_tolerance_seconds", "60.0")
     _validate_system_setting("detect_duration_tolerance_seconds", "120.0")
@@ -217,8 +235,7 @@ def test_validate_system_setting():
         _validate_system_setting("storage_backend", "val")
 
 
-def test_cast_setting_value_rejects_nan_inf():
-    from app.config import _cast_setting_value
+def test_cast_setting_value_rejects_nan_inf() -> None:
 
     # For float definitions, NaN or Inf must fall back to default
     assert _cast_setting_value("detect_duration_tolerance_seconds", "nan") == 300.0
@@ -226,13 +243,12 @@ def test_cast_setting_value_rejects_nan_inf():
     assert _cast_setting_value("loudness_target_lufs", "nan") == -16.0
 
 
-def test_get_setting_fallback_default():
+def test_get_setting_fallback_default() -> None:
     val = get_setting("non_existent_key", default="fallback_val")
     assert val == "fallback_val"
 
 
-def test_get_setting_db_failure_logged(caplog):
-    from unittest.mock import MagicMock
+def test_get_setting_db_failure_logged(caplog: pytest.LogCaptureFixture) -> None:
 
     mock_db = MagicMock()
     mock_db.get.side_effect = RuntimeError("DB connection dropped")
@@ -248,12 +264,7 @@ def test_get_setting_db_failure_logged(caplog):
     assert "DB connection dropped" in caplog.text
 
 
-def test_pipeline_job_detect_dynamic_tolerance():
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.pipeline.detect import DetectResult
-    from app.tasks import job_detect
+def test_pipeline_job_detect_dynamic_tolerance() -> None:
 
     override = models.SystemSetting(
         key="detect_duration_tolerance_seconds",
@@ -284,7 +295,7 @@ def test_pipeline_job_detect_dynamic_tolerance():
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/fake/path.mp4")
 
-    def mock_db():
+    def mock_db() -> MagicMock:
         session = MagicMock()
         session.get.side_effect = lambda model, oid: (
             talk if model == models.Talk else (job if model == models.Job else override)
@@ -293,7 +304,7 @@ def test_pipeline_job_detect_dynamic_tolerance():
         return session
 
     with (
-        patch("app.tasks.SessionLocal", side_effect=mock_db),
+        patch("app.db.SessionLocal", side_effect=mock_db),
         patch("app.tasks.get_storage_backend", return_value=mock_storage),
         patch("app.tasks.detect", mock_detect),
     ):
@@ -303,11 +314,7 @@ def test_pipeline_job_detect_dynamic_tolerance():
     assert mock_detect.call_args.kwargs.get("tolerance_seconds") == 120.0
 
 
-def test_pipeline_job_loudness_dynamic_lufs():
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.tasks import job_loudness
+def test_pipeline_job_loudness_dynamic_lufs() -> None:
 
     override = models.SystemSetting(
         key="loudness_target_lufs",
@@ -330,7 +337,7 @@ def test_pipeline_job_loudness_dynamic_lufs():
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path("/fake/path.mp4")
 
-    def mock_db():
+    def mock_db() -> MagicMock:
         session = MagicMock()
         session.get.side_effect = lambda model, oid: (
             talk if model == models.Talk else (job if model == models.Job else override)
@@ -339,7 +346,7 @@ def test_pipeline_job_loudness_dynamic_lufs():
         return session
 
     with (
-        patch("app.tasks.SessionLocal", side_effect=mock_db),
+        patch("app.db.SessionLocal", side_effect=mock_db),
         patch("app.tasks.get_storage_backend", return_value=mock_storage),
         patch("app.tasks.normalize", mock_normalize),
         patch("app.tasks.heavy_queue.enqueue"),
@@ -350,12 +357,7 @@ def test_pipeline_job_loudness_dynamic_lufs():
     assert mock_normalize.call_args.kwargs.get("target_lufs") == -23.0
 
 
-def test_pipeline_job_preview_dynamic_preset():
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.config import PREVIEW_PRESETS
-    from app.tasks import job_preview
+def test_pipeline_job_preview_dynamic_preset() -> None:
 
     override = models.SystemSetting(
         key="default_preview_preset",
@@ -383,7 +385,10 @@ def test_pipeline_job_preview_dynamic_preset():
     session.__enter__.return_value = session
     session.query.return_value.filter.return_value.all.return_value = []
 
-    def mock_get(model, ident):
+    def mock_get(
+        model: type[models.Talk | models.Job | models.SystemSetting],
+        ident: object,
+    ) -> models.Talk | models.Job | models.SystemSetting | None:
         if model is models.Talk:
             return talk
         if model is models.Job:
@@ -395,7 +400,7 @@ def test_pipeline_job_preview_dynamic_preset():
     session.get.side_effect = mock_get
 
     with (
-        patch("app.tasks.SessionLocal", return_value=session),
+        patch("app.db.SessionLocal", return_value=session),
         patch("app.tasks.get_storage_backend", return_value=mock_storage),
         patch("app.tasks.generate_preview", mock_preview),
         patch("app.tasks._cache_waveform"),
@@ -404,15 +409,11 @@ def test_pipeline_job_preview_dynamic_preset():
 
     mock_preview.assert_called_once()
     assert mock_preview.call_args.kwargs.get("preset") == PREVIEW_PRESETS["big_video"]
-    assert talk.status == "preview"
+    assert talk.status == TalkStatus.PREVIEW
     assert job.status == "done"
 
 
-def test_pipeline_job_transcode_dynamic_preset():
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
-    from app.tasks import TRANSCODE_PRESETS, job_transcode
+def test_pipeline_job_transcode_dynamic_preset() -> None:
 
     override = models.SystemSetting(
         key="default_transcode_preset",
@@ -438,7 +439,10 @@ def test_pipeline_job_transcode_dynamic_preset():
     session = MagicMock()
     session.__enter__.return_value = session
 
-    def mock_get(model, ident):
+    def mock_get(
+        model: type[models.Talk | models.Job | models.SystemSetting],
+        ident: object,
+    ) -> models.Talk | models.Job | models.SystemSetting | None:
         if model is models.Talk:
             return talk
         if model is models.Job:
@@ -450,7 +454,7 @@ def test_pipeline_job_transcode_dynamic_preset():
     session.get.side_effect = mock_get
 
     with (
-        patch("app.tasks.SessionLocal", return_value=session),
+        patch("app.db.SessionLocal", return_value=session),
         patch("app.tasks.get_storage_backend", return_value=mock_storage),
         patch("app.tasks.transcode", mock_transcode),
         patch("app.tasks.light_queue.enqueue"),
@@ -459,5 +463,5 @@ def test_pipeline_job_transcode_dynamic_preset():
 
     mock_transcode.assert_called_once()
     assert mock_transcode.call_args.kwargs.get("preset") == TRANSCODE_PRESETS["720p"]
-    assert talk.status == "uploading"
+    assert talk.status == TalkStatus.UPLOADING
     assert job.status == "done"
