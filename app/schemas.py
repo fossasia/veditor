@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.consts import SSOScopeType
+from app.consts import AuthRole, SSOScopeType
 from app.retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -484,7 +484,7 @@ class OrganizerRequestCreate(BaseModel):
 
 
 class UserPromoteRequest(BaseModel):
-    role: Literal["user", "organizer"]
+    role: Literal[AuthRole.USER, AuthRole.ORGANIZER]
 
 
 class EventSSOTokenRequest(BaseModel):
