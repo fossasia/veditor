@@ -17,6 +17,9 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
@@ -266,8 +269,16 @@ class Talk(Base):
     room: Mapped[str | None] = mapped_column(String(255))
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default=TalkStatus.WAITING_FILES
+    status: Mapped[TalkStatus] = mapped_column(
+        SAEnum(
+            TalkStatus,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+        default=TalkStatus.WAITING_FILES,
     )
     speaker_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True

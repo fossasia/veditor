@@ -140,7 +140,7 @@ def _handle_failure(
             TalkStatus.DONE,
             TalkStatus.REJECTED,
         ):
-            advance(talk, "broken")
+            advance(talk, TalkStatus.BROKEN)
         db.commit()
 
 
@@ -581,7 +581,7 @@ def job_detect(
                     talk.cut_start = offset_s
                     talk.cut_end = offset_e
 
-            advance(talk, "pending_approval")
+            advance(talk, TalkStatus.PENDING_APPROVAL)
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
@@ -660,7 +660,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "generating_previews")
+            advance(talk, TalkStatus.GENERATING_PREVIEWS)
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
@@ -1088,7 +1088,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "preview")
+            advance(talk, TalkStatus.PREVIEW)
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
@@ -1224,7 +1224,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "transcoding")
+            advance(talk, TalkStatus.TRANSCODING)
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
@@ -1353,7 +1353,7 @@ def job_transcode(
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "uploading")
+            advance(talk, TalkStatus.UPLOADING)
             job.status = "done"
             job.progress_pct = 100.0
             job.updated_at = datetime.now(UTC)
@@ -1419,7 +1419,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "done")
+            advance(talk, TalkStatus.DONE)
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()
