@@ -1072,6 +1072,7 @@ def test_dashboard_room_filter_and_sorting(
 
     nul_search = client.get(f"/studio?event_id={event.id}&q=%00")
     assert nul_search.status_code == 200
+    assert "Zeta Opening" in nul_search.text
 
 
 def test_event_page_shows_event_title_header(
