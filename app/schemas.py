@@ -2,7 +2,7 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.consts import SSOScopeType
 from app.retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -56,7 +57,7 @@ class EventBase(BaseModel):
         return validate_timezone(v)
 
     @model_validator(mode="after")
-    def _validate_dates(self):
+    def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date must be greater than or equal to start_date")
         return self
@@ -89,7 +90,7 @@ class EventUpdate(BaseModel):
         return validate_timezone(v)
 
     @model_validator(mode="after")
-    def _validate_dates(self):
+    def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date must be greater than or equal to start_date")
         return self
@@ -243,7 +244,7 @@ class TalkRead(TalkBase):
 
     @field_validator("include_intro", "include_outro", mode="before")
     @classmethod
-    def _coerce_bool(cls, v):
+    def _coerce_bool(cls, v: Any) -> bool:
         return False if v is None else bool(v)
 
 
@@ -265,7 +266,7 @@ class JobRead(JobBase):
     talk_id: int
     model_config = ConfigDict(from_attributes=True)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
@@ -292,7 +293,7 @@ class JobRead(JobBase):
             end = datetime.now(UTC)
         return max(0.0, round((end - started).total_seconds(), 2))
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def estimated_remaining(self) -> float | None:
         """
@@ -376,7 +377,7 @@ class RecordingIngestRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def exactly_one_path(self):
+    def exactly_one_path(self) -> Self:
         if bool(self.source_path) == bool(self.relative_key):
             raise ValueError("exactly one of source_path or relative_key is required")
         return self
@@ -414,7 +415,7 @@ class CutBoundsRequest(BaseModel):
     note: str | None = None
 
     @model_validator(mode="after")
-    def parse_and_validate(self):
+    def parse_and_validate(self) -> Self:
         start_s = _parse_hhmmss(self.cut_start)
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
@@ -440,7 +441,7 @@ class IntroOutroRequest(BaseModel):
     speaker_email: str | None = None
 
     @model_validator(mode="after")
-    def validate_custom_paths(self):
+    def validate_custom_paths(self) -> Self:
         if (
             self.include_intro
             and self.intro_source == "custom"
@@ -529,7 +530,7 @@ class ApiKeyCreatedResponse(BaseModel):
 class SSOTokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
-    scope_type: Literal["event", "talk"]
+    scope_type: SSOScopeType
     scope_id: int
     role: str
     expires_in_seconds: int

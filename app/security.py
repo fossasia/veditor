@@ -15,6 +15,8 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 
 from app.config import ALLOWED_JWT_ALGORITHMS, settings
 from app.consts import AuthRole, SSOScopeType
+from app.db import new_session
+from app.models import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,10 +184,7 @@ def verify_session_token_not_revoked(
         user_id = payload.get("user_id")
         if user_id:
             try:
-                from app.db import SessionLocal
-                from app.models import User
-
-                with SessionLocal() as db:
+                with new_session() as db:
                     db_user = db.get(User, user_id)
                     if db_user:
                         session_revoked_at = db_user.session_revoked_at
@@ -540,14 +539,19 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             return None
         if "user_id" in payload or "sub" in payload:
             return None
+        raw_scope_type = payload.get("scope_type")
+        if not isinstance(raw_scope_type, str):
+            return None
         try:
-            scope_type_enum = SSOScopeType(payload.get("scope_type"))
+            scope_type_enum = SSOScopeType(raw_scope_type)
         except ValueError, TypeError:
             return None
         scope_id = payload.get("scope_id")
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
         raw_role = payload.get("role")
+        if not isinstance(raw_role, str):
+            return None
         try:
             role = AuthRole(raw_role)
         except ValueError, TypeError:

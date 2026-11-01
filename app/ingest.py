@@ -49,6 +49,10 @@ def stage_recording(
     talk_id: int, payload: RecordingIngestRequest, backend: StorageBackend
 ) -> str:
     path_str = payload.source_path or payload.relative_key
+    if path_str is None:
+        raise IngestPathRejectedError(
+            "exactly one of source_path or relative_key is required"
+        )
     if "\0" in path_str:
         raise IngestPathRejectedError("Invalid path")
 

@@ -337,9 +337,9 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
         if db is not None:
             row = db.get(SystemSetting, normalized_key)
         else:
-            from app.db import SessionLocal
+            from app.db import new_session
 
-            with SessionLocal() as session:
+            with new_session() as session:
                 row = session.get(SystemSetting, normalized_key)
         if (
             row is not None

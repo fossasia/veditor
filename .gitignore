@@ -71,5 +71,7 @@ dmypy.json
 
 # Project specific
 tmp/
+.agents/*
+!.agents/skills/
 
 /data

@@ -1,10 +1,11 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models, schemas
 from app.auth import CurrentUser, get_current_user
@@ -20,7 +21,7 @@ client = TestClient(app)
 
 
 @pytest.fixture
-def db_session():
+def db_session() -> Iterator[Session]:
     Base.metadata.create_all(bind=engine)
     connection = engine.connect()
     transaction = connection.begin()
@@ -31,14 +32,14 @@ def db_session():
     connection.close()
 
 
-def _event(db, name):
+def _event(db: Session, name: str) -> models.Event:
     event = models.Event(name=name)
     db.add(event)
     db.flush()
     return event
 
 
-def test_room_names_are_event_scoped_and_case_insensitive(db_session):
+def test_room_names_are_event_scoped_and_case_insensitive(db_session: Session) -> None:
     first = _event(db_session, "Rooms event one")
     second = _event(db_session, "Rooms event two")
     db_session.add(models.Room(event_id=first.id, name="Hall A"))
@@ -52,7 +53,9 @@ def test_room_names_are_event_scoped_and_case_insensitive(db_session):
     db_session.flush()
 
 
-def test_room_rename_and_delete_keep_talk_assignments_consistent(db_session):
+def test_room_rename_and_delete_keep_talk_assignments_consistent(
+    db_session: Session,
+) -> None:
     event = _event(db_session, "Room assignment event")
     room = models.Room(event_id=event.id, name="Hall A")
     db_session.add(room)
@@ -71,33 +74,39 @@ def test_room_rename_and_delete_keep_talk_assignments_consistent(db_session):
     db_session.flush()
 
     room.name = "Main Hall"
-    db_session.query(models.Talk).filter(
-        models.Talk.event_id == event.id, models.Talk.room == "Hall A"
-    ).update({models.Talk.room: room.name}, synchronize_session=False)
+    db_session.execute(
+        update(models.Talk)
+        .where(models.Talk.event_id == event.id, models.Talk.room == "Hall A")
+        .values(room=room.name)
+    )
     db_session.flush()
     db_session.expire_all()
     assert {
         talk.room
-        for talk in db_session.query(models.Talk).filter(
-            models.Talk.event_id == event.id
+        for talk in db_session.scalars(
+            select(models.Talk).where(models.Talk.event_id == event.id)
         )
     } == {"Main Hall"}
 
-    db_session.query(models.Talk).filter(
-        models.Talk.event_id == event.id, models.Talk.room == room.name
-    ).update({models.Talk.room: None}, synchronize_session=False)
+    db_session.execute(
+        update(models.Talk)
+        .where(models.Talk.event_id == event.id, models.Talk.room == room.name)
+        .values(room=None)
+    )
     db_session.delete(room)
     db_session.flush()
     db_session.expire_all()
     assert all(
         talk.room is None
-        for talk in db_session.query(models.Talk)
-        .filter(models.Talk.event_id == event.id)
-        .all()
+        for talk in db_session.scalars(
+            select(models.Talk).where(models.Talk.event_id == event.id)
+        )
     )
 
 
-def test_room_assignment_normalizes_blank_and_reuses_pending_room(db_session):
+def test_room_assignment_normalizes_blank_and_reuses_pending_room(
+    db_session: Session,
+) -> None:
     event = _event(db_session, "Room normalization event")
     assert _ensure_event_room(db_session, event.id, "   ") is None
     assert _ensure_event_room(db_session, event.id, None) is None
@@ -106,10 +115,19 @@ def test_room_assignment_normalizes_blank_and_reuses_pending_room(db_session):
     second = _ensure_event_room(db_session, event.id, "hall a")
     assert first == "Hall A"
     assert second == "Hall A"
-    assert db_session.query(models.Room).filter_by(event_id=event.id).count() == 1
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(models.Room)
+            .where(models.Room.event_id == event.id)
+        )
+        == 1
+    )
 
 
-def test_authenticated_room_endpoints_preserve_event_isolation(db_session):
+def test_authenticated_room_endpoints_preserve_event_isolation(
+    db_session: Session,
+) -> None:
     owner_id = 7001
     db_session.add(
         models.User(
@@ -150,10 +168,14 @@ def test_authenticated_room_endpoints_preserve_event_isolation(db_session):
     assert [item.name for item in listed] == ["Main Hall"]
     delete_event_room(event.id, room.id, user, db_session)
     db_session.expire_all()
-    assert db_session.get(models.Talk, other_talk.id).room == "Hall A"
+    other_after = db_session.get(models.Talk, other_talk.id)
+    assert other_after is not None
+    assert other_after.room == "Hall A"
 
 
-def test_room_listing_does_not_mutate_legacy_talk_room_values(db_session):
+def test_room_listing_does_not_mutate_legacy_talk_room_values(
+    db_session: Session,
+) -> None:
     owner_id = 7002
     db_session.add(
         models.User(
@@ -179,11 +201,20 @@ def test_room_listing_does_not_mutate_legacy_talk_room_values(db_session):
 
     listed = list_event_rooms(event.id, user, db_session)
     assert listed == []
-    assert db_session.query(models.Room).filter_by(event_id=event.id).count() == 0
-    assert db_session.get(models.Talk, talk.id).room == "  Legacy Hall  "
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(models.Room)
+            .where(models.Room.event_id == event.id)
+        )
+        == 0
+    )
+    reloaded_talk = db_session.get(models.Talk, talk.id)
+    assert reloaded_talk is not None
+    assert reloaded_talk.room == "  Legacy Hall  "
 
 
-def test_room_http_endpoints_enforce_event_isolation(db_session):
+def test_room_http_endpoints_enforce_event_isolation(db_session: Session) -> None:
     owner_id = 7003
     db_session.add(
         models.User(
@@ -226,7 +257,7 @@ def test_room_http_endpoints_enforce_event_isolation(db_session):
         app.dependency_overrides.clear()
 
 
-def test_room_http_mutations_normalize_legacy_assignments(db_session):
+def test_room_http_mutations_normalize_legacy_assignments(db_session: Session) -> None:
     owner_id = 7004
     db_session.add(
         models.User(
@@ -270,19 +301,29 @@ def test_room_http_mutations_normalize_legacy_assignments(db_session):
         )
         assert renamed.status_code == 200
         db_session.expire_all()
-        assert db_session.get(models.Talk, target_talk.id).room == "Main Hall"
-        assert db_session.get(models.Talk, other_talk.id).room == " hall a "
+        target_after = db_session.get(models.Talk, target_talk.id)
+        assert target_after is not None
+        assert target_after.room == "Main Hall"
+        other_after = db_session.get(models.Talk, other_talk.id)
+        assert other_after is not None
+        assert other_after.room == " hall a "
 
         deleted = client.delete(f"/events/{event.id}/rooms/{room.id}")
         assert deleted.status_code == 200
         db_session.expire_all()
-        assert db_session.get(models.Talk, target_talk.id).room is None
-        assert db_session.get(models.Talk, other_talk.id).room == " hall a "
+        target_after = db_session.get(models.Talk, target_talk.id)
+        assert target_after is not None
+        assert target_after.room is None
+        other_after = db_session.get(models.Talk, other_talk.id)
+        assert other_after is not None
+        assert other_after.room == " hall a "
     finally:
         app.dependency_overrides.clear()
 
 
-def test_room_listing_is_read_only_for_case_and_whitespace_variants(db_session):
+def test_room_listing_is_read_only_for_case_and_whitespace_variants(
+    db_session: Session,
+) -> None:
     owner_id = 7005
     db_session.add(
         models.User(
@@ -322,27 +363,43 @@ def test_room_listing_is_read_only_for_case_and_whitespace_variants(db_session):
         first = client.get(f"/events/{event.id}/rooms")
         assert first.status_code == 200
         assert first.json() == []
-        assert db_session.query(models.Room).filter_by(event_id=event.id).count() == 0
+        assert (
+            db_session.scalar(
+                select(func.count())
+                .select_from(models.Room)
+                .where(models.Room.event_id == event.id)
+            )
+            == 0
+        )
         assert {
             talk.room
-            for talk in db_session.query(models.Talk)
-            .filter(models.Talk.event_id == event.id)
-            .all()
+            for talk in db_session.scalars(
+                select(models.Talk).where(models.Talk.event_id == event.id)
+            )
         } == {"Hall A", " hall a ", "HALL A"}
-        assert db_session.get(models.Talk, other_talk.id).room == " hall a "
+        other_after = db_session.get(models.Talk, other_talk.id)
+        assert other_after is not None
+        assert other_after.room == " hall a "
 
         second = client.get(f"/events/{event.id}/rooms")
         assert second.status_code == 200
         assert second.json() == []
-        assert db_session.query(models.Room).filter_by(event_id=event.id).count() == 0
+        assert (
+            db_session.scalar(
+                select(func.count())
+                .select_from(models.Room)
+                .where(models.Room.event_id == event.id)
+            )
+            == 0
+        )
     finally:
         app.dependency_overrides.clear()
 
 
 @pytest.mark.parametrize("duplicate_name", ["hall a", " HALL A "])
 def test_room_http_creation_validates_uniqueness_and_event_scope(
-    db_session, duplicate_name
-):
+    db_session: Session, duplicate_name: str
+) -> None:
     owner_id = 7006
     db_session.add(
         models.User(
@@ -381,9 +438,11 @@ def test_room_http_creation_validates_uniqueness_and_event_scope(
         assert same_name_other_event.status_code == 201
         assert same_name_other_event.json()["event_id"] == other_event_id
         assert (
-            db_session.query(models.Room)
-            .filter(models.Room.event_id == other_event_id)
-            .count()
+            db_session.scalar(
+                select(func.count())
+                .select_from(models.Room)
+                .where(models.Room.event_id == other_event_id)
+            )
             == 1
         )
 

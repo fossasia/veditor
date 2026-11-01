@@ -8,8 +8,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app import tasks as app_tasks
 from app.states import advance
 from app.storage import StorageBackend, cleanup_intermediates
+from app.webhook import dispatch_talk_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +60,6 @@ def _record_review_and_advance(
 
     if target_state == "pending_bounds":
         try:
-            from app.webhook import dispatch_talk_webhook
-
             dispatch_talk_webhook("talk.bounds_pending", talk, db)
         except Exception as webhook_err:  # noqa: BLE001
             logger.warning(
@@ -85,14 +85,13 @@ def handle_approve(
         talk, payload, "assembling", db, user_id=user_id
     )
 
-    from app.tasks import dispatch_assembly
-
     try:
-        dispatch_assembly(talk.id, cut_key)
+        app_tasks.dispatch_assembly(talk.id, cut_key)
     except Exception:
         advance(talk, "broken")
-        log_key = f"{talk.id}/logs/assembly.log" if storage else None
-        if log_key:
+        log_key: str | None = None
+        if storage is not None:
+            log_key = f"{talk.id}/logs/assembly.log"
             try:
                 storage.put(log_key, traceback.format_exc().encode("utf-8"))
             except Exception as log_err:  # noqa: BLE001

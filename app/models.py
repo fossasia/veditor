@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, tzinfo
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -24,6 +24,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 from app.db import Base
 from app.retention import validate_retention_overrides
 
+from .consts import TalkStatus
+
 
 class RetentionOverrides(MutableDict):
     """Mutable dict tracking changes and enforcing validation on retention overrides."""
@@ -43,7 +45,7 @@ class RetentionOverrides(MutableDict):
             validate_retention_overrides({**self, key: default})
         return super().setdefault(key, default)
 
-    def __ior__(self, other: Any) -> Self:
+    def __ior__(self, other: Any) -> Self:  # type: ignore[misc]
         self.update(other)
         return self
 
@@ -178,12 +180,12 @@ class Event(Base):
         return 1
 
     @property
-    def event_tz(self) -> ZoneInfo:
-        """Return the event's ZoneInfo, falling back to UTC if unset or invalid."""
+    def event_tz(self) -> tzinfo:
+        """Return the event's timezone, falling back to UTC if unset or invalid."""
         if self.timezone:
             try:
                 return ZoneInfo(self.timezone)
-            except ZoneInfoNotFoundError, KeyError:
+            except ZoneInfoNotFoundError, ValueError, KeyError:
                 pass
         return UTC
 
@@ -265,7 +267,7 @@ class Talk(Base):
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="waiting_for_files"
+        String(50), nullable=False, default=TalkStatus.WAITING_FILES
     )
     speaker_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True

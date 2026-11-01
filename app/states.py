@@ -1,4 +1,10 @@
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from .consts import TalkStatus
+
+if TYPE_CHECKING:
+    from .models import Talk
 
 
 class InvalidTransitionError(Exception):
@@ -8,39 +14,54 @@ class InvalidTransitionError(Exception):
         super().__init__(f"Invalid transition from {current_state} to {new_state}")
 
 
-TRANSITIONS = {
-    "waiting_for_files": ["detecting", "broken"],
-    "detecting": ["pending_approval", "broken"],
-    "pending_approval": ["pending_intro_outro", "pending_bounds", "rejected", "broken"],
-    "pending_intro_outro": ["pending_bounds", "assembling", "broken"],
-    "pending_bounds": ["cutting", "broken"],
-    "cutting": ["generating_previews", "broken"],
-    "generating_previews": ["preview", "broken"],
-    "preview": [
-        "assembling",
-        "pending_intro_outro",
-        "needs_work",
-        "pending_bounds",
-        "rejected",
-        "broken",
+TRANSITIONS: dict[TalkStatus, list[TalkStatus]] = {
+    TalkStatus.WAITING_FILES: [TalkStatus.DETECTING, TalkStatus.BROKEN],
+    TalkStatus.DETECTING: [TalkStatus.PENDING_APPROVAL, TalkStatus.BROKEN],
+    TalkStatus.PENDING_APPROVAL: [
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.REJECTED,
+        TalkStatus.BROKEN,
     ],
-    "assembling": ["transcoding", "broken"],
-    "transcoding": ["uploading", "broken"],
-    "uploading": ["done", "broken"],
-    "needs_work": ["cutting", "broken"],
-    "done": [],
-    "rejected": [],
-    "broken": [],
+    TalkStatus.PENDING_INTRO_OUTRO: [
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.ASSEMBLING,
+        TalkStatus.BROKEN,
+    ],
+    TalkStatus.PENDING_BOUNDS: [TalkStatus.CUTTING, TalkStatus.BROKEN],
+    TalkStatus.CUTTING: [TalkStatus.GENERATING_PREVIEWS, TalkStatus.BROKEN],
+    TalkStatus.GENERATING_PREVIEWS: [TalkStatus.PREVIEW, TalkStatus.BROKEN],
+    TalkStatus.PREVIEW: [
+        TalkStatus.ASSEMBLING,
+        TalkStatus.PENDING_INTRO_OUTRO,
+        TalkStatus.NEEDS_WORK,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.REJECTED,
+        TalkStatus.BROKEN,
+    ],
+    TalkStatus.ASSEMBLING: [TalkStatus.TRANSCODING, TalkStatus.BROKEN],
+    TalkStatus.TRANSCODING: [TalkStatus.UPLOADING, TalkStatus.BROKEN],
+    TalkStatus.UPLOADING: [TalkStatus.DONE, TalkStatus.BROKEN],
+    TalkStatus.NEEDS_WORK: [TalkStatus.CUTTING, TalkStatus.BROKEN],
+    TalkStatus.DONE: [],
+    TalkStatus.REJECTED: [],
+    TalkStatus.BROKEN: [],
 }
 
 
-def advance(talk, new_state: str):
+def advance(talk: Talk, new_state: str) -> Talk:
     current_state = talk.status
 
-    if current_state not in TRANSITIONS:
+    try:
+        current = TalkStatus(current_state)
+        new = TalkStatus(new_state)
+    except ValueError as exc:
+        raise InvalidTransitionError(current_state, new_state) from exc
+
+    if current not in TRANSITIONS:
         raise InvalidTransitionError(current_state, new_state)
 
-    if new_state not in TRANSITIONS[current_state]:
+    if new not in TRANSITIONS[current]:
         raise InvalidTransitionError(current_state, new_state)
 
     talk.status = new_state
