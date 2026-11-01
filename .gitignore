@@ -73,5 +73,6 @@ dmypy.json
 tmp/
 .agents/*
 !.agents/skills/
+!.agents/REVIEW.md
 
 /data
