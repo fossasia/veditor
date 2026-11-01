@@ -1032,7 +1032,9 @@ def test_room_page_supports_status_and_search_filters(
     assert f'{clear_href} class="btn btn-ghost" id="clear-btn"' in resp.text
 
 
-def test_dashboard_room_filter_and_sorting(client: TestClient, db_session):
+def test_dashboard_room_filter_and_sorting(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
     talks["main_1"].title = "Zeta Opening"
     talks["main_2"].title = "Alpha Closing"
@@ -1046,7 +1048,7 @@ def test_dashboard_room_filter_and_sorting(client: TestClient, db_session):
     assert resp.status_code == 200
     assert "Zeta Opening" in resp.text
     assert "Alpha Closing" in resp.text
-    assert "Workshop Hands-On" not in resp.text
+    assert "ÉCOLE Session" not in resp.text
     assert "Roomless Lightning Talk" not in resp.text
     assert resp.text.index("Alpha Closing") < resp.text.index("Zeta Opening")
     assert 'name="room_filter"' in resp.text
