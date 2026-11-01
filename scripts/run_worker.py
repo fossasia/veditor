@@ -66,7 +66,7 @@ def _run_single_worker(
         )
         try:
             register_periodic_retention_sweep(queue=scheduler_queue)
-        except Exception as exc:  # noqa: BLE001
+        except (redis.exceptions.RedisError, ValueError) as exc:
             print(
                 f"Warning: Failed to register periodic retention sweep on worker startup: {exc}",
                 file=sys.stderr,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import re
@@ -29,6 +30,7 @@ from urllib.request import Request
 
 import av
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import email as app_email
 from app.config import PREVIEW_PRESETS, get_setting, settings
@@ -122,7 +124,7 @@ def _handle_failure(
     log_key = f"{talk_id}/logs/job_{job_id if job_id is not None else 'unknown'}.log"
     try:
         storage.put(log_key, log_text.encode("utf-8"))
-    except Exception as log_err:  # noqa: BLE001
+    except (OSError, ValueError, TypeError) as log_err:
         logger.warning("Failed to persist job log to storage: %s", log_err)
 
     with new_session() as db:
@@ -1314,7 +1316,7 @@ def job_transcode(
                             j.progress_pct = round(pct * 100.0, 2)
                             j.updated_at = datetime.now(UTC)
                             progress_db.commit()
-                except Exception as progress_err:  # noqa: BLE001
+                except SQLAlchemyError as progress_err:
                     logger.warning(
                         "Failed to update transcode progress in DB: %s",
                         progress_err,
@@ -1400,7 +1402,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
         try:
             with av.open(str(final_path)) as container:
                 duration_seconds = container_duration_seconds(container)
-        except Exception as exc:  # noqa: BLE001
+        except (av.FFmpegError, OSError, ValueError) as exc:
             logger.debug(
                 "Could not probe container duration for %s: %s", final_path, exc
             )
@@ -1548,7 +1550,7 @@ def job_deliver_webhook(
         signature = hmac.new(
             webhook_secret.encode("utf-8"), payload_bytes, hashlib.sha256
         ).hexdigest()
-    except Exception as exc:  # noqa: BLE001
+    except (TypeError, ValueError) as exc:
         logger.error("Failed to prepare webhook payload/signature: %s", exc)
         return False
 
@@ -1583,7 +1585,7 @@ def job_deliver_webhook(
                     resp_status,
                     attempt,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except (urllib.error.URLError, http.client.HTTPException) as exc:
             logger.warning(
                 "Webhook delivery to %s failed on attempt %d: %s",
                 redacted_url,

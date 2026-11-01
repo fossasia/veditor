@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -272,7 +273,7 @@ def test_signup_enqueue_failure_retains_user_and_shows_recovery_state(
 
     with patch(
         "app.routes.auth.light_queue.enqueue",
-        side_effect=RuntimeError("Redis connection failed"),
+        side_effect=RedisError("Redis connection failed"),
     ):
         resp = client.post(
             "/signup",
@@ -506,7 +507,8 @@ def test_verify_email_resend_redis_failure_fails_closed() -> None:
     """Verify that when Redis is unreachable, resend fails closed with HTTP 503 instead of bypassing cooldown."""
     client = TestClient(app)
     with patch(
-        "app.routes.auth.redis_conn.set", side_effect=ConnectionError("Redis down")
+        "app.routes.auth.redis_conn.set",
+        side_effect=RedisError("Redis down"),
     ):
         resp = client.post(
             "/verify-email/resend",
@@ -539,7 +541,7 @@ def test_verify_email_resend_enqueue_failure_clears_rate_key_and_returns_uniform
         patch("app.routes.auth.redis_conn.delete") as mock_delete,
         patch(
             "app.routes.auth.light_queue.enqueue",
-            side_effect=RuntimeError("Queue unavailable"),
+            side_effect=RedisError("Queue unavailable"),
         ),
     ):
         resp = client.post(

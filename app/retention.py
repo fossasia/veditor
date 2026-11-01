@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from redis.exceptions import RedisError
 from rq import Retry
+from rq.exceptions import NoSuchJobError
 from rq.job import Job
 from rq.repeat import Repeat
 from sqlalchemy import select
@@ -190,7 +192,7 @@ def run_retention_sweep(
             )
         except SQLAlchemyError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             logger.warning(
                 "Failed to process final storage for talk %s: %s",
                 talk_id,
@@ -251,7 +253,7 @@ def register_periodic_retention_sweep(
         elif existing_job:
             # Delete stale/finished/failed job so enqueue_in does not raise JobAlreadyExistsError
             existing_job.delete()
-    except Exception as exc:  # noqa: BLE001
+    except (NoSuchJobError, RedisError) as exc:
         logger.debug(
             "Periodic retention sweep job not found or connection failed: %s", exc
         )
@@ -281,7 +283,7 @@ def register_periodic_retention_sweep(
                 return Job.fetch(
                     RETENTION_SWEEP_JOB_ID, connection=target_queue.connection
                 )
-            except Exception as fetch_exc:  # noqa: BLE001
+            except (NoSuchJobError, RedisError) as fetch_exc:
                 logger.debug(
                     "Failed to fetch existing job after collision: %s", fetch_exc
                 )

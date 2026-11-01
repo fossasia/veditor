@@ -8,6 +8,7 @@ from unittest.mock import patch
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy import delete
 
 from app import models
@@ -402,7 +403,7 @@ def test_forgot_password_retry_consistency_on_enqueue_failure() -> None:
         # Existing account: enqueue failure deletes rate key and allows retry
         with patch(
             "app.routes.auth.light_queue.enqueue",
-            side_effect=RuntimeError("Redis down"),
+            side_effect=RedisError("Redis down"),
         ):
             resp1 = client.post("/forgot-password", data={"email": unique_email})
             assert resp1.status_code == 200
@@ -415,7 +416,7 @@ def test_forgot_password_retry_consistency_on_enqueue_failure() -> None:
         nonexistent = f"retry_nonexist_{uuid.uuid4().hex[:6]}@example.com"
         with patch(
             "app.routes.auth.light_queue.enqueue",
-            side_effect=RuntimeError("Redis down"),
+            side_effect=RedisError("Redis down"),
         ):
             resp3 = client.post("/forgot-password", data={"email": nonexistent})
             assert resp3.status_code == 200
@@ -448,7 +449,7 @@ def test_forgot_password_redis_down_fails_closed() -> None:
 
     with patch(
         "app.routes.auth.redis_conn.set",
-        side_effect=Exception("Redis connection refused"),
+        side_effect=RedisError("Redis connection refused"),
     ):
         resp = client.post("/forgot-password", data={"email": email})
         assert resp.status_code == 503

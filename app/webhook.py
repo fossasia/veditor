@@ -6,7 +6,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from redis.exceptions import RedisError
 from sqlalchemy import any_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import models
@@ -95,7 +97,7 @@ def dispatch_talk_webhook(
                     payload_data,
                     job_timeout=30,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except RedisError as exc:
                 logger.warning(
                     "Failed to enqueue %s webhook for talk %d to client %s: %s",
                     event_name,
@@ -103,7 +105,7 @@ def dispatch_talk_webhook(
                     client.id,
                     exc,
                 )
-    except Exception as exc:  # noqa: BLE001
+    except SQLAlchemyError as exc:
         logger.warning(
             "Failed to dispatch %s webhook for talk %d: %s",
             event_name,

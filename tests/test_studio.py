@@ -1091,7 +1091,7 @@ def test_ui_reject_talk_storage_delete_resilient(
     db_session.refresh(talk)
 
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Disk unavailable")
+    mock_storage.delete.side_effect = OSError("Disk unavailable")
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     try:
@@ -1331,7 +1331,7 @@ def test_delete_talk_propagates_storage_error(
     db_session.refresh(talk)
 
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Disk failure")
+    mock_storage.delete.side_effect = OSError("Disk failure")
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     try:

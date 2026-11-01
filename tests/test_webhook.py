@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import http.client
 import json
 from datetime import UTC, datetime
 from email.message import Message
@@ -11,6 +12,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 from fastapi.testclient import TestClient
 from pytest import LogCaptureFixture
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -353,7 +355,7 @@ def test_job_deliver_webhook_failure_log_omits_url(
 ) -> None:
     url = "https://example.com/hook?token=abc"
     # http.client puts the whole request target into some error messages.
-    error = ValueError(f"URL can't contain control characters. {url!r}")
+    error = http.client.InvalidURL(f"URL can't contain control characters. {url!r}")
 
     with (
         caplog.at_level("INFO", logger="app.tasks"),
@@ -362,7 +364,7 @@ def test_job_deliver_webhook_failure_log_omits_url(
     ):
         assert job_deliver_webhook(url, "secret", {"talk_id": 1}) is False
 
-    assert "ValueError" in caplog.text
+    assert "InvalidURL" in caplog.text
     assert "token=abc" not in caplog.text
 
 
@@ -891,7 +893,7 @@ def test_multi_client_isolation_on_webhook_dispatch(db_session: Session) -> None
     def enqueue_side_effect(fn: Any, *args: Any, **kwargs: Any) -> MagicMock:
         calls_made.append((fn, args))
         if fn == job_deliver_webhook and args[0] == "https://subscriber-1.example/hook":
-            raise RuntimeError("Failure for client 1")
+            raise RedisError("Failure for client 1")
         return MagicMock()
 
     with patch(

@@ -268,7 +268,7 @@ def cleanup_intermediates(storage: StorageBackend, talk_id: int) -> None:
     for target in INTERMEDIATE_STAGES:
         try:
             storage.delete(f"{talk_id}/{target}")
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             logger.warning(
                 "Failed to delete %s storage for talk %s: %s",
                 target,
@@ -286,7 +286,7 @@ def cleanup_bumpers(
     for stage in ("intro", "outro"):
         try:
             storage.delete(f"{talk_id}/{stage}")
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             logger.warning(
                 "Failed to delete %s storage for talk %s: %s",
                 stage,
@@ -305,7 +305,7 @@ def cleanup_bumpers(
                 ).resolve()
                 if p.is_file() and p.is_relative_to(staging_dir):
                     p.unlink(missing_ok=True)
-            except Exception as exc:  # noqa: BLE001
+            except OSError as exc:
                 logger.warning(
                     "Failed to delete staged bumper file %s: %s", path_str, exc
                 )

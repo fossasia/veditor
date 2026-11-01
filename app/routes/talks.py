@@ -24,6 +24,7 @@ from fastapi import (
 )
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
+from rq.exceptions import InvalidJobOperation
 from rq.job import Job
 from rq.registry import StartedJobRegistry
 from sqlalchemy import delete, func, select
@@ -955,7 +956,7 @@ def configure_assembly(
         job_log_path: str | None = log_key
         try:
             storage.put(log_key, log_content.encode("utf-8"))
-        except Exception as log_err:  # noqa: BLE001
+        except (OSError, ValueError, TypeError) as log_err:
             logger.warning(
                 "Failed to persist dispatch failure log to storage: %s", log_err
             )
@@ -999,7 +1000,7 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                     if _matches_talk(rq_job):
                         rq_job.cancel()
                         rq_job.delete()
-                except Exception as exc:  # noqa: BLE001
+                except (InvalidJobOperation, RedisError) as exc:
                     errors.append(f"Failed cancelling queued job {job_id}: {exc}")
 
             # 2. Stop running/started/deferred/scheduled jobs
@@ -1019,9 +1020,9 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                                 send_stop_job_command(q.connection, job_id)
                                 rq_job.cancel()
                                 rq_job.delete()
-                        except Exception as exc:  # noqa: BLE001
+                        except (InvalidJobOperation, RedisError) as exc:
                             errors.append(f"Failed stopping job {job_id}: {exc}")
-                except Exception as exc:  # noqa: BLE001
+                except RedisError as exc:
                     errors.append(f"Failed accessing queue registry: {exc}")
 
             try:
@@ -1033,17 +1034,17 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                             send_stop_job_command(q.connection, job_id)
                             rq_job.cancel()
                             rq_job.delete()
-                    except Exception as exc:  # noqa: BLE001
+                    except (InvalidJobOperation, RedisError) as exc:
                         errors.append(f"Failed stopping started job {job_id}: {exc}")
-            except Exception as exc:  # noqa: BLE001
+            except RedisError as exc:
                 errors.append(f"Failed accessing StartedJobRegistry: {exc}")
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         errors.append(f"Error cancelling RQ jobs for talk {talk_id}: {exc}")
 
     if storage:
         try:
             storage.delete(str(talk_id))
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             errors.append(f"Error deleting storage for talk {talk_id}: {exc}")
 
     if errors:
@@ -2439,7 +2440,7 @@ async def attach_room_recording(
         for b_key in replaced_backups.values():
             try:
                 storage.delete(b_key)
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, ValueError) as exc:
                 logger.debug("Failed removing backup %s: %s", b_key, exc)
     except Exception:
         db.rollback()
@@ -2451,21 +2452,21 @@ async def attach_room_recording(
                         storage.link_or_copy, key, storage.get(b_key)
                     )
                     storage.delete(b_key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError, TypeError) as exc:
                     logger.debug(
                         "Failed restoring %s from backup %s: %s", key, b_key, exc
                     )
             else:
                 try:
                     storage.delete(key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError) as exc:
                     logger.debug("Failed cleaning up staged key %s: %s", key, exc)
 
         for raw_k, b_key in replaced_backups.items():
             if raw_k not in staged_keys:
                 try:
                     storage.delete(b_key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError) as exc:
                     logger.debug("Failed deleting dangling backup %s: %s", b_key, exc)
         raise
     finally:
