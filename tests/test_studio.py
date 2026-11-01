@@ -4031,7 +4031,9 @@ def test_talk_speaker_email_index() -> None:
     assert models.Talk.__table__.c.speaker_email.index is True
 
 
-def test_room_days_and_targeted_multi_day_room_attachment(client, db_session):
+def test_room_days_and_targeted_multi_day_room_attachment(
+    client: TestClient, db_session: Session
+) -> None:
     event = models.Event(name="Multi-Day Conf", start_date=date(2026, 10, 25))
     db_session.add(event)
     db_session.commit()
@@ -4155,7 +4157,9 @@ def test_room_days_and_targeted_multi_day_room_attachment(client, db_session):
     assert "Invalid target_date format" in res_non_string_json_date.json()["detail"]
 
 
-def test_room_days_day_numbering_relative_to_event_start(client, db_session):
+def test_room_days_day_numbering_relative_to_event_start(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify Day numbering matches event schedule even if room has sessions only on later days."""
     # Event starts on Oct 24, but room only has sessions on Oct 25 (Day 2) and Oct 26 (Day 3)
     event = models.Event(
@@ -4205,7 +4209,9 @@ def test_room_days_day_numbering_relative_to_event_start(client, db_session):
     assert "Day 3: Oct 26, 2026" in days[1]["label"]
 
 
-def test_room_days_without_event_start_date(client, db_session):
+def test_room_days_without_event_start_date(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify that if event has no start_date, Day N is omitted from labels."""
     event = models.Event(name="Dateless Event", start_date=None)
     db_session.add(event)
@@ -4239,7 +4245,9 @@ def test_room_days_without_event_start_date(client, db_session):
     assert days[0]["label"] == "Oct 25, 2026 (1 session)"
 
 
-def test_room_days_and_attachment_with_event_timezone(client, db_session):
+def test_room_days_and_attachment_with_event_timezone(
+    client: TestClient, db_session: Session
+) -> None:
     """Verify talk dates are computed using the event's timezone, not UTC."""
     # 2026-10-25 22:00:00 UTC is 2026-10-26 07:00:00 in Asia/Tokyo (UTC+9)
     event = models.Event(
