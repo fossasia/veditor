@@ -21,7 +21,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import delete, select
 
@@ -114,7 +114,7 @@ def test_end_to_end_smoke(clean_db: None) -> None:
     assert event_id > 0
 
     # 3. Hit GET /health
-    health_resp = httpx.get(f"{API_BASE_URL}/health", timeout=10.0)
+    health_resp = httpx2.get(f"{API_BASE_URL}/health", timeout=10.0)
     assert health_resp.status_code == 200, f"Health check failed: {health_resp.text}"
     assert health_resp.json().get("status") == "ok"
 
@@ -143,7 +143,7 @@ def test_end_to_end_smoke(clean_db: None) -> None:
 
     # 5. Call the ops endpoints with the API key and confirm the Talk is visible
     headers = {"X-API-Key": api_key}
-    talks_resp = httpx.get(f"{API_BASE_URL}/ops/talks", headers=headers)
+    talks_resp = httpx2.get(f"{API_BASE_URL}/ops/talks", headers=headers)
     assert talks_resp.status_code == 200, f"Ops talks failed: {talks_resp.text}"
 
     talks_data = talks_resp.json()
@@ -181,6 +181,6 @@ def test_end_to_end_smoke(clean_db: None) -> None:
             session.close()
 
         # Verify via ops endpoint
-        talk_resp = httpx.get(f"{API_BASE_URL}/ops/talks/{talk_id}", headers=headers)
+        talk_resp = httpx2.get(f"{API_BASE_URL}/ops/talks/{talk_id}", headers=headers)
         assert talk_resp.status_code == 200, f"Ops talk fetch failed: {talk_resp.text}"
         assert talk_resp.json()["status"] == state
