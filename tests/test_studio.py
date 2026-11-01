@@ -2983,7 +2983,9 @@ def test_attach_room_recording_unauthorized(
     assert res.status_code == 401
 
 
-def test_attach_room_recording_requires_room(client: TestClient, db_session):
+def test_attach_room_recording_requires_room(
+    client: TestClient, db_session: Session
+) -> None:
     from app.auth import hash_api_key
 
     api_key = f"key_{uuid.uuid4().hex}"
