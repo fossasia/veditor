@@ -86,8 +86,6 @@ router = APIRouter(
 
 def _lock_event_for_room_operation(db: Session, event_id: int) -> None:
     """Serialize room lifecycle changes and talk assignments per event."""
-    if not isinstance(db, Session):
-        return
     db.scalar(select(models.Event).where(models.Event.id == event_id).with_for_update())
 
 
@@ -99,7 +97,7 @@ def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str 
     if not name:
         return None
     _lock_event_for_room_operation(db, event_id)
-    for pending in getattr(db, "new", ()):
+    for pending in db.new:
         if (
             isinstance(pending, models.Room)
             and pending.event_id == event_id
@@ -835,18 +833,12 @@ def handoff_talk(
 
     event = (
         talk.event
-        if getattr(talk, "event", None)
+        if talk.event is not None
         else db.scalar(select(models.Event).where(models.Event.id == talk.event_id))
     )
-    event_synced = False
-    if event is not None and isinstance(event, models.Event):
-        event_synced = event.is_eventyay_synced
-    elif event is not None:
-        src = getattr(event, "source", None)
-        if isinstance(src, str) and src.strip():
-            event_synced = src.strip().lower() in ("eventyay", "platform")
+    event_synced = event.is_eventyay_synced if event is not None else False
 
-    is_eventyay = getattr(user, "is_sso", False) is True or event_synced
+    is_eventyay = user.is_sso or event_synced
 
     if talk.status == TalkStatus.PENDING_BOUNDS:
         if is_eventyay:
@@ -1012,9 +1004,9 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
 
             # 2. Stop running/started/deferred/scheduled jobs
             registries = [
-                getattr(q, "started_job_registry", None),
-                getattr(q, "deferred_job_registry", None),
-                getattr(q, "scheduled_job_registry", None),
+                q.started_job_registry,
+                q.deferred_job_registry,
+                q.scheduled_job_registry,
             ]
             for reg in registries:
                 if reg is None:
@@ -1397,7 +1389,6 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
             return parsed if math.isfinite(parsed) and parsed > 0 else None
         except ValueError, TypeError:
             return None
-    return None
 
 
 MAX_SCHEDULE_IMPORT_SIZE = 10 * 1024 * 1024  # 10MB
@@ -1675,7 +1666,7 @@ async def import_schedule(
         if not target_source:
             target_source = talks_to_create[0].get("source")
 
-    is_platform = getattr(user, "is_platform", False)
+    is_platform = user.is_platform
     if (
         target_source
         or is_platform
@@ -1742,7 +1733,7 @@ async def import_schedule(
 
     if not event:
         # Check if caller already has an event with matching name
-        if getattr(user, "is_platform", False):
+        if user.is_platform:
             event = db.scalar(
                 select(models.Event).where(models.Event.name == event_name)
             )
@@ -1766,7 +1757,7 @@ async def import_schedule(
             )
 
     if not event and user.is_machine:
-        if not getattr(user, "is_platform", False) and len(user.event_ids) == 1:
+        if not user.is_platform and len(user.event_ids) == 1:
             event = db.scalar(
                 select(models.Event).where(models.Event.id == user.event_ids[0])
             )
@@ -1784,7 +1775,7 @@ async def import_schedule(
         is_new_event = True
 
     # Ensure non-platform machine client has access to this newly created event
-    if is_new_event and user.is_machine and not getattr(user, "is_platform", False):
+    if is_new_event and user.is_machine and not user.is_platform:
         if event.id not in user.event_ids:
             user.event_ids.append(event.id)
         if user.client_id:
@@ -1919,7 +1910,7 @@ def create_talk_sso_token(
             elif target_str.isdigit():
                 resolved_event_id = int(target_str)
 
-        if not getattr(client, "is_platform", False) and client.event_ids:
+        if not client.is_platform and client.event_ids:
             if resolved_event_id is not None:
                 if resolved_event_id in client.event_ids:
                     talk_filters.append(models.Talk.event_id == resolved_event_id)
@@ -1936,9 +1927,7 @@ def create_talk_sso_token(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Talk not found",
         )
-    if not getattr(client, "is_platform", False) and talk.event_id not in (
-        client.event_ids or []
-    ):
+    if not client.is_platform and talk.event_id not in (client.event_ids or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this talk",

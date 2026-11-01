@@ -3,6 +3,7 @@ import os
 from collections.abc import Iterator
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock
 
 import av
@@ -299,7 +300,7 @@ def test_settings_ingest_roots_validation(tmp_path: Path) -> None:
     assert cfg.ingest_roots == [abs_path.resolve()]
 
     with pytest.raises(ValidationError):
-        Settings(ingest_roots=["relative/recordings"])
+        Settings(ingest_roots=cast("list[Path]", ["relative/recordings"]))
 
 
 def test_non_media_file_rejected(ingest_root: Path, mock_backend: Mock) -> None:

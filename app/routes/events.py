@@ -10,6 +10,7 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlsplit
+from urllib.request import Request as URLRequest
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import any_, delete, func, select, update
@@ -106,7 +107,7 @@ def list_events(
             detail="SSO session is not authorized to list events",
         )
     if user.is_machine:
-        if getattr(user, "is_platform", False):
+        if user.is_platform:
             return list(db.scalars(select(models.Event)))
         return list(
             db.scalars(select(models.Event).where(models.Event.id.in_(user.event_ids)))
@@ -387,7 +388,7 @@ def create_event_sso_token(
         )
     if not event:
         event_filters = [models.Event.external_id == event_identifier]
-        if not getattr(client, "is_platform", False) and client.event_ids:
+        if not client.is_platform and client.event_ids:
             event_filters.append(models.Event.id.in_(client.event_ids))
         event = db.scalar(select(models.Event).where(*event_filters))
     if not event:
@@ -395,9 +396,7 @@ def create_event_sso_token(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found",
         )
-    if not getattr(client, "is_platform", False) and event.id not in (
-        client.event_ids or []
-    ):
+    if not client.is_platform and event.id not in (client.event_ids or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this event",
@@ -483,8 +482,8 @@ def list_event_api_keys(
                 event_ids=list(c.event_ids or []),
                 webhook_url=c.webhook_url,
                 has_webhook_secret=bool(c.webhook_secret),
-                created_at=getattr(c, "created_at", None),
-                last_used_at=getattr(c, "last_used_at", None),
+                created_at=c.created_at,
+                last_used_at=c.last_used_at,
             )
         )
     return results
@@ -850,14 +849,14 @@ def test_event_webhook(
             "X-VEditor-Signature": f"sha256={signature}",
             "User-Agent": "VEditor-Webhook/1.0",
         }
-        req = urllib.request.Request(
+        req = URLRequest(
             target_url,
             data=payload_bytes,
             headers=headers,
             method="POST",
         )
         with _webhook_opener.open(req, timeout=5) as resp:
-            status_code = getattr(resp, "status", getattr(resp, "code", 200))
+            status_code = resp.status
             return schemas.WebhookTestResponse(
                 success=True,
                 status_code=status_code,

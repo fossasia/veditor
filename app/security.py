@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import jwt
 from argon2 import PasswordHasher
@@ -157,10 +157,20 @@ def create_session_token(
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
+class _RevocationStateProvider(Protocol):
+    """Anything that exposes a user's password hash and revocation timestamp."""
+
+    @property
+    def hashed_password(self) -> str: ...
+
+    @property
+    def session_revoked_at(self) -> datetime: ...
+
+
 def verify_session_token_not_revoked(
     payload: dict,
     current_password_hash: str | None = None,
-    user: object | None = None,
+    user: _RevocationStateProvider | None = None,
     session_revoked_at: datetime | float | None = None,
 ) -> bool:
     """Verifies that a session token has not been revoked by password change or marker."""
@@ -170,7 +180,7 @@ def verify_session_token_not_revoked(
     token_pwh = payload.get("pwh")
     if token_pwh:
         if not current_password_hash and user is not None:
-            current_password_hash = getattr(user, "hashed_password", None)
+            current_password_hash = user.hashed_password
         if not current_password_hash:
             return False
         current_pwh = get_password_fingerprint(current_password_hash)
@@ -178,7 +188,7 @@ def verify_session_token_not_revoked(
 
     # For tokens without pwh: consult persisted revocation state
     if session_revoked_at is None and user is not None:
-        session_revoked_at = getattr(user, "session_revoked_at", None)
+        session_revoked_at = user.session_revoked_at
 
     if session_revoked_at is None:
         user_id = payload.get("user_id")
@@ -210,10 +220,8 @@ def verify_session_token_not_revoked(
 
         if isinstance(session_revoked_at, datetime):
             revoked_ts = int(session_revoked_at.timestamp())
-        elif isinstance(session_revoked_at, (int, float)):
-            revoked_ts = int(session_revoked_at)
         else:
-            return False
+            revoked_ts = int(session_revoked_at)
 
         if token_ts <= revoked_ts:
             return False

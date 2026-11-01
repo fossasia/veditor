@@ -11,3 +11,6 @@ db-migrate:
 # Run RQ worker
 rq-worker:
     uv run scripts/run_worker.py light heavy
+
+type-check:
+    mypy app migrations scripts tests

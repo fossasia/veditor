@@ -315,8 +315,8 @@ class Talk(Base):
 
     @property
     def is_eventyay_synced(self) -> bool:
-        ev = getattr(self, "event", None)
-        return ev.is_eventyay_synced if ev else False
+        ev = self.event
+        return ev.is_eventyay_synced if ev is not None else False
 
 
 class Job(Base):

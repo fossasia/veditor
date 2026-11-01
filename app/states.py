@@ -1,10 +1,7 @@
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from .consts import TalkStatus
-
-if TYPE_CHECKING:
-    from .models import Talk
 
 
 class InvalidTransitionError(Exception):
@@ -49,7 +46,14 @@ TRANSITIONS: dict[TalkStatus, list[TalkStatus]] = {
 }
 
 
-def advance(talk: Talk, new_state: str) -> Talk:
+class TalkLike(Protocol):
+    """Structural view of a talk that advance() needs to mutate."""
+
+    status: str
+    updated_at: datetime
+
+
+def advance(talk: TalkLike, new_state: str) -> TalkLike:
     current_state = talk.status
 
     try:

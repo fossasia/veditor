@@ -93,7 +93,7 @@ def owned_event(db_session: Session) -> models.Event:
     owner = _create_user(db_session, email="owner@example.com")
     event = _create_event(db_session, name="Test Event", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
     return event
 
@@ -209,7 +209,7 @@ def test_post_events_unauthorized() -> None:
 
 def test_post_events_forbidden_for_regular_user() -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, email="user@example.com", role="user", source="jwt"
+        user_id=1, email="user@example.com", role=AuthRole.USER, source="jwt"
     )
     res = client.post("/events", json={"name": "Conf 2026"})
     assert res.status_code == 403
@@ -219,7 +219,7 @@ def test_post_events_forbidden_for_regular_user() -> None:
 def test_post_events_success_organizer(db_session: Session) -> None:
     user = _create_user(db_session, email="organizer@example.com")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=user.id, email=user.email, role="organizer", source="jwt"
+        user_id=user.id, email=user.email, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post("/events", json={"name": "PyCon 2026"})
@@ -237,7 +237,7 @@ def test_post_events_success_organizer(db_session: Session) -> None:
 
 def test_post_events_machine_client_sets_created_by_none(db_session: Session) -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=None, role="admin", source="api_key", event_ids=[]
+        user_id=None, role=AuthRole.ADMIN, source="api_key", event_ids=[]
     )
 
     res = client.post("/events", json={"name": "Machine Event"})
@@ -260,7 +260,7 @@ def test_get_events_unauthorized() -> None:
 
 def test_get_events_forbidden_for_user() -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, email="user@example.com", role="user", source="jwt"
+        user_id=1, email="user@example.com", role=AuthRole.USER, source="jwt"
     )
     res = client.get("/events")
     assert res.status_code == 403
@@ -273,7 +273,7 @@ def test_get_events_admin_returns_only_own(db_session: Session) -> None:
     _create_event(db_session, name="Other Event", created_by_user_id=other_user.id)
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, email=owner.email, role="admin", source="jwt"
+        user_id=owner.id, email=owner.email, role=AuthRole.ADMIN, source="jwt"
     )
 
     res = client.get("/events")
@@ -289,7 +289,7 @@ def test_get_events_organizer_filters_by_user_id(db_session: Session) -> None:
     _create_event(db_session, name="Other Event", created_by_user_id=other_user.id)
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, email=owner.email, role="organizer", source="jwt"
+        user_id=owner.id, email=owner.email, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.get("/events")
@@ -313,7 +313,7 @@ def test_review_records_human_user_id(db_session: Session) -> None:
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=reviewer.id, email=reviewer.email, role="organizer", source="jwt"
+        user_id=reviewer.id, email=reviewer.email, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     with patch("app.tasks.dispatch_assembly"):
@@ -333,7 +333,7 @@ def test_review_records_none_for_machine_client(db_session: Session) -> None:
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=None, role="admin", source="api_key", event_ids=[event.id]
+        user_id=None, role=AuthRole.ADMIN, source="api_key", event_ids=[event.id]
     )
 
     with patch("app.tasks.dispatch_assembly"):
@@ -348,7 +348,7 @@ def test_review_machine_client_forbidden_event(db_session: Session) -> None:
     talk = _create_talk(db_session, event.id, title="Keynote")
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=None, role="admin", source="api_key", event_ids=[event.id + 1000]
+        user_id=None, role=AuthRole.ADMIN, source="api_key", event_ids=[event.id + 1000]
     )
 
     res = client.post(f"/talks/{talk.id}/review", json={"decision": "approve"})
@@ -380,7 +380,7 @@ def test_legacy_get_client_override_in_get_current_user(db_session: Session) -> 
 
 def test_post_talks_forbidden_for_user_role() -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, role="user", source="jwt"
+        user_id=1, role=AuthRole.USER, source="jwt"
     )
     res = client.post(
         "/talks",
@@ -401,7 +401,7 @@ def test_post_talks_forbidden_for_non_owning_organizer(db_session: Session) -> N
     actor = _create_user(db_session, email="actor@example.com")
     event = _create_event(db_session, name="Other Event", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=actor.id, role="organizer", source="jwt"
+        user_id=actor.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(
@@ -422,7 +422,7 @@ def test_post_talks_success_for_owning_organizer(db_session: Session) -> None:
     organizer = _create_user(db_session, email="organizer@example.com")
     event = _create_event(db_session, name="My Event", created_by_user_id=organizer.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=organizer.id, role="organizer", source="jwt"
+        user_id=organizer.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(
@@ -448,7 +448,7 @@ def test_post_talks_success_for_owning_organizer(db_session: Session) -> None:
 
 def test_write_endpoints_forbidden_for_user_role() -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, role="user", source="jwt"
+        user_id=1, role=AuthRole.USER, source="jwt"
     )
     res_rec = client.post("/talks/1/recordings", json={"source_path": "/tmp/rec.mp4"})
     assert res_rec.status_code == 403
@@ -473,7 +473,7 @@ def test_write_endpoints_forbidden_for_non_owning_organizer(
         room="Room 1",
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=actor.id, role="organizer", source="jwt"
+        user_id=actor.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(
@@ -490,7 +490,7 @@ def test_write_endpoints_forbidden_for_non_owning_organizer(
 
 def test_update_event_forbidden_for_user_role() -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=1, role="user", source="jwt"
+        user_id=1, role=AuthRole.USER, source="jwt"
     )
     res = client.patch("/events/1", json={"name": "New Name"})
     assert res.status_code == 403
@@ -502,7 +502,7 @@ def test_update_event_forbidden_for_non_owning_organizer(db_session: Session) ->
     actor = _create_user(db_session, email="actor@example.com")
     event = _create_event(db_session, name="Old Name", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=actor.id, role="organizer", source="jwt"
+        user_id=actor.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.patch(f"/events/{event.id}", json={"name": "New Name"})
@@ -514,7 +514,7 @@ def test_update_event_empty_name(db_session: Session) -> None:
     owner = _create_user(db_session, email="owner@example.com")
     event = _create_event(db_session, name="Old Name", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.patch(f"/events/{event.id}", json={"name": "   "})
@@ -526,7 +526,7 @@ def test_update_event_success_for_owner(db_session: Session) -> None:
     owner = _create_user(db_session, email="owner@example.com")
     event = _create_event(db_session, name="Old Name", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.patch(f"/events/{event.id}", json={"name": "Updated Summit 2026"})
@@ -546,7 +546,7 @@ def test_update_event_success_for_admin(db_session: Session) -> None:
     )
     event = _create_event(db_session, name="Old Name", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=admin_user.id, role="admin", source="jwt"
+        user_id=admin_user.id, role=AuthRole.ADMIN, source="jwt"
     )
 
     res = client.patch(f"/events/{event.id}", json={"name": "Admin Renamed"})
@@ -564,7 +564,7 @@ def test_delete_event_forbidden_for_non_owning_organizer(db_session: Session) ->
     actor = _create_user(db_session, email="actor@example.com")
     event = _create_event(db_session, name="Other Event", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=actor.id, role="organizer", source="jwt"
+        user_id=actor.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.delete(f"/events/{event.id}")
@@ -580,7 +580,7 @@ def test_delete_event_success_for_owner(db_session: Session) -> None:
 
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     with patch("app.routes.events._cancel_talk_jobs") as mock_cancel:
@@ -605,7 +605,7 @@ def test_delete_event_success_for_admin(db_session: Session) -> None:
 
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=admin_user.id, role="admin", source="jwt"
+        user_id=admin_user.id, role=AuthRole.ADMIN, source="jwt"
     )
 
     with patch("app.routes.events._cancel_talk_jobs"):
@@ -633,7 +633,7 @@ def test_list_event_api_keys(db_session: Session) -> None:
     _create_client(db_session, [other_event.id], name="Other Key")
 
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.get(f"/events/{event.id}/api-keys")
@@ -649,7 +649,7 @@ def test_create_event_api_key(db_session: Session) -> None:
     owner = _create_user(db_session, email="owner@example.com")
     event = _create_event(db_session, name="Test Event", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(f"/events/{event.id}/api-keys", json={"name": "My New Key"})
@@ -670,7 +670,7 @@ def test_api_key_management_forbidden_for_sso(db_session: Session) -> None:
     owner = _create_user(db_session, email="owner@example.com")
     event = _create_event(db_session, name="Test Event", created_by_user_id=owner.id)
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="organizer", source="sso", event_ids=[event.id]
+        role=AuthRole.ORGANIZER, source="sso", event_ids=[event.id]
     )
 
     res_get = client.get(f"/events/{event.id}/api-keys")
@@ -691,7 +691,7 @@ def test_revoke_event_api_key(db_session: Session) -> None:
     event = _create_event(db_session, name="Test Event", created_by_user_id=owner.id)
     c1 = _create_client(db_session, [event.id], name="Web Sync Key")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.delete(f"/events/{event.id}/api-keys/{c1.id}")
@@ -707,7 +707,7 @@ def test_create_event_api_key_revokes_existing_keys(db_session: Session) -> None
     event = _create_event(db_session, name="Test Event", created_by_user_id=owner.id)
     existing_c = _create_client(db_session, [event.id], name="Old Key")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(f"/events/{event.id}/api-keys", json={"name": "Rotated Key"})
@@ -730,7 +730,7 @@ def test_revoke_multi_event_api_key_retains_other_events(db_session: Session) ->
     )
     c1 = _create_client(db_session, [event.id, other_event.id], name="Shared Key")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.delete(f"/events/{event.id}/api-keys/{c1.id}")
@@ -755,7 +755,7 @@ def test_create_event_api_key_multi_event_retains_other_events(
         db_session, [event.id, other_event.id], name="Shared Key"
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res = client.post(f"/events/{event.id}/api-keys", json={"name": "Rotated Key"})
@@ -853,7 +853,7 @@ def test_update_event_webhook_generates_secret_if_omitted(
 
 def test_update_event_webhook_forbidden_for_sso(owned_event: models.Event) -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="organizer", source="sso", event_ids=[owned_event.id]
+        role=AuthRole.ORGANIZER, source="sso", event_ids=[owned_event.id]
     )
 
     res = client.post(
@@ -1022,7 +1022,7 @@ def test_test_event_webhook_missing_url_raises_400(owned_event: models.Event) ->
 
 def test_test_event_webhook_sso_rejected(owned_event: models.Event) -> None:
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="organizer", source="sso", event_ids=[owned_event.id]
+        role=AuthRole.ORGANIZER, source="sso", event_ids=[owned_event.id]
     )
 
     res = client.post(
@@ -1186,7 +1186,7 @@ def test_event_create_and_patch_speaker_magic_link_expire_hours(
         speaker_magic_link_expire_hours=72,
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=owner.id, role="organizer", source="jwt"
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     response = client.patch(
@@ -1214,7 +1214,7 @@ def test_event_create_and_patch_speaker_magic_link_expire_hours(
     assert res_bool_post.status_code == 422
 
 
-def test_event_duration_days_property():
+def test_event_duration_days_property() -> None:
     e1 = models.Event(
         name="Summit", start_date=date(2026, 10, 25), end_date=date(2026, 10, 27)
     )
@@ -1229,7 +1229,7 @@ def test_event_duration_days_property():
     assert e3.duration_days == 1
 
 
-def test_event_schema_date_validation():
+def test_event_schema_date_validation() -> None:
     ev = schemas.EventCreate(
         name="FOSSASIA", start_date=date(2026, 10, 25), end_date=date(2026, 10, 27)
     )
@@ -1252,7 +1252,7 @@ def test_event_schema_date_validation():
 def test_event_create_and_patch_dates(db_session: Session) -> None:
     user = _create_user(db_session, email="dates-organizer@example.com")
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=user.id, email=user.email, role="organizer", source="jwt"
+        user_id=user.id, email=user.email, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     res_post = client.post(
@@ -1287,8 +1287,10 @@ def test_event_create_and_patch_dates(db_session: Session) -> None:
     assert res_clear.status_code == 200
     db_session.expire_all()
     db_session.refresh(patched_event)
-    assert patched_event.start_date is None
-    assert patched_event.end_date is None
+    cleared_start: date | None = patched_event.start_date
+    assert cleared_start is None
+    cleared_end: date | None = patched_event.end_date
+    assert cleared_end is None
 
     # Reset dates on patched_event to test partial patch conflict with
     # existing start_date
@@ -1310,7 +1312,7 @@ def test_event_timezone_validation_create_and_update(db_session: Session) -> Non
         db_session, name="Timezone Event", created_by_user_id=user.id, timezone="UTC"
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=user.id, email=user.email, role="organizer", source="jwt"
+        user_id=user.id, email=user.email, role=AuthRole.ORGANIZER, source="jwt"
     )
 
     # 0. Direct schema validation

@@ -22,8 +22,10 @@ import urllib.request
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
+from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
+from urllib.request import Request
 
 import av
 from sqlalchemy import select, update
@@ -39,7 +41,7 @@ from app.ingest import (
 )
 from app.models import Event, Job, Talk, User
 from app.pipeline.concat import concat
-from app.pipeline.cut import cut
+from app.pipeline.cut import CutStrategy, cut
 from app.pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
     container_duration_seconds,
@@ -68,6 +70,7 @@ from app.retention import (
 from app.security import create_password_reset_token
 from app.states import advance
 from app.storage import (
+    StorageBackend,
     StorageKeyNotFoundError,
     cleanup_bumpers,
     cleanup_intermediates,
@@ -101,7 +104,7 @@ STAGE_CONFIG: dict[str, dict[str, str | int]] = {
 }
 
 
-def _cache_waveform(storage, media_key: str, media_path: Path) -> None:
+def _cache_waveform(storage: StorageBackend, media_key: str, media_path: Path) -> None:
     """Generate waveform data before a newly created media asset is exposed."""
     try:
         storage.put(
@@ -112,7 +115,9 @@ def _cache_waveform(storage, media_key: str, media_path: Path) -> None:
         logger.warning("Failed to generate waveform for %s: %s", media_key, exc)
 
 
-def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -> None:
+def _handle_failure(
+    talk_id: int, job_id: int | None, exc: Exception, storage: StorageBackend
+) -> None:
     log_text = traceback.format_exc()
     log_key = f"{talk_id}/logs/job_{job_id if job_id is not None else 'unknown'}.log"
     try:
@@ -139,7 +144,7 @@ def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -
         db.commit()
 
 
-def _get_scratch_dir(storage) -> Path | None:
+def _get_scratch_dir(storage: StorageBackend) -> Path | None:
     try:
         d = storage.get_temp_dir()
         if isinstance(d, Path) and d.is_dir():
@@ -184,17 +189,17 @@ def job_ingest(
                 )
                 return
 
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="ingest",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             claimed = True
 
         if not staged.is_file():
@@ -276,17 +281,17 @@ def job_ingest_room_url(
                     TalkStatus.DETECTING,
                     TalkStatus.BROKEN,
                 ):
-                    job = Job(
+                    new_job = Job(
                         talk_id=talk.id,
                         kind="ingest",
                         status="running",
                         started_at=datetime.now(UTC),
                         updated_at=datetime.now(UTC),
                     )
-                    db.add(job)
+                    db.add(new_job)
                     talk.status = TalkStatus.DETECTING
                     db.flush()
-                    job_ids[talk.id] = job.id
+                    job_ids[talk.id] = new_job.id
             db.commit()
 
         # Download media directly from URL
@@ -341,9 +346,9 @@ def job_ingest_room_url(
                         job.status = "cancelled"
                         job.updated_at = datetime.now(UTC)
                 for tid in job_ids:
-                    talk = db.get(Talk, tid)
-                    if talk and talk.status == TalkStatus.DETECTING:
-                        talk.status = TalkStatus.WAITING_FILES
+                    db_talk = db.get(Talk, tid)
+                    if db_talk and db_talk.status == TalkStatus.DETECTING:
+                        db_talk.status = TalkStatus.WAITING_FILES
                 db.commit()
                 return
 
@@ -455,9 +460,9 @@ def job_ingest_room_url(
                 if job:
                     job.status = "failed"
                     job.updated_at = datetime.now(UTC)
-                talk = db.get(Talk, tid)
-                if talk and talk.status == TalkStatus.DETECTING:
-                    talk.status = TalkStatus.BROKEN
+                db_talk = db.get(Talk, tid)
+                if db_talk and db_talk.status == TalkStatus.DETECTING:
+                    db_talk.status = TalkStatus.BROKEN
             db.commit()
         raise
     finally:
@@ -469,7 +474,7 @@ def job_ingest_room_url(
 def job_detect(
     talk_id: int,
     raw_key: str,
-    recording_start: datetime | None = None,
+    recording_start: datetime | str | None = None,
     *,
     tolerance_seconds: float | None = None,
     is_room_recording: bool = False,
@@ -485,17 +490,17 @@ def job_detect(
                     talk_id,
                 )
                 return
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="detect",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             scheduled_start = talk.start
             scheduled_end = talk.end
             if tolerance_seconds is None:
@@ -507,7 +512,7 @@ def job_detect(
                     )
 
         # Omit parameter when default to preserve pipeline default and mock compatibility
-        detect_kwargs = (
+        detect_kwargs: dict[str, Any] = (
             {"tolerance_seconds": tolerance_seconds}
             if tolerance_seconds != DETECT_DURATION_TOLERANCE_SECONDS
             else {}
@@ -596,17 +601,17 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 raise ValueError(f"Talk {talk_id} not found")
             if talk.cut_start is None or talk.cut_end is None:
                 raise ValueError(f"Talk {talk_id} has no cut bounds set")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="cut",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             start_seconds = talk.cut_start
             end_seconds = talk.cut_end
 
@@ -627,9 +632,9 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 **cut_kwargs,
             )
             strat_label = (
-                getattr(cut_strategy, "value", str(cut_strategy))
-                if cut_strategy is not None
-                else "unknown"
+                cut_strategy.value
+                if isinstance(cut_strategy, CutStrategy)
+                else str(cut_strategy)
             )
             logger.info(
                 "Talk %s cut complete using strategy '%s' (bounds: %.2fs - %.2fs)",
@@ -738,7 +743,9 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         )
 
 
-def _probe_media_params(storage, media_key: str | None) -> dict[str, Any]:
+def _probe_media_params(
+    storage: StorageBackend, media_key: str | None
+) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if not media_key:
         return params
@@ -781,17 +788,17 @@ def job_intro(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="intro",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             title = talk.title
             event_name = talk.event.name if talk.event else ""
             if talk.room and talk.start:
@@ -866,17 +873,17 @@ def job_outro(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="outro",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             event_name = talk.event.name if talk.event else ""
 
         probe_params = _probe_media_params(storage, cut_key)
@@ -938,23 +945,23 @@ def job_concat(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="concat",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
 
         cut_path = storage.get(cut_key)
         intro_path = storage.get(intro_key) if intro_key else None
         outro_path = storage.get(outro_key) if outro_key else None
 
-        concat_kwargs = (
+        concat_kwargs: dict[str, Any] = (
             {"threads": settings.encoder_threads}
             if settings.encoder_threads is not None
             else {}
@@ -1014,17 +1021,17 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="preview",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             preset_name = str(
                 get_setting("default_preview_preset", "small_video", db=db)
             )
@@ -1142,17 +1149,17 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     talk.status,
                 )
                 return
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="loudness",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             target_lufs = float(get_setting("loudness_target_lufs", -16.0, db=db))
 
         # Omit parameter when default to preserve pipeline default and mock compatibility
@@ -1251,7 +1258,7 @@ def job_transcode(
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="transcode",
                 status="running",
@@ -1259,10 +1266,10 @@ def job_transcode(
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             include_intro = talk.include_intro
             include_outro = talk.include_outro
             preset_name = str(
@@ -1374,17 +1381,17 @@ def job_publish(talk_id: int, final_key: str) -> None:
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
                 kind="publish",
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
 
         final_path = storage.get(final_key)
         publish(final_path, talk_id=talk_id, backend=storage)
@@ -1458,7 +1465,15 @@ def job_publish(talk_id: int, final_key: str) -> None:
 class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Prohibit automatic redirect following for webhook requests."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> Request | None:
         return None
 
 
@@ -1470,7 +1485,7 @@ _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 _LOG_SAFE_HOST = re.compile(r"[\w.-]+|[0-9a-fA-F:.]+(%[\w.-]+)?")
 
 
-def _redact_url(url: str) -> str:
+def _redact_url(url: object) -> str:
     """Return the scheme and host of *url* for logging.
 
     Credentials, path, query string and fragment are dropped: services such as
@@ -1546,18 +1561,14 @@ def job_deliver_webhook(
 
     for attempt in (1, 2):
         try:
-            req = urllib.request.Request(
+            req = Request(
                 webhook_url,
                 data=payload_bytes,
                 headers=headers,
                 method="POST",
             )
             with _webhook_opener.open(req, timeout=10) as resp:
-                resp_status = getattr(resp, "status", None)
-                if resp_status is None:
-                    resp_status = getattr(resp, "code", None)
-                if resp_status is None and hasattr(resp, "getcode"):
-                    resp_status = resp.getcode()
+                resp_status = resp.status
 
                 if resp_status is not None and 200 <= resp_status < 300:
                     logger.info(
@@ -1640,13 +1651,7 @@ def job_send_speaker_handoff_email(talk_id: int) -> bool:
             )
             return True
         event = db.scalar(select(Event).where(Event.id == talk.event_id))
-        event_synced = False
-        if event is not None and isinstance(event, Event):
-            event_synced = event.is_eventyay_synced
-        elif event is not None:
-            src = getattr(event, "source", None)
-            if isinstance(src, str) and src.strip():
-                event_synced = src.strip().lower() in ("eventyay", "platform")
+        event_synced = event.is_eventyay_synced if event is not None else False
 
         if event_synced:
             logger.info(

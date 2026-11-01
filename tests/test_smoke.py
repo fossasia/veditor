@@ -175,7 +175,7 @@ def test_end_to_end_smoke(clean_db: None) -> None:
             assert talk_row is not None
 
             # Advance state and commit
-            talk_row = advance(talk_row, state)
+            advance(talk_row, state)
             session.commit()
         finally:
             session.close()

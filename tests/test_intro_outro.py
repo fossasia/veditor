@@ -347,7 +347,7 @@ def test_intro_outro_custom_path_corrupt_or_not_found(
 
 def test_intro_outro_skip_both_success(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
@@ -396,7 +396,7 @@ def test_intro_outro_skip_both_success(
 
 def test_intro_outro_generated_both_success(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
@@ -443,7 +443,7 @@ def test_intro_outro_generated_both_success(
 
 def test_intro_outro_custom_intro_stages_and_enqueues_outro(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
@@ -491,7 +491,7 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
 
 def test_intro_outro_custom_outro_stages_and_enqueues_intro(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
@@ -539,7 +539,7 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
 
 def test_intro_outro_custom_both_stages_and_enqueues_concat(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,
@@ -591,7 +591,7 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
 
 def test_intro_outro_custom_cut_key_threading(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     fake_storage: FakeStorageBackend,
     auth_client: models.Client,
     stored_talk: models.Talk,
@@ -630,7 +630,7 @@ def test_intro_outro_custom_cut_key_threading(
 
 
 def test_dispatch_assembly_both_done_enqueues_job_concat(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """dispatch_assembly enqueues job_concat when both intro and outro jobs are completed."""
     talk = _create_stored_talk(
@@ -666,7 +666,7 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
 
 
 def test_job_concat_success_enqueues_job_loudness(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_concat executes concat, leaves talk in assembling, and enqueues job_loudness."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -714,7 +714,7 @@ def test_job_concat_success_enqueues_job_loudness(
 
 
 def test_job_loudness_success_advances_to_transcoding(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_loudness executes normalize, advances talk to transcoding, and enqueues job_transcode."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -754,7 +754,7 @@ def test_job_loudness_success_advances_to_transcoding(
 
 
 def test_job_loudness_failure_marks_talk_broken(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_loudness failure invokes _handle_failure and marks talk broken."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -785,7 +785,7 @@ def test_job_loudness_failure_marks_talk_broken(
 
 
 def test_job_concat_failure_marks_talk_broken(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_concat failure invokes _handle_failure and marks talk broken."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -818,7 +818,7 @@ def test_job_concat_failure_marks_talk_broken(
 
 
 def test_job_intro_assembling_invokes_dispatch_assembly(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_intro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -847,7 +847,7 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
 
 
 def test_job_outro_assembling_invokes_dispatch_assembly(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """job_outro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
     talk = _create_stored_talk(db_session, status="assembling")
@@ -1072,7 +1072,7 @@ def test_upload_bumper_file_talk_not_found(
 
 def test_upload_bumper_and_assemble_flow(
     db_session: Session,
-    out_of_band_sessions,
+    out_of_band_sessions: None,
     auth_client: models.Client,
     fake_storage: FakeStorageBackend,
     stored_talk: models.Talk,

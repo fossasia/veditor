@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import models, schemas
 from app.auth import CurrentUser, get_current_user
 from app.config import settings
+from app.consts import AuthRole
 from app.db import Base, get_db
 from app.main import app
 from app.routes.events import delete_event_room, list_event_rooms, update_event_room
@@ -134,7 +135,7 @@ def test_authenticated_room_endpoints_preserve_event_isolation(
             id=owner_id,
             email="room-owner-7001@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -152,7 +153,7 @@ def test_authenticated_room_endpoints_preserve_event_isolation(
     )
     db_session.add(other_talk)
     db_session.flush()
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
 
     updated = update_event_room(
         event.id,
@@ -182,7 +183,7 @@ def test_room_listing_does_not_mutate_legacy_talk_room_values(
             id=owner_id,
             email="room-owner-7002@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -197,7 +198,7 @@ def test_room_listing_does_not_mutate_legacy_talk_room_values(
     )
     db_session.add(talk)
     db_session.flush()
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
 
     listed = list_event_rooms(event.id, user, db_session)
     assert listed == []
@@ -221,7 +222,7 @@ def test_room_http_endpoints_enforce_event_isolation(db_session: Session) -> Non
             id=owner_id,
             email="room-owner-7003@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -232,7 +233,7 @@ def test_room_http_endpoints_enforce_event_isolation(db_session: Session) -> Non
     other_room = models.Room(event_id=other_event.id, name="Hall A")
     db_session.add_all([room, other_room])
     db_session.flush()
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: user
     try:
@@ -264,7 +265,7 @@ def test_room_http_mutations_normalize_legacy_assignments(db_session: Session) -
             id=owner_id,
             email="room-owner-7004@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -291,7 +292,7 @@ def test_room_http_mutations_normalize_legacy_assignments(db_session: Session) -
     )
     db_session.add_all([target_talk, other_talk])
     db_session.flush()
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: user
     try:
@@ -330,7 +331,7 @@ def test_room_listing_is_read_only_for_case_and_whitespace_variants(
             id=owner_id,
             email="room-owner-7005@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -356,7 +357,7 @@ def test_room_listing_is_read_only_for_case_and_whitespace_variants(
     )
     db_session.add_all([*talks, other_talk])
     db_session.flush()
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: user
     try:
@@ -406,7 +407,7 @@ def test_room_http_creation_validates_uniqueness_and_event_scope(
             id=owner_id,
             email="room-owner-7006@example.com",
             hashed_password="test",
-            role="organizer",
+            role=AuthRole.ORGANIZER,
         )
     )
     db_session.flush()
@@ -416,7 +417,7 @@ def test_room_http_creation_validates_uniqueness_and_event_scope(
     other_event.created_by_user_id = owner_id
     event_id = event.id
     other_event_id = other_event.id
-    user = CurrentUser(user_id=owner_id, role="organizer", source="jwt")
+    user = CurrentUser(user_id=owner_id, role=AuthRole.ORGANIZER, source="jwt")
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: user
     try:

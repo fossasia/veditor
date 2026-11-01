@@ -17,10 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _matches_event(client: models.Client, event_id: int) -> bool:
-    return bool(getattr(client, "is_platform", False)) or (
-        isinstance(getattr(client, "event_ids", None), list)
-        and event_id in client.event_ids
-    )
+    return client.is_platform or event_id in client.event_ids
 
 
 def get_candidate_clients(
@@ -103,7 +100,7 @@ def dispatch_talk_webhook(
                     "Failed to enqueue %s webhook for talk %d to client %s: %s",
                     event_name,
                     talk.id,
-                    getattr(client, "id", None),
+                    client.id,
                     exc,
                 )
     except Exception as exc:  # noqa: BLE001

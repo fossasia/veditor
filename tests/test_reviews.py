@@ -703,7 +703,7 @@ def test_review_needs_work_transitions_to_pending_bounds_retains_offsets_and_no_
 
 
 def test_needs_work_subsequent_cut_overwrites_outputs(
-    db_session: Session, out_of_band_sessions, fake_storage: FakeStorageBackend
+    db_session: Session, out_of_band_sessions: None, fake_storage: FakeStorageBackend
 ) -> None:
     """Verify that after needs_work transitions to pending_bounds with bounds intact:
 
@@ -838,7 +838,11 @@ def test_review_human_user_role_forbidden(
 ) -> None:
     """POST /talks/{id}/review returns 403 if human caller has role 'user'."""
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        user_id=10, email="user@example.com", role="user", source="cookie", event_ids=[]
+        user_id=10,
+        email="user@example.com",
+        role=AuthRole.USER,
+        source="cookie",
+        event_ids=[],
     )
 
     response = client.post(
@@ -860,7 +864,7 @@ def test_review_human_organizer_unowned_event_forbidden(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=owner.id + 1,
         email="org@example.com",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         source="cookie",
         event_ids=[],
     )
@@ -884,7 +888,7 @@ def test_review_human_organizer_owned_event_success(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=organizer.id,
         email="org@example.com",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         source="cookie",
         event_ids=[],
     )
@@ -911,7 +915,7 @@ def test_review_human_admin_success(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=admin.id,
         email="admin@example.com",
-        role="admin",
+        role=AuthRole.ADMIN,
         source="cookie",
         event_ids=[],
     )

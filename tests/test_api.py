@@ -697,7 +697,7 @@ def test_abort_talk_from_any_state(db_session: Session) -> None:
 
 
 def test_lifecycle_full_ingest_to_done(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Mock-driven orchestration test covering the complete talk processing lifecycle.
 
@@ -1129,7 +1129,7 @@ def test_lifecycle_disk_guard_insufficient_storage(db_session: Session) -> None:
 
 
 def test_lifecycle_full_approve_review_flow_to_done(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Drive a talk from preview through review approve, assembly, and publishing to done.
 
@@ -1261,7 +1261,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
 
 
 def test_lifecycle_needs_work_review_loop(
-    db_session: Session, out_of_band_sessions
+    db_session: Session, out_of_band_sessions: None
 ) -> None:
     """Drive consecutive needs_work cycles, verifying return to preview without stale jobs."""
 

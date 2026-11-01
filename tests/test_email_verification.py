@@ -368,8 +368,10 @@ def test_verify_email_flow_success(db_session: Session) -> None:
 
     # Verify DB updated
     db_session.refresh(user)
-    assert user.is_verified is True
-    assert user.verified_at is not None
+    is_now_verified: bool = user.is_verified
+    assert is_now_verified is True
+    verified_at_now: datetime | None = user.verified_at
+    assert verified_at_now is not None
 
     # Re-using the same verification link is rejected (single-use token defense)
     resp_reuse_get = client.get(f"/verify-email?token={token}", follow_redirects=False)

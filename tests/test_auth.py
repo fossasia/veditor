@@ -151,7 +151,7 @@ def test_current_user_model_attributes() -> None:
     user = CurrentUser(
         user_id=1,
         email="user@example.com",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         source="jwt",
         event_ids=[],
     )
@@ -166,7 +166,7 @@ def test_current_user_model_attributes() -> None:
     machine = CurrentUser(
         user_id=None,
         email=None,
-        role="admin",
+        role=AuthRole.ADMIN,
         source="api_key",
         event_ids=[10, 20],
     )
@@ -215,8 +215,10 @@ def test_get_current_user_api_key_invalid(db_session: Session) -> None:
 
 
 def test_get_current_user_session_cookie_valid(db_session: Session) -> None:
-    user_row = _create_user(db_session, email="org@example.com", role="organizer")
-    token = create_session_token(user_id=user_row.id, role="organizer")
+    user_row = _create_user(
+        db_session, email="org@example.com", role=AuthRole.ORGANIZER
+    )
+    token = create_session_token(user_id=user_row.id, role=AuthRole.ORGANIZER)
 
     user = get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
     assert user.source == "cookie"
@@ -239,9 +241,9 @@ def test_get_current_user_session_cookie_invalid(db_session: Session) -> None:
 
 def test_get_current_user_session_cookie_user_inactive(db_session: Session) -> None:
     user_row = _create_user(
-        db_session, email="inactive@example.com", role="user", is_active=False
+        db_session, email="inactive@example.com", role=AuthRole.USER, is_active=False
     )
-    token = create_session_token(user_id=user_row.id, role="user")
+    token = create_session_token(user_id=user_row.id, role=AuthRole.USER)
 
     with pytest.raises(HTTPException) as excinfo:
         get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
@@ -252,7 +254,7 @@ def test_get_current_user_session_cookie_user_inactive(db_session: Session) -> N
 
 def test_get_current_user_session_cookie_user_not_found(db_session: Session) -> None:
     missing_id = 10_000_000
-    token = create_session_token(user_id=missing_id, role="user")
+    token = create_session_token(user_id=missing_id, role=AuthRole.USER)
 
     with pytest.raises(HTTPException) as excinfo:
         get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
@@ -262,9 +264,9 @@ def test_get_current_user_session_cookie_user_not_found(db_session: Session) -> 
 
 
 def test_get_current_user_bearer_token_valid(db_session: Session) -> None:
-    user_row = _create_user(db_session, email="dev@example.com", role="admin")
+    user_row = _create_user(db_session, email="dev@example.com", role=AuthRole.ADMIN)
     token = create_access_token(
-        user_id=user_row.id, email="dev@example.com", role="admin"
+        user_id=user_row.id, email="dev@example.com", role=AuthRole.ADMIN
     )
     mock_creds = MagicMock()
     mock_creds.credentials = token
@@ -289,10 +291,10 @@ def test_get_current_user_bearer_token_invalid(db_session: Session) -> None:
 
 def test_get_current_user_bearer_token_user_inactive(db_session: Session) -> None:
     user_row = _create_user(
-        db_session, email="dev@example.com", role="admin", is_active=False
+        db_session, email="dev@example.com", role=AuthRole.ADMIN, is_active=False
     )
     token = create_access_token(
-        user_id=user_row.id, email="dev@example.com", role="admin"
+        user_id=user_row.id, email="dev@example.com", role=AuthRole.ADMIN
     )
     mock_creds = MagicMock()
     mock_creds.credentials = token
@@ -318,7 +320,7 @@ def test_get_current_user_precedence_api_key_over_cookie(db_session: Session) ->
     # When both API key and cookie are provided, API key is evaluated first.
     _create_client(db_session, api_key="api-key", event_ids=[1])
 
-    token = create_session_token(user_id=2, role="user")
+    token = create_session_token(user_id=2, role=AuthRole.USER)
     user = get_current_user(
         request=MagicMock(), api_key="api-key", cookie_token=token, db=db_session
     )
@@ -327,7 +329,7 @@ def test_get_current_user_precedence_api_key_over_cookie(db_session: Session) ->
 
 def test_get_current_user_fail_fast_on_invalid_api_key(db_session: Session) -> None:
     # If explicit API key is provided but invalid, fails immediately with 401 instead of falling back.
-    token = create_session_token(user_id=2, role="user")
+    token = create_session_token(user_id=2, role=AuthRole.USER)
     with pytest.raises(HTTPException) as excinfo:
         get_current_user(
             request=MagicMock(), api_key="bad-key", cookie_token=token, db=db_session
@@ -340,9 +342,9 @@ def test_get_current_user_precedence_session_over_cookie_api_key(
     db_session: Session,
 ) -> None:
     # Valid session cookie takes precedence over stale or invalid cookie_api_key.
-    user_row = _create_user(db_session, email="u@example.com", role="user")
+    user_row = _create_user(db_session, email="u@example.com", role=AuthRole.USER)
 
-    token = create_session_token(user_id=user_row.id, role="user")
+    token = create_session_token(user_id=user_row.id, role=AuthRole.USER)
     user = get_current_user(
         request=MagicMock(),
         cookie_token=token,
@@ -356,8 +358,10 @@ def test_get_current_user_precedence_session_over_cookie_api_key(
 def test_get_current_user_ignores_stale_cookie_api_key_for_bearer_token(
     db_session: Session,
 ) -> None:
-    user_row = _create_user(db_session, email="u@example.com", role="user")
-    token = create_access_token(user_id=user_row.id, email="u@example.com", role="user")
+    user_row = _create_user(db_session, email="u@example.com", role=AuthRole.USER)
+    token = create_access_token(
+        user_id=user_row.id, email="u@example.com", role=AuthRole.USER
+    )
     mock_creds = MagicMock()
     mock_creds.credentials = token
 
@@ -411,9 +415,9 @@ def test_require_role_hierarchy() -> None:
 
 
 def test_require_admin() -> None:
-    regular_user = CurrentUser(user_id=1, role="user", source="jwt")
-    machine_admin = CurrentUser(role="admin", source="api_key")
-    human_admin = CurrentUser(user_id=2, role="admin", source="cookie")
+    regular_user = CurrentUser(user_id=1, role=AuthRole.USER, source="jwt")
+    machine_admin = CurrentUser(role=AuthRole.ADMIN, source="api_key")
+    human_admin = CurrentUser(user_id=2, role=AuthRole.ADMIN, source="cookie")
 
     with pytest.raises(HTTPException) as excinfo:
         require_admin(regular_user)
@@ -434,7 +438,7 @@ def test_require_admin() -> None:
 
 
 def test_check_event_access_not_found(db_session: Session) -> None:
-    user = CurrentUser(role="admin", source="jwt")
+    user = CurrentUser(role=AuthRole.ADMIN, source="jwt")
     missing_id = 10_000_000
 
     with pytest.raises(HTTPException) as excinfo:
@@ -447,7 +451,9 @@ def test_check_event_access_machine_client_in_scope(db_session: Session) -> None
     owner = _create_user(db_session)
     event = _create_event(db_session, name="PyCon", created_by_user_id=owner.id)
 
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[event.id])
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source="api_key", event_ids=[event.id]
+    )
     assert (
         check_event_access(event_id=event.id, user=client_user, db=db_session) is event
     )
@@ -455,7 +461,9 @@ def test_check_event_access_machine_client_in_scope(db_session: Session) -> None
 
 def test_check_event_access_machine_client_not_found(db_session: Session) -> None:
     missing_id = 10_000_000
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[missing_id])
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source="api_key", event_ids=[missing_id]
+    )
     with pytest.raises(HTTPException) as excinfo:
         check_event_access(event_id=missing_id, user=client_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
@@ -467,7 +475,7 @@ def test_check_event_access_machine_client_out_of_scope(db_session: Session) -> 
     event = _create_event(db_session, name="PyCon", created_by_user_id=owner.id)
 
     client_user = CurrentUser(
-        role="admin", source="api_key", event_ids=[event.id + 1000]
+        role=AuthRole.ADMIN, source="api_key", event_ids=[event.id + 1000]
     )
     with pytest.raises(HTTPException) as excinfo:
         check_event_access(event_id=event.id, user=client_user, db=db_session)
@@ -477,10 +485,14 @@ def test_check_event_access_machine_client_out_of_scope(db_session: Session) -> 
 
 def test_check_event_access_human_admin_unconditional(db_session: Session) -> None:
     owner = _create_user(db_session)
-    admin_user_row = _create_user(db_session, email="admin@example.com", role="admin")
+    admin_user_row = _create_user(
+        db_session, email="admin@example.com", role=AuthRole.ADMIN
+    )
     event = _create_event(db_session, name="FOSSASIA", created_by_user_id=owner.id)
 
-    admin_user = CurrentUser(user_id=admin_user_row.id, role="admin", source="jwt")
+    admin_user = CurrentUser(
+        user_id=admin_user_row.id, role=AuthRole.ADMIN, source="jwt"
+    )
     assert (
         check_event_access(event_id=event.id, user=admin_user, db=db_session) is event
     )
@@ -490,7 +502,9 @@ def test_check_event_access_event_creator(db_session: Session) -> None:
     owner = _create_user(db_session)
     event = _create_event(db_session, name="OpenTech", created_by_user_id=owner.id)
 
-    creator_user = CurrentUser(user_id=owner.id, role="organizer", source="cookie")
+    creator_user = CurrentUser(
+        user_id=owner.id, role=AuthRole.ORGANIZER, source="cookie"
+    )
     assert (
         check_event_access(event_id=event.id, user=creator_user, db=db_session) is event
     )
@@ -501,7 +515,7 @@ def test_check_event_access_non_creator_forbidden(db_session: Session) -> None:
     actor = _create_user(db_session, email="actor@example.com")
     event = _create_event(db_session, name="OpenTech", created_by_user_id=owner.id)
 
-    other_user = CurrentUser(user_id=actor.id, role="organizer", source="cookie")
+    other_user = CurrentUser(user_id=actor.id, role=AuthRole.ORGANIZER, source="cookie")
     with pytest.raises(HTTPException) as excinfo:
         check_event_access(event_id=event.id, user=other_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
@@ -513,7 +527,7 @@ def test_check_event_access_no_creator_regular_user_forbidden(
 ) -> None:
     event = _create_event(db_session, name="LegacyEvent", created_by_user_id=None)
 
-    reg_user = CurrentUser(user_id=1, role="user", source="jwt")
+    reg_user = CurrentUser(user_id=1, role=AuthRole.USER, source="jwt")
     with pytest.raises(HTTPException) as excinfo:
         check_event_access(event_id=event.id, user=reg_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
@@ -527,10 +541,10 @@ def test_check_event_access_no_creator_regular_user_forbidden(
 def test_fastapi_route_auth_integration(db_session: Session) -> None:
     test_app = FastAPI()
 
-    owner = _create_user(db_session, email="owner@test.com", role="organizer")
+    owner = _create_user(db_session, email="owner@test.com", role=AuthRole.ORGANIZER)
     event = _create_event(db_session, name="Test Conf", created_by_user_id=owner.id)
     _create_client(db_session, api_key="good-key", event_ids=[event.id])
-    regular_user = _create_user(db_session, email="user@test.com", role="user")
+    regular_user = _create_user(db_session, email="user@test.com", role=AuthRole.USER)
 
     @test_app.get("/events/{event_id}")
     def get_event_endpoint(
@@ -559,7 +573,7 @@ def test_fastapi_route_auth_integration(db_session: Session) -> None:
     assert resp.json() == {"id": event.id, "name": "Test Conf"}
 
     # 3. Authenticated via cookie for event creator -> 200
-    session_token = create_session_token(user_id=owner.id, role="organizer")
+    session_token = create_session_token(user_id=owner.id, role=AuthRole.ORGANIZER)
     resp = client.get(f"/events/{event.id}", cookies={"veditor_session": session_token})
     assert resp.status_code == 200
     assert resp.json()["id"] == event.id
@@ -570,17 +584,17 @@ def test_fastapi_route_auth_integration(db_session: Session) -> None:
     assert resp.json() == {"user_id": owner.id, "role": "organizer"}
 
     # 5. Role check fails for regular user
-    user_token = create_session_token(user_id=regular_user.id, role="user")
+    user_token = create_session_token(user_id=regular_user.id, role=AuthRole.USER)
     resp = client.get("/organizer-only", cookies={"veditor_session": user_token})
     assert resp.status_code == 403
 
 
 def test_current_user_is_human_admin() -> None:
-    machine = CurrentUser(role="admin", source="api_key")
+    machine = CurrentUser(role=AuthRole.ADMIN, source="api_key")
     assert machine.is_admin
     assert not machine.is_human_admin
 
-    human_admin = CurrentUser(role="admin", source="jwt", user_id=1)
+    human_admin = CurrentUser(role=AuthRole.ADMIN, source="jwt", user_id=1)
     assert human_admin.is_admin
     assert human_admin.is_human_admin
 
@@ -595,7 +609,7 @@ def test_require_event_access_invalid_path_param_format() -> None:
         return {"id": event.id}
 
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source="jwt"
     )
 
     client = TestClient(test_app)
@@ -619,7 +633,7 @@ def test_require_event_access_query_param_bypass_prevented(db_session: Session) 
     test_app.dependency_overrides[get_db] = lambda: db_session
     # Caller is authorized for a different event, but requesting the path event
     client_user = CurrentUser(
-        role="admin", source="api_key", event_ids=[event.id + 1000]
+        role=AuthRole.ADMIN, source="api_key", event_ids=[event.id + 1000]
     )
     test_app.dependency_overrides[get_current_user] = lambda: client_user
 
@@ -654,12 +668,16 @@ def test_get_current_user_cookie_fail_fast_over_bearer(db_session: Session) -> N
 
 
 def test_lock_active_admins(db_session: Session) -> None:
-    admin_one = _create_user(db_session, email="admin1@example.com", role="admin")
-    admin_two = _create_user(db_session, email="admin2@example.com", role="admin")
+    admin_one = _create_user(
+        db_session, email="admin1@example.com", role=AuthRole.ADMIN
+    )
+    admin_two = _create_user(
+        db_session, email="admin2@example.com", role=AuthRole.ADMIN
+    )
     _create_user(
         db_session,
         email="inactive-admin@example.com",
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=False,
     )
 
@@ -677,7 +695,7 @@ def test_require_talk_access_invalid_path_param_format() -> None:
         return {"id": talk.id}
 
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source="jwt"
     )
 
     client = TestClient(test_app)
@@ -702,7 +720,7 @@ def test_require_talk_access_success_and_unauthorized(db_session: Session) -> No
 
     # Authorized user (admin)
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source="jwt"
     )
     client = TestClient(test_app)
     resp = client.get(f"/talks/{talk.id}")
@@ -711,7 +729,7 @@ def test_require_talk_access_success_and_unauthorized(db_session: Session) -> No
 
     # Unauthorized machine client (talk.event_id not in client event_ids)
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="organizer", source="api_key", event_ids=[talk.event_id + 1000]
+        role=AuthRole.ORGANIZER, source="api_key", event_ids=[talk.event_id + 1000]
     )
     resp = client.get(f"/talks/{talk.id}")
     assert resp.status_code == 403
@@ -725,7 +743,7 @@ def test_login_routes_next_redirect_and_open_redirect_protection(
     user = User(
         email=f"next_test_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password=hash_password("Pass1234!"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
         is_verified=True,
     )

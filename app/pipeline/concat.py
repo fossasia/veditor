@@ -202,8 +202,12 @@ def _concat_reencode(
             raw_h = ref_v.codec_context.height or 1080
             can_w = (raw_w // 2) * 2
             can_h = (raw_h // 2) * 2
-            fps_val = ref_v.average_rate or ref_v.guessed_rate or 24
-            can_fps = Fraction(fps_val) if fps_val else Fraction(24, 1)
+            fps_val = ref_v.average_rate or ref_v.guessed_rate
+            can_fps = (
+                Fraction(fps_val.numerator, fps_val.denominator)
+                if fps_val
+                else Fraction(24, 1)
+            )
 
         can_sr = 44100
         can_layout = "stereo"
@@ -464,7 +468,7 @@ def concat(
         if storage_backend is not None:
             storage_backend.put(output_key, src)
             stored = storage_backend.get(output_key)
-            return getattr(stored, "key", str(stored))
+            return str(stored)
         LocalDiskBackend(out_p.parent).put(out_p.name, src)
         return str(out_p)
 
@@ -475,11 +479,7 @@ def concat(
 
     # Render into a temporary file, then persist via StorageBackend
     out_suffix = out_p.suffix or cut_p.suffix or ".mp4"
-    scratch_dir = (
-        getattr(storage_backend, "get_temp_dir", lambda: None)()
-        if storage_backend
-        else None
-    )
+    scratch_dir = storage_backend.get_temp_dir() if storage_backend else None
     with tempfile.TemporaryDirectory(
         prefix="veditor-concat-", dir=scratch_dir
     ) as tmpdir:

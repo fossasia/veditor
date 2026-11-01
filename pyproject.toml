@@ -56,6 +56,8 @@ exclude = ["migrations"]
 
 [tool.mypy]
 python_version = "3.14"
+# Avoid "Source file found twice" error when our "scripts" folder does not have "__init__.py"
+explicit_package_bases = true
 plugins = ["pydantic.mypy"]
 warn_unused_configs = true
 warn_redundant_casts = true

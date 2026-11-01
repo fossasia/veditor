@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from app.consts import TalkStatus
@@ -5,6 +7,9 @@ from app.states import TRANSITIONS, InvalidTransitionError, advance
 
 
 class DummyTalk:
+    status: str
+    updated_at: datetime
+
     def __init__(self, status: str) -> None:
         self.status = status
 
@@ -27,10 +32,10 @@ def test_advance_updates_talk_updated_at() -> None:
     assert talk.updated_at.tzinfo is not None
 
     # Also test transition to terminal 'done' from valid predecessor 'uploading'
-    talk.status = TalkStatus.UPLOADING
+    talk.status = "uploading"
     prev_time = talk.updated_at
     advance(talk, "done")
-    assert talk.status == TalkStatus.DONE
+    assert talk.status == "done"
     assert talk.updated_at >= prev_time
 
 

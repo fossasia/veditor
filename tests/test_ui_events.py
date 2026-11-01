@@ -246,7 +246,9 @@ def test_dashboard_quick_talk_event_selection(
     assert "Org2 Private Conference" not in resp_admin.text
 
 
-def test_dashboard_attach_room_event_selection(client: TestClient, db_session):
+def test_dashboard_attach_room_event_selection(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "att_org1@test.com", "organizer")
     org2 = create_user(db_session, "att_org2@test.com", "organizer")
 
@@ -1659,7 +1661,9 @@ def test_studio_events_create_and_edit_invalid_review_window(
     )
 
 
-def test_create_and_edit_event_with_dates(client: TestClient, db_session):
+def test_create_and_edit_event_with_dates(
+    client: TestClient, db_session: Session
+) -> None:
     user = create_user(db_session, "dates_organizer@test.com", "organizer")
     authenticate_client(client, user)
 
@@ -1767,8 +1771,8 @@ def test_create_and_edit_event_with_dates(client: TestClient, db_session):
 
 
 def test_studio_event_timezone_create_edit_and_rendering(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Verify Studio create/edit forms support timezone selection and validation."""
     user = create_user(db_session, "tz_organizer@example.com", "organizer")
     authenticate_client(client, user)

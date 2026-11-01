@@ -23,7 +23,7 @@ def list_talks(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[Talk]:
     """Lists talks with current state, across events an operator's key can see."""
-    if getattr(client, "is_platform", False):
+    if client.is_platform:
         talks = list(db.scalars(select(models.Talk)))
     else:
         talks = list(

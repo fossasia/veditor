@@ -344,7 +344,7 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
         if (
             row is not None
             and isinstance(row, SystemSetting)
-            and isinstance(getattr(row, "value", None), str)
+            and isinstance(row.value, str)
         ):
             return _cast_setting_value(normalized_key, row.value, default)
     except Exception as exc:  # noqa: BLE001

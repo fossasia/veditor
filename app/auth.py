@@ -2,7 +2,7 @@ import hashlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Cookie, Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -165,7 +165,7 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
     Validates that the provided client has access to the specified event_id.
     Raises a 403 Forbidden exception if the client does not have access.
     """
-    if getattr(client, "is_platform", False):
+    if client.is_platform:
         return
     if event_id not in client.event_ids:
         raise HTTPException(
@@ -198,7 +198,7 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
         role=AuthRole.ADMIN,
         source="api_key",
         event_ids=list(client.event_ids or []),
-        is_platform=bool(getattr(client, "is_platform", False)),
+        is_platform=client.is_platform,
     )
 
 
@@ -226,27 +226,23 @@ def get_current_user(
     if db is None:
         raise RuntimeError("Database session is required")
 
-    app_overrides = (
-        getattr(getattr(request, "app", None), "dependency_overrides", {})
-        if request
-        else {}
-    )
+    app_overrides: dict[Any, Any] = request.app.dependency_overrides if request else {}
     if get_client in app_overrides:
         client_fn = app_overrides[get_client]
         client = client_fn() if callable(client_fn) else client_fn
         if client:
             return CurrentUser(
                 user_id=None,
-                client_id=getattr(client, "id", None),
+                client_id=client.id,
                 email=None,
                 role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
-                is_platform=bool(getattr(client, "is_platform", False)),
+                is_platform=bool(client.is_platform),
             )
 
-    req_headers = getattr(request, "headers", {}) or {}
-    req_cookies = getattr(request, "cookies", {}) or {}
+    req_headers = request.headers
+    req_cookies = request.cookies
 
     # 1. Explicit machine client header (X-API-Key)
     header_key = _normalize_auth_value(
@@ -361,7 +357,7 @@ def get_current_user(
                 role=AuthRole.ADMIN,
                 source="api_key",
                 event_ids=list(client.event_ids or []),
-                is_platform=bool(getattr(client, "is_platform", False)),
+                is_platform=client.is_platform,
             )
         # Ignore stale machine cookies so a later bearer credential can be used.
 

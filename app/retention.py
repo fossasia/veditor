@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from rq import Retry
 from rq.job import Job
@@ -19,6 +19,9 @@ DEFAULT_FINAL_RETENTION_DAYS: Final[int] = 14
 INDEFINITE: Final = "indefinite"
 
 RetentionDays = int | Literal["indefinite"]
+
+if TYPE_CHECKING:
+    from app.models import Event, Talk
 
 
 def validate_final_retention_days(value: Any) -> RetentionDays:
@@ -70,17 +73,22 @@ class RetentionPolicy:
         return self.final_retention_days == INDEFINITE
 
 
-def get_retention(event: Any | None = None) -> RetentionPolicy:
+def get_retention(
+    event: Event | Talk | dict[str, Any] | None = None,
+) -> RetentionPolicy:
     """Resolve retention policy for an event or talk, falling back to defaults."""
     if event is None:
         return RetentionPolicy()
 
+    from app.models import Talk
+
     if isinstance(event, dict):
         overrides = event.get("retention_overrides", event)
+    elif isinstance(event, Talk):
+        linked_event = event.event
+        overrides = linked_event.retention_overrides if linked_event else None
     else:
-        overrides = getattr(event, "retention_overrides", None)
-        if overrides is None and hasattr(event, "event"):
-            overrides = getattr(event.event, "retention_overrides", None)
+        overrides = event.retention_overrides
 
     if not overrides or not isinstance(overrides, dict):
         return RetentionPolicy()
@@ -140,7 +148,7 @@ def run_retention_sweep(
             else talk.updated_at.replace(tzinfo=UTC)
         )
 
-        event_obj = getattr(talk, "event", None)
+        event_obj = talk.event
         policy = get_retention(event_obj if event_obj is not None else talk)
         retention_days = policy.final_retention_days
         if isinstance(retention_days, str):
