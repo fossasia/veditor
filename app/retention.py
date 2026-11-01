@@ -80,6 +80,8 @@ def get_retention(
     if event is None:
         return RetentionPolicy()
 
+    # Imported here, not at module top, to avoid a circular import:
+    # app.models -> app.retention (for validate_retention_overrides).
     from app.models import Talk
 
     if isinstance(event, dict):
