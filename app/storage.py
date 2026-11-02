@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -244,7 +246,6 @@ class LocalDiskBackend(StorageBackend):
 
 def get_storage_backend() -> StorageBackend:
     """FastAPI dependency returning the configured StorageBackend."""
-    from app.config import settings
 
     return LocalDiskBackend(settings.data_dir)
 

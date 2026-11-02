@@ -1,10 +1,27 @@
+import logging
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, Literal
+
+from rq import Retry
+from rq.job import Job
+from rq.repeat import Repeat
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload
+
+from app.config import settings
+from app.db import new_session
+from app.queue import light_queue
+from app.storage import get_storage_backend
 
 DEFAULT_FINAL_RETENTION_DAYS: Final[int] = 14
 INDEFINITE: Final = "indefinite"
 
 RetentionDays = int | Literal["indefinite"]
+
+if TYPE_CHECKING:
+    from app.models import Event, Talk
 
 
 def validate_final_retention_days(value: Any) -> RetentionDays:
@@ -56,17 +73,24 @@ class RetentionPolicy:
         return self.final_retention_days == INDEFINITE
 
 
-def get_retention(event: Any | None = None) -> RetentionPolicy:
+def get_retention(
+    event: Event | Talk | dict[str, Any] | None = None,
+) -> RetentionPolicy:
     """Resolve retention policy for an event or talk, falling back to defaults."""
     if event is None:
         return RetentionPolicy()
 
+    # Imported here, not at module top, to avoid a circular import:
+    # app.models -> app.retention (for validate_retention_overrides).
+    from app.models import Talk
+
     if isinstance(event, dict):
         overrides = event.get("retention_overrides", event)
+    elif isinstance(event, Talk):
+        linked_event = event.event
+        overrides = linked_event.retention_overrides if linked_event else None
     else:
-        overrides = getattr(event, "retention_overrides", None)
-        if overrides is None and hasattr(event, "event"):
-            overrides = getattr(event.event, "retention_overrides", None)
+        overrides = event.retention_overrides
 
     if not overrides or not isinstance(overrides, dict):
         return RetentionPolicy()
@@ -94,20 +118,13 @@ def run_retention_sweep(
     - Excludes 'rejected' talks and intermediate/raw storage.
     - Returns list of talk IDs whose final/ storage was deleted.
     """
-    import logging
-    from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy.exc import SQLAlchemyError
-    from sqlalchemy.orm import joinedload
-
-    from app.db import SessionLocal
     from app.models import Talk
-    from app.storage import get_storage_backend
 
     logger = logging.getLogger(__name__)
 
     if db is None:
-        with SessionLocal() as session:
+        with new_session() as session:
             return run_retention_sweep(db=session, storage=storage)
 
     if storage is None:
@@ -116,13 +133,12 @@ def run_retention_sweep(
     now = datetime.now(UTC)
     swept_talk_ids: list[int] = []
 
-    talks = (
-        db.query(Talk)
+    talks = db.scalars(
+        select(Talk)
         .options(joinedload(Talk.event))
-        .filter(Talk.status == "done", Talk.final_cleaned_at.is_(None))
+        .where(Talk.status == "done", Talk.final_cleaned_at.is_(None))
         .order_by(Talk.id.asc())
-        .all()
-    )
+    ).all()
 
     for talk in talks:
         if talk.updated_at is None:
@@ -134,12 +150,13 @@ def run_retention_sweep(
             else talk.updated_at.replace(tzinfo=UTC)
         )
 
-        event_obj = getattr(talk, "event", None)
+        event_obj = talk.event
         policy = get_retention(event_obj if event_obj is not None else talk)
-        if policy.is_final_indefinite:
+        retention_days = policy.final_retention_days
+        if isinstance(retention_days, str):
             continue
 
-        retention_delta = timedelta(days=policy.final_retention_days)
+        retention_delta = timedelta(days=retention_days)
         if now < updated_at + retention_delta:
             continue
 
@@ -190,7 +207,6 @@ def run_retention_sweep(
 
 def enqueue_retention_sweep(queue: Any | None = None) -> Any:
     """Enqueue run_retention_sweep to the RQ light queue."""
-    from app.queue import light_queue
 
     target_queue = queue or light_queue
     return target_queue.enqueue(
@@ -207,15 +223,6 @@ def register_periodic_retention_sweep(
     retry: Any | None = None,
 ) -> Any:
     """Register a scheduled periodic retention sweep job on the RQ queue."""
-    import logging
-    from datetime import timedelta
-
-    from rq import Retry
-    from rq.job import Job
-    from rq.repeat import Repeat
-
-    from app.config import settings
-    from app.queue import light_queue
 
     logger = logging.getLogger(__name__)
     target_queue = queue or light_queue

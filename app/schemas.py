@@ -2,7 +2,7 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.consts import AuthRole, SSOScopeType
 from app.retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -56,7 +57,7 @@ class EventBase(BaseModel):
         return validate_timezone(v)
 
     @model_validator(mode="after")
-    def _validate_dates(self):
+    def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date must be greater than or equal to start_date")
         return self
@@ -89,7 +90,7 @@ class EventUpdate(BaseModel):
         return validate_timezone(v)
 
     @model_validator(mode="after")
-    def _validate_dates(self):
+    def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
             raise ValueError("end_date must be greater than or equal to start_date")
         return self
@@ -244,7 +245,7 @@ class TalkRead(TalkBase):
 
     @field_validator("include_intro", "include_outro", mode="before")
     @classmethod
-    def _coerce_bool(cls, v):
+    def _coerce_bool(cls, v: Any) -> bool:
         return False if v is None else bool(v)
 
 
@@ -266,7 +267,7 @@ class JobRead(JobBase):
     talk_id: int
     model_config = ConfigDict(from_attributes=True)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
@@ -293,7 +294,7 @@ class JobRead(JobBase):
             end = datetime.now(UTC)
         return max(0.0, round((end - started).total_seconds(), 2))
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def estimated_remaining(self) -> float | None:
         """
@@ -377,7 +378,7 @@ class RecordingIngestRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def exactly_one_path(self):
+    def exactly_one_path(self) -> Self:
         if bool(self.source_path) == bool(self.relative_key):
             raise ValueError("exactly one of source_path or relative_key is required")
         return self
@@ -422,7 +423,7 @@ class CutSegment(BaseModel):
     end: str | float
 
     @model_validator(mode="after")
-    def validate_segment(self):
+    def validate_segment(self) -> Self:
         s = _parse_time_value(self.start)
         e = _parse_time_value(self.end)
         if e <= s:
@@ -447,7 +448,7 @@ class CutBoundsRequest(BaseModel):
     note: str | None = None
 
     @model_validator(mode="after")
-    def parse_and_validate(self):
+    def parse_and_validate(self) -> Self:
         if self.segments is not None:
             if len(self.segments) == 0:
                 raise ValueError("segments list cannot be empty")
@@ -472,7 +473,6 @@ class CutBoundsRequest(BaseModel):
             raise ValueError(
                 "Both cut_start and cut_end are required when segments is not provided"
             )
-
         start_s = _parse_hhmmss(self.cut_start)
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
@@ -489,6 +489,7 @@ class CutBoundsRequest(BaseModel):
             first_s, _ = self.segments[0].parsed_seconds()
             _, last_e = self.segments[-1].parsed_seconds()
             return first_s, last_e
+        assert self.cut_start is not None and self.cut_end is not None
         return float(_parse_hhmmss(self.cut_start)), float(_parse_hhmmss(self.cut_end))
 
     def parsed_segments(self) -> list[tuple[float, float]]:
@@ -507,7 +508,7 @@ class IntroOutroRequest(BaseModel):
     speaker_email: str | None = None
 
     @model_validator(mode="after")
-    def validate_custom_paths(self):
+    def validate_custom_paths(self) -> Self:
         if (
             self.include_intro
             and self.intro_source == "custom"
@@ -550,7 +551,7 @@ class OrganizerRequestCreate(BaseModel):
 
 
 class UserPromoteRequest(BaseModel):
-    role: Literal["user", "organizer"]
+    role: Literal[AuthRole.USER, AuthRole.ORGANIZER]
 
 
 class EventSSOTokenRequest(BaseModel):
@@ -596,7 +597,7 @@ class ApiKeyCreatedResponse(BaseModel):
 class SSOTokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
-    scope_type: Literal["event", "talk"]
+    scope_type: SSOScopeType
     scope_id: int
     role: str
     expires_in_seconds: int

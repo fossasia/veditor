@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, tzinfo
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -17,12 +17,17 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db import Base
 from app.retention import validate_retention_overrides
+
+from .consts import TalkStatus
 
 
 class RetentionOverrides(MutableDict):
@@ -43,7 +48,7 @@ class RetentionOverrides(MutableDict):
             validate_retention_overrides({**self, key: default})
         return super().setdefault(key, default)
 
-    def __ior__(self, other: Any) -> Self:
+    def __ior__(self, other: Any) -> Self:  # type: ignore[misc]
         self.update(other)
         return self
 
@@ -178,12 +183,12 @@ class Event(Base):
         return 1
 
     @property
-    def event_tz(self) -> ZoneInfo:
-        """Return the event's ZoneInfo, falling back to UTC if unset or invalid."""
+    def event_tz(self) -> tzinfo:
+        """Return the event's timezone, falling back to UTC if unset or invalid."""
         if self.timezone:
             try:
                 return ZoneInfo(self.timezone)
-            except ZoneInfoNotFoundError, KeyError:
+            except ZoneInfoNotFoundError, ValueError, KeyError:
                 pass
         return UTC
 
@@ -264,8 +269,16 @@ class Talk(Base):
     room: Mapped[str | None] = mapped_column(String(255))
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="waiting_for_files"
+    status: Mapped[TalkStatus] = mapped_column(
+        SAEnum(
+            TalkStatus,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+        default=TalkStatus.WAITING_FILES,
     )
     speaker_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
@@ -316,8 +329,8 @@ class Talk(Base):
 
     @property
     def is_eventyay_synced(self) -> bool:
-        ev = getattr(self, "event", None)
-        return ev.is_eventyay_synced if ev else False
+        ev = self.event
+        return ev.is_eventyay_synced if ev is not None else False
 
 
 class Job(Base):

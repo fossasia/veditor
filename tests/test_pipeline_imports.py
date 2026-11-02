@@ -13,7 +13,7 @@ def is_forbidden(module_name: str | None) -> bool:
     )
 
 
-def test_pipeline_imports():
+def test_pipeline_imports() -> None:
     """
     Ensure that no file inside app/pipeline imports from forbidden modules:
     fastapi, rq, sqlalchemy, or app.db.

@@ -44,10 +44,6 @@ def rescale_pts(packet: av.Packet, src_tb: Any, dst_tb: Any) -> None:
         packet.time_base = dst_tb
 
 
-if not hasattr(av.Packet, "rescale_pts"):
-    av.Packet.rescale_pts = rescale_pts
-
-
 def _mux_packet_with_monotonic_dts(
     out_container: av.container.OutputContainer,
     packet: av.Packet,
@@ -160,7 +156,7 @@ def normalize(
                 if packet.stream.type == "video" and out_video is not None:
                     if packet.dts is None and packet.pts is None:
                         continue
-                    packet.rescale_pts(video_streams[0].time_base, out_video.time_base)
+                    rescale_pts(packet, video_streams[0].time_base, out_video.time_base)
                     packet.stream = out_video
                     _mux_packet_with_monotonic_dts(
                         out_container, packet, out_video.index, last_dts
@@ -175,12 +171,16 @@ def normalize(
                         )
                         continue
                     for frame in decoded_frames:
+                        if not isinstance(frame, av.AudioFrame):
+                            continue
                         graph.push(frame)
                         while True:
                             try:
                                 out_frame = graph.pull()
                             except (av.FFmpegError, EOFError) as _:
                                 break
+                            if not isinstance(out_frame, av.AudioFrame):
+                                continue
 
                             out_frame.pts = audio_sample_count
                             out_frame.time_base = Fraction(1, sample_rate)
@@ -197,6 +197,8 @@ def normalize(
                     out_frame = graph.pull()
                 except (av.FFmpegError, EOFError) as _:
                     break
+                if not isinstance(out_frame, av.AudioFrame):
+                    continue
 
                 out_frame.pts = audio_sample_count
                 out_frame.time_base = Fraction(1, sample_rate)

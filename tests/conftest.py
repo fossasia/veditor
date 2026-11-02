@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 from uuid import uuid4
 
 import av
@@ -19,12 +20,15 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+# Importing app.models registers every ORM model on Base.metadata before
+# Base.metadata.create_all() runs in setup_test_database, so the test schema
+# includes all tables (a bare `from app.db import Base` would know none of them).
 from app import models as _models  # noqa: F401
 from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 from app.pipeline.detect import container_duration_seconds
-from app.storage import StorageBackend, StorageKeyNotFoundError
+from app.storage import StorageBackend, StorageKeyNotFoundError, get_storage_backend
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +41,13 @@ TestSessionLocal = sessionmaker(
 
 
 @pytest.fixture(scope="session")
-def setup_test_database() -> Iterator[None]:
+def setup_test_database() -> Generator[None]:
     Base.metadata.create_all(bind=_test_engine)
     yield
 
 
 @pytest.fixture
-def db_session(setup_test_database: Iterator[None]) -> Generator[Session]:
+def db_session(setup_test_database: Generator[None]) -> Generator[Session]:
     connection = _test_engine.connect()
     transaction = connection.begin()
     session = TestSessionLocal(bind=connection)
@@ -61,13 +65,30 @@ def db_session(setup_test_database: Iterator[None]) -> Generator[Session]:
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_dependency_overrides() -> Generator[None]:
+    yield
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def out_of_band_sessions(db_session: Session) -> Generator[None]:
+    """Redirect new_session() callers (RQ workers, CLI, template fallbacks)
+    to the test database inside the per-test transaction."""
+    with patch(
+        "app.db.SessionLocal",
+        side_effect=lambda: TestSessionLocal(bind=db_session.get_bind()),
+    ):
+        yield
+
+
 # --- Fake Storage ---
 
 
 class FakePath:
     """A minimal mock for pathlib.Path that provides read_bytes for tests."""
 
-    def __init__(self, key: str, data: bytes):
+    def __init__(self, key: str, data: bytes) -> None:
         self.key = key
         self._data = data
 
@@ -167,8 +188,6 @@ def override_storage_backend(app: FastAPI, fake_backend: FakeStorageBackend) -> 
         override_storage_backend(app, fake_storage)
     """
     try:
-        from app.storage import get_storage_backend
-
         app.dependency_overrides[get_storage_backend] = lambda: fake_backend
     except ImportError as e:
         logger.warning(

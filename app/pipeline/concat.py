@@ -57,15 +57,15 @@ def _can_stream_copy(segments: list[Path]) -> bool:
 
                 audio_props: list[tuple[Any, ...]] = []
                 for a in audio_streams:
-                    ctx = a.codec_context
-                    fmt_name = ctx.format.name if ctx.format else None
+                    a_ctx = a.codec_context
+                    fmt_name = a_ctx.format.name if a_ctx.format else None
                     audio_props.append(
                         (
-                            ctx.name,
-                            ctx.sample_rate,
-                            ctx.channels,
+                            a_ctx.name,
+                            a_ctx.sample_rate,
+                            a_ctx.channels,
                             fmt_name,
-                            bytes(ctx.extradata or b""),
+                            bytes(a_ctx.extradata or b""),
                         )
                     )
 
@@ -202,8 +202,12 @@ def _concat_reencode(
             raw_h = ref_v.codec_context.height or 1080
             can_w = (raw_w // 2) * 2
             can_h = (raw_h // 2) * 2
-            fps_val = ref_v.average_rate or ref_v.guessed_rate or 24
-            can_fps = Fraction(fps_val) if fps_val else Fraction(24, 1)
+            fps_val = ref_v.average_rate or ref_v.guessed_rate
+            can_fps = (
+                Fraction(fps_val.numerator, fps_val.denominator)
+                if fps_val
+                else Fraction(24, 1)
+            )
 
         can_sr = 44100
         can_layout = "stereo"
@@ -311,9 +315,11 @@ def _concat_reencode(
                                 fps_graph.push(frame)
                                 while True:
                                     try:
-                                        emit_video_frame(fps_graph.pull())
+                                        pulled = fps_graph.pull()
                                     except (av.BlockingIOError, av.EOFError) as _:
                                         break
+                                    if isinstance(pulled, av.VideoFrame):
+                                        emit_video_frame(pulled)
                             else:
                                 emit_video_frame(frame)
 
@@ -330,9 +336,11 @@ def _concat_reencode(
                     fps_graph.push(None)
                     while True:
                         try:
-                            emit_video_frame(fps_graph.pull())
+                            pulled = fps_graph.pull()
                         except (av.BlockingIOError, av.EOFError) as _:
                             break
+                        if isinstance(pulled, av.VideoFrame):
+                            emit_video_frame(pulled)
 
             if resampler is not None:
                 for r_frame in resampler.resample(None):
@@ -366,7 +374,7 @@ def _concat_reencode(
                     black_frame = av.VideoFrame.from_ndarray(
                         np.zeros((can_h, can_w, 3), dtype=np.uint8), format="rgb24"
                     ).reformat(format="yuv420p")
-                    for _ in range(needed_frames):
+                    for i in range(needed_frames):
                         emit_video_frame(black_frame)
 
         if out_video is not None:
@@ -460,7 +468,7 @@ def concat(
         if storage_backend is not None:
             storage_backend.put(output_key, src)
             stored = storage_backend.get(output_key)
-            return getattr(stored, "key", str(stored))
+            return str(stored)
         LocalDiskBackend(out_p.parent).put(out_p.name, src)
         return str(out_p)
 
@@ -471,11 +479,7 @@ def concat(
 
     # Render into a temporary file, then persist via StorageBackend
     out_suffix = out_p.suffix or cut_p.suffix or ".mp4"
-    scratch_dir = (
-        getattr(storage_backend, "get_temp_dir", lambda: None)()
-        if storage_backend
-        else None
-    )
+    scratch_dir = storage_backend.get_temp_dir() if storage_backend else None
     with tempfile.TemporaryDirectory(
         prefix="veditor-concat-", dir=scratch_dir
     ) as tmpdir:
