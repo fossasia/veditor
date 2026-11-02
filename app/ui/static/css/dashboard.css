@@ -194,3 +194,94 @@
 }
 
 .form-error.hidden { display: none; }
+
+/* ---------------------------------------------------------------------------
+   Attach Room Recording Modal Overhaul
+   --------------------------------------------------------------------------- */
+.attach-source-toggle {
+  display: flex;
+  background: var(--v-bg-subtle);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-md, 6px);
+  padding: 3px;
+  gap: 4px;
+}
+
+.attach-source-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: calc(var(--v-radius-md, 6px) - 2px);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--v-text-secondary);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.attach-source-btn:hover {
+  color: var(--v-text-primary);
+}
+
+.attach-source-btn.attach-source-active {
+  background: var(--v-bg-surface);
+  color: var(--v-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.attach-source-hidden {
+  display: none !important;
+}
+
+.attach-dropzone {
+  border: 2px dashed var(--v-border);
+  border-radius: var(--v-radius-md, 8px);
+  background: var(--v-bg-subtle);
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  outline: none;
+}
+
+.attach-dropzone:hover,
+.attach-dropzone.drag-over,
+.attach-dropzone:focus-visible {
+  border-color: var(--v-primary);
+  background: var(--v-primary-subtle);
+}
+
+.attach-dropzone-icon {
+  color: var(--v-text-muted);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-dropzone.drag-over .attach-dropzone-icon,
+.attach-dropzone:hover .attach-dropzone-icon {
+  color: var(--v-primary);
+}
+
+.attach-dropzone-text {
+  font-size: 0.875rem;
+  color: var(--v-text-primary);
+  margin: 0 0 4px 0;
+}
+
+.attach-dropzone-subtext {
+  font-size: 0.78rem;
+  color: var(--v-text-muted);
+  margin: 0;
+}
+
+.attach-file-input {
+  display: none;
+}

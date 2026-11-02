@@ -11,15 +11,19 @@ import struct
 from enum import Enum
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import av
+from av.packet import Packet
+from av.video.codeccontext import VideoCodecContext
+from av.video.stream import VideoStream
 
 from app.pipeline.loudness import _mux_packet_with_monotonic_dts, rescale_pts
 
 logger = logging.getLogger(__name__)
 
 
-def _is_avcc(stream: av.video.stream.VideoStream) -> bool:
+def _is_avcc(stream: VideoStream) -> bool:
     """Check if stream uses AVCC / HVCC length-prefixed packet format."""
     extra = (
         bytes(stream.codec_context.extradata) if stream.codec_context.extradata else b""
@@ -440,7 +444,9 @@ def _cut_smart(
             if in_v.profile:
                 head_options["profile"] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
-            head_ctx = av.CodecContext.create(av.Codec(encoder_name, "w"))
+            head_ctx = cast(
+                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, "w"))
+            )
             head_ctx.width = in_v.codec_context.width
             head_ctx.height = in_v.codec_context.height
             head_ctx.pix_fmt = in_v.codec_context.pix_fmt or "yuv420p"
@@ -454,30 +460,30 @@ def _cut_smart(
                     h_frame = h_frame.reformat(format=head_ctx.pix_fmt)
                 h_frame.pts = i
                 h_frame.time_base = head_ctx.time_base
-                for p in head_ctx.encode(h_frame):
+                for vp in head_ctx.encode(h_frame):
                     if is_avcc:
-                        avcc_bytes = _annexb_to_avcc(bytes(p))
+                        avcc_bytes = _annexb_to_avcc(bytes(vp))
                         npkt = av.Packet(avcc_bytes)
-                        npkt.pts = p.pts
-                        npkt.dts = p.dts
+                        npkt.pts = vp.pts
+                        npkt.dts = vp.dts
                         npkt.time_base = head_ctx.time_base
-                        p = npkt
-                    rescale_pts(p, head_ctx.time_base, out_v.time_base)
-                    p.stream = out_v
+                        vp = npkt
+                    rescale_pts(vp, head_ctx.time_base, out_v.time_base)
+                    vp.stream = out_v
                     _mux_packet_with_monotonic_dts(
-                        out_container, p, out_v.index, last_dts
+                        out_container, vp, out_v.index, last_dts
                     )
-            for p in head_ctx.encode():
+            for vp in head_ctx.encode():
                 if is_avcc:
-                    avcc_bytes = _annexb_to_avcc(bytes(p))
+                    avcc_bytes = _annexb_to_avcc(bytes(vp))
                     npkt = av.Packet(avcc_bytes)
-                    npkt.pts = p.pts
-                    npkt.dts = p.dts
+                    npkt.pts = vp.pts
+                    npkt.dts = vp.dts
                     npkt.time_base = head_ctx.time_base
-                    p = npkt
-                rescale_pts(p, head_ctx.time_base, out_v.time_base)
-                p.stream = out_v
-                _mux_packet_with_monotonic_dts(out_container, p, out_v.index, last_dts)
+                    vp = npkt
+                rescale_pts(vp, head_ctx.time_base, out_v.time_base)
+                vp.stream = out_v
+                _mux_packet_with_monotonic_dts(out_container, vp, out_v.index, last_dts)
 
         body_start_pts = len(head_frames) * pts_per_frame
         max_body_pts = body_start_pts
@@ -488,18 +494,18 @@ def _cut_smart(
         )
         body_first_dts = None
         body_first_pts = None
-        for p in in_container.demux(in_v):
-            if p.pts is None:
+        for bp in in_container.demux(in_v):
+            if bp.pts is None:
                 continue
-            t = float(p.pts * in_v.time_base)
+            t = float(bp.pts * in_v.time_base)
             if t >= K_end_body - epsilon:
                 break
             if t >= K_start_body - epsilon:
                 if body_first_dts is None:
-                    if not p.is_keyframe:
+                    if not bp.is_keyframe:
                         continue
-                    body_first_dts = p.dts if p.dts is not None else p.pts
-                    body_first_pts = p.pts
+                    body_first_dts = bp.dts if bp.dts is not None else bp.pts
+                    body_first_pts = bp.pts
                     if is_avcc and sps_list and pps_list:
                         prefix = bytearray()
                         for s in sps_list:
@@ -508,21 +514,24 @@ def _cut_smart(
                         for pp in pps_list:
                             prefix.extend(struct.pack(">I", len(pp)))
                             prefix.extend(pp)
-                        prefix.extend(bytes(p))
+                        prefix.extend(bytes(bp))
                         npkt = av.Packet(bytes(prefix))
-                        npkt.pts = p.pts
-                        npkt.dts = p.dts
-                        npkt.time_base = p.time_base
-                        p = npkt
-                p.pts = p.pts - body_first_pts
-                p.dts = (p.dts if p.dts is not None else p.pts) - body_first_dts
-                rescale_pts(p, in_v.time_base, out_v.time_base)
-                p.pts += body_start_pts
-                p.dts += body_start_pts
-                dur = p.duration if p.duration else pts_per_frame
-                max_body_pts = max(max_body_pts, p.pts + dur)
-                p.stream = out_v
-                _mux_packet_with_monotonic_dts(out_container, p, out_v.index, last_dts)
+                        npkt.pts = bp.pts
+                        npkt.dts = bp.dts
+                        npkt.time_base = bp.time_base
+                        bp = cast("Packet[VideoStream]", npkt)
+                assert body_first_pts is not None
+                assert body_first_dts is not None
+                assert bp.pts is not None
+                bp.pts = bp.pts - body_first_pts
+                bp.dts = (bp.dts if bp.dts is not None else bp.pts) - body_first_dts
+                rescale_pts(bp, in_v.time_base, out_v.time_base)
+                bp.pts += body_start_pts
+                bp.dts += body_start_pts
+                dur = bp.duration if bp.duration else pts_per_frame
+                max_body_pts = max(max_body_pts, bp.pts + dur)
+                bp.stream = out_v
+                _mux_packet_with_monotonic_dts(out_container, bp, out_v.index, last_dts)
 
         tail_start_pts = max(body_start_pts, max_body_pts)
 
@@ -534,7 +543,9 @@ def _cut_smart(
             if in_v.profile:
                 tail_options["profile"] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
-            tail_ctx = av.CodecContext.create(av.Codec(encoder_name, "w"))
+            tail_ctx = cast(
+                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, "w"))
+            )
             tail_ctx.width = in_v.codec_context.width
             tail_ctx.height = in_v.codec_context.height
             tail_ctx.pix_fmt = in_v.codec_context.pix_fmt or "yuv420p"
@@ -548,36 +559,38 @@ def _cut_smart(
                     t_frame = t_frame.reformat(format=tail_ctx.pix_fmt)
                 t_frame.pts = j
                 t_frame.time_base = tail_ctx.time_base
-                for p in tail_ctx.encode(t_frame):
+                for vp in tail_ctx.encode(t_frame):
                     if is_avcc:
-                        avcc_bytes = _annexb_to_avcc(bytes(p))
+                        avcc_bytes = _annexb_to_avcc(bytes(vp))
                         npkt = av.Packet(avcc_bytes)
-                        npkt.pts = p.pts
-                        npkt.dts = p.dts
+                        npkt.pts = vp.pts
+                        npkt.dts = vp.dts
                         npkt.time_base = tail_ctx.time_base
-                        p = npkt
-                    rescale_pts(p, tail_ctx.time_base, out_v.time_base)
-                    p.pts += tail_start_pts
-                    if p.dts is not None:
-                        p.dts += tail_start_pts
-                    p.stream = out_v
+                        vp = npkt
+                    rescale_pts(vp, tail_ctx.time_base, out_v.time_base)
+                    if vp.pts is not None:
+                        vp.pts += tail_start_pts
+                    if vp.dts is not None:
+                        vp.dts += tail_start_pts
+                    vp.stream = out_v
                     _mux_packet_with_monotonic_dts(
-                        out_container, p, out_v.index, last_dts
+                        out_container, vp, out_v.index, last_dts
                     )
-            for p in tail_ctx.encode():
+            for vp in tail_ctx.encode():
                 if is_avcc:
-                    avcc_bytes = _annexb_to_avcc(bytes(p))
+                    avcc_bytes = _annexb_to_avcc(bytes(vp))
                     npkt = av.Packet(avcc_bytes)
-                    npkt.pts = p.pts
-                    npkt.dts = p.dts
+                    npkt.pts = vp.pts
+                    npkt.dts = vp.dts
                     npkt.time_base = tail_ctx.time_base
-                    p = npkt
-                rescale_pts(p, tail_ctx.time_base, out_v.time_base)
-                p.pts += tail_start_pts
-                if p.dts is not None:
-                    p.dts += tail_start_pts
-                p.stream = out_v
-                _mux_packet_with_monotonic_dts(out_container, p, out_v.index, last_dts)
+                    vp = npkt
+                rescale_pts(vp, tail_ctx.time_base, out_v.time_base)
+                if vp.pts is not None:
+                    vp.pts += tail_start_pts
+                if vp.dts is not None:
+                    vp.dts += tail_start_pts
+                vp.stream = out_v
+                _mux_packet_with_monotonic_dts(out_container, vp, out_v.index, last_dts)
 
     return CutStrategy.SMART_CUT
 

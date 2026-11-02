@@ -1,11 +1,19 @@
-from datetime import UTC, datetime, timedelta
+import html
+import re
+import urllib.parse
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from httpx2 import Response
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
+from app.auth import hash_api_key
+from app.consts import TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
@@ -15,17 +23,17 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def setup_database():
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
 @pytest.fixture
-def client():
+def client() -> TestClient:
     return TestClient(app)
 
 
-def create_user(db_session, email: str, role: str) -> models.User:
+def create_user(db_session: Session, email: str, role: str) -> models.User:
     user = models.User(
         email=email,
         hashed_password=hash_password("testpass123"),
@@ -39,18 +47,20 @@ def create_user(db_session, email: str, role: str) -> models.User:
     return user
 
 
-def authenticate_client(client: TestClient, user: models.User):
+def authenticate_client(client: TestClient, user: models.User) -> None:
     token = create_session_token(user.id, user.role)
     client.cookies.set("veditor_session", token)
 
 
-def test_get_events_unauthenticated(client: TestClient):
+def test_get_events_unauthenticated(client: TestClient) -> None:
     response = client.get("/studio/events", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["location"] == "/login?next=/studio/events"
 
 
-def test_get_events_forbidden_for_user_role(client: TestClient, db_session):
+def test_get_events_forbidden_for_user_role(
+    client: TestClient, db_session: Session
+) -> None:
     user = create_user(db_session, "viewer@test.com", "user")
     authenticate_client(client, user)
 
@@ -64,7 +74,7 @@ def test_get_events_forbidden_for_user_role(client: TestClient, db_session):
     assert "alert alert-danger" in followed.text
 
 
-def test_get_events_organizer_empty(client: TestClient, db_session):
+def test_get_events_organizer_empty(client: TestClient, db_session: Session) -> None:
     organizer = create_user(db_session, "organizer1@test.com", "organizer")
     authenticate_client(client, organizer)
 
@@ -78,7 +88,9 @@ def test_get_events_organizer_empty(client: TestClient, db_session):
     assert 'name="name"' in response.text
 
 
-def test_get_events_organizer_isolation(client: TestClient, db_session):
+def test_get_events_organizer_isolation(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "org1@test.com", "organizer")
     org2 = create_user(db_session, "org2@test.com", "organizer")
 
@@ -97,7 +109,9 @@ def test_get_events_organizer_isolation(client: TestClient, db_session):
     assert "View Talks" in response.text
 
 
-def test_get_events_admin_sees_only_own(client: TestClient, db_session):
+def test_get_events_admin_sees_only_own(
+    client: TestClient, db_session: Session
+) -> None:
     admin = create_user(db_session, "admin@test.com", "admin")
     org = create_user(db_session, "org_events@test.com", "organizer")
 
@@ -115,7 +129,7 @@ def test_get_events_admin_sees_only_own(client: TestClient, db_session):
     assert "org_events@test.com" not in response.text
 
 
-def test_post_events_unauthenticated(client: TestClient):
+def test_post_events_unauthenticated(client: TestClient) -> None:
     response = client.post(
         "/studio/events",
         data={"name": "Unauthorized Conf"},
@@ -125,7 +139,9 @@ def test_post_events_unauthenticated(client: TestClient):
     assert response.headers["location"] == "/login"
 
 
-def test_post_events_forbidden_for_user_role(client: TestClient, db_session):
+def test_post_events_forbidden_for_user_role(
+    client: TestClient, db_session: Session
+) -> None:
     user = create_user(db_session, "user_post@test.com", "user")
     authenticate_client(client, user)
 
@@ -134,7 +150,7 @@ def test_post_events_forbidden_for_user_role(client: TestClient, db_session):
     assert response.json()["detail"] == "Operation requires minimum role 'organizer'"
 
 
-def test_post_events_empty_name(client: TestClient, db_session):
+def test_post_events_empty_name(client: TestClient, db_session: Session) -> None:
     organizer = create_user(db_session, "org_empty@test.com", "organizer")
     authenticate_client(client, organizer)
 
@@ -143,7 +159,7 @@ def test_post_events_empty_name(client: TestClient, db_session):
     assert "Event name is required." in response.text
 
 
-def test_post_events_success_organizer(client: TestClient, db_session):
+def test_post_events_success_organizer(client: TestClient, db_session: Session) -> None:
     organizer = create_user(db_session, "org_creator@test.com", "organizer")
     authenticate_client(client, organizer)
 
@@ -154,18 +170,19 @@ def test_post_events_success_organizer(client: TestClient, db_session):
     )
     assert response.status_code == 303
 
-    event = (
-        db_session.query(models.Event)
-        .filter(models.Event.name == "FOSSASIA Summit 2026 Organizer Post")
+    event = db_session.scalar(
+        select(models.Event)
+        .where(models.Event.name == "FOSSASIA Summit 2026 Organizer Post")
         .order_by(models.Event.id.desc())
-        .first()
     )
     assert event is not None
     assert event.created_by_user_id == organizer.id
     assert response.headers["location"] == "/studio/events"
 
 
-def test_sidebar_nav_events_link_visibility(client: TestClient, db_session):
+def test_sidebar_nav_events_link_visibility(
+    client: TestClient, db_session: Session
+) -> None:
     # 1. Unauthenticated: nav-events-link should not exist
     resp_anon = client.get("/studio")
     assert 'id="nav-events-link"' not in resp_anon.text
@@ -197,7 +214,9 @@ def test_sidebar_nav_events_link_visibility(client: TestClient, db_session):
     assert 'id="btn-events-link"' in resp_admin.text
 
 
-def test_dashboard_quick_talk_event_selection(client: TestClient, db_session):
+def test_dashboard_quick_talk_event_selection(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "qt_org1@test.com", "organizer")
     org2 = create_user(db_session, "qt_org2@test.com", "organizer")
 
@@ -227,9 +246,43 @@ def test_dashboard_quick_talk_event_selection(client: TestClient, db_session):
     assert "Org2 Private Conference" not in resp_admin.text
 
 
+def test_dashboard_attach_room_event_selection(
+    client: TestClient, db_session: Session
+) -> None:
+    org1 = create_user(db_session, "att_org1@test.com", "organizer")
+    org2 = create_user(db_session, "att_org2@test.com", "organizer")
+
+    # 1. Organizer with no events sees empty events option in attach modal
+    authenticate_client(client, org1)
+    resp_empty = client.get("/studio")
+    assert '<select id="attach-event-select"' in resp_empty.text
+    assert "No events found" in resp_empty.text
+
+    # 2. Add events for org1 and org2
+    event1 = models.Event(name="Org1 Attach Summit", created_by_user_id=org1.id)
+    event2 = models.Event(name="Org2 Other Conf", created_by_user_id=org2.id)
+    db_session.add_all([event1, event2])
+    db_session.commit()
+
+    # 3. Org1 should see <select id="attach-event-select"> with event1, but NOT event2
+    resp_org1 = client.get("/studio")
+    assert '<select id="attach-event-select"' in resp_org1.text
+    assert f'value="{event1.id}"' in resp_org1.text
+    assert "Org1 Attach Summit" in resp_org1.text
+    assert "Org2 Other Conf" not in resp_org1.text
+
+    # 4. When scoped to event1 via query param, event1 is selected in attach modal
+    resp_scoped = client.get(f"/studio?event_id={event1.id}")
+    assert (
+        f'<option value="{event1.id}" data-event-id="{event1.id}" selected>Org1 Attach Summit</option>'
+        in resp_scoped.text
+    )
+    assert '<select id="attach-room-select"' in resp_scoped.text
+
+
 def test_events_page_renders_clickable_name_and_action_buttons(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "ui_actions_org@test.com", "organizer")
     event = models.Event(name="Clickable Summit", created_by_user_id=org.id)
     db_session.add(event)
@@ -257,7 +310,9 @@ def test_events_page_renders_clickable_name_and_action_buttons(
     assert 'id="delete-event-form"' in response.text
 
 
-def test_post_events_edit_success_and_permissions(client: TestClient, db_session):
+def test_post_events_edit_success_and_permissions(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "edit_org1@test.com", "organizer")
     org2 = create_user(db_session, "edit_org2@test.com", "organizer")
     admin = create_user(db_session, "edit_admin@test.com", "admin")
@@ -314,7 +369,9 @@ def test_post_events_edit_success_and_permissions(client: TestClient, db_session
     assert event.name == "Renamed By Admin"
 
 
-def test_post_events_delete_success_and_permissions(client: TestClient, db_session):
+def test_post_events_delete_success_and_permissions(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "del_org1@test.com", "organizer")
     org2 = create_user(db_session, "del_org2@test.com", "organizer")
     admin = create_user(db_session, "del_admin@test.com", "admin")
@@ -338,7 +395,7 @@ def test_post_events_delete_success_and_permissions(client: TestClient, db_sessi
     assert resp_owner.status_code == 303
     assert resp_owner.headers["location"] == "/studio/events"
     assert (
-        db_session.query(models.Event).filter(models.Event.id == event1.id).first()
+        db_session.scalar(select(models.Event).where(models.Event.id == event1.id))
         is None
     )
 
@@ -350,14 +407,14 @@ def test_post_events_delete_success_and_permissions(client: TestClient, db_sessi
     )
     assert resp_admin.status_code == 303
     assert (
-        db_session.query(models.Event).filter(models.Event.id == event2.id).first()
+        db_session.scalar(select(models.Event).where(models.Event.id == event2.id))
         is None
     )
 
 
 def test_delete_studio_event_teardown_and_failure_resilience(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "teardown_org@test.com", "organizer")
     event = models.Event(name="Teardown Event", created_by_user_id=org.id)
     db_session.add(event)
@@ -394,21 +451,21 @@ def test_delete_studio_event_teardown_and_failure_resilience(
 
         # Verify event, talk, job, and review still exist
         assert (
-            db_session.query(models.Event).filter(models.Event.id == event.id).first()
+            db_session.scalar(select(models.Event).where(models.Event.id == event.id))
             is not None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk.id))
             is not None
         )
         assert (
-            db_session.query(models.Job).filter(models.Job.id == job.id).first()
+            db_session.scalar(select(models.Job).where(models.Job.id == job.id))
             is not None
         )
         assert (
-            db_session.query(models.Review)
-            .filter(models.Review.id == review.id)
-            .first()
+            db_session.scalar(
+                select(models.Review).where(models.Review.id == review.id)
+            )
             is not None
         )
     finally:
@@ -423,20 +480,20 @@ def test_delete_studio_event_teardown_and_failure_resilience(
         mock_storage_ok.delete.assert_called_once_with(str(talk.id))
 
         assert (
-            db_session.query(models.Event).filter(models.Event.id == event.id).first()
+            db_session.scalar(select(models.Event).where(models.Event.id == event.id))
             is None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk.id))
             is None
         )
         assert (
-            db_session.query(models.Job).filter(models.Job.id == job.id).first() is None
+            db_session.scalar(select(models.Job).where(models.Job.id == job.id)) is None
         )
         assert (
-            db_session.query(models.Review)
-            .filter(models.Review.id == review.id)
-            .first()
+            db_session.scalar(
+                select(models.Review).where(models.Review.id == review.id)
+            )
             is None
         )
     finally:
@@ -444,8 +501,8 @@ def test_delete_studio_event_teardown_and_failure_resilience(
 
 
 def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "multi_teardown_org@test.com", "organizer")
     event = models.Event(name="Multi Teardown Event", created_by_user_id=org.id)
     db_session.add(event)
@@ -481,7 +538,7 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
     db_session.add_all([job1, review1, job2, review2])
     db_session.commit()
 
-    def mock_delete(key: str):
+    def mock_delete(key: str) -> None:
         if key == str(talk1.id):
             return
         raise RuntimeError("Storage failure on talk 2")
@@ -497,35 +554,35 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
 
         # Verify event, both talks, and their jobs/reviews remain untouched in DB
         assert (
-            db_session.query(models.Event).filter(models.Event.id == event.id).first()
+            db_session.scalar(select(models.Event).where(models.Event.id == event.id))
             is not None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk1.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk1.id))
             is not None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk2.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk2.id))
             is not None
         )
         assert (
-            db_session.query(models.Job).filter(models.Job.id == job1.id).first()
+            db_session.scalar(select(models.Job).where(models.Job.id == job1.id))
             is not None
         )
         assert (
-            db_session.query(models.Job).filter(models.Job.id == job2.id).first()
+            db_session.scalar(select(models.Job).where(models.Job.id == job2.id))
             is not None
         )
         assert (
-            db_session.query(models.Review)
-            .filter(models.Review.id == review1.id)
-            .first()
+            db_session.scalar(
+                select(models.Review).where(models.Review.id == review1.id)
+            )
             is not None
         )
         assert (
-            db_session.query(models.Review)
-            .filter(models.Review.id == review2.id)
-            .first()
+            db_session.scalar(
+                select(models.Review).where(models.Review.id == review2.id)
+            )
             is not None
         )
     finally:
@@ -539,34 +596,40 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
         assert resp.status_code == 303
 
         assert (
-            db_session.query(models.Event).filter(models.Event.id == event.id).first()
+            db_session.scalar(select(models.Event).where(models.Event.id == event.id))
             is None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk1.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk1.id))
             is None
         )
         assert (
-            db_session.query(models.Talk).filter(models.Talk.id == talk2.id).first()
+            db_session.scalar(select(models.Talk).where(models.Talk.id == talk2.id))
             is None
         )
         assert (
-            db_session.query(models.Job)
-            .filter(models.Job.id.in_([job1.id, job2.id]))
-            .count()
+            db_session.scalar(
+                select(func.count())
+                .select_from(models.Job)
+                .where(models.Job.id.in_([job1.id, job2.id]))
+            )
             == 0
         )
         assert (
-            db_session.query(models.Review)
-            .filter(models.Review.id.in_([review1.id, review2.id]))
-            .count()
+            db_session.scalar(
+                select(func.count())
+                .select_from(models.Review)
+                .where(models.Review.id.in_([review1.id, review2.id]))
+            )
             == 0
         )
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_dashboard_talks_scoped_to_organizers_events(client: TestClient, db_session):
+def test_dashboard_talks_scoped_to_organizers_events(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "scope_org1@test.com", "organizer")
     org2 = create_user(db_session, "scope_org2@test.com", "organizer")
     admin = create_user(db_session, "scope_admin@test.com", "admin")
@@ -630,7 +693,9 @@ def test_dashboard_talks_scoped_to_organizers_events(client: TestClient, db_sess
     assert "1 result" in resp_own_filter.text
 
 
-def test_create_quick_talk_with_session_cookie(client: TestClient, db_session):
+def test_create_quick_talk_with_session_cookie(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "quicktalk_org@test.com", "organizer")
     event = models.Event(name="Quick Talk Conference", created_by_user_id=org.id)
     db_session.add(event)
@@ -656,20 +721,20 @@ def test_create_quick_talk_with_session_cookie(client: TestClient, db_session):
     assert data["imported_count"] == 1
 
     # Verify talk exists in DB under event
-    talk = (
-        db_session.query(models.Talk)
-        .filter(
+    talk = db_session.scalar(
+        select(models.Talk).where(
             models.Talk.event_id == event.id,
             models.Talk.title == "Modern Pipelines with PyAV",
         )
-        .first()
     )
     assert talk is not None
     assert talk.room == "Room 101"
-    assert talk.status == "waiting_for_files"
+    assert talk.status == TalkStatus.WAITING_FILES
 
 
-def test_create_quick_talk_unauthorized_event(client: TestClient, db_session):
+def test_create_quick_talk_unauthorized_event(
+    client: TestClient, db_session: Session
+) -> None:
     org1 = create_user(db_session, "org1_quicktalk@test.com", "organizer")
     org2 = create_user(db_session, "org2_quicktalk@test.com", "organizer")
     event2 = models.Event(name="Org2 Conf", created_by_user_id=org2.id)
@@ -690,7 +755,9 @@ def test_create_quick_talk_unauthorized_event(client: TestClient, db_session):
     assert res.status_code == 403
 
 
-def test_dashboard_edit_button_visible_for_organizer(client: TestClient, db_session):
+def test_dashboard_edit_button_visible_for_organizer(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "org_edit_btn@test.com", "organizer")
     ev = models.Event(name="Edit Btn Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -712,7 +779,9 @@ def test_dashboard_edit_button_visible_for_organizer(client: TestClient, db_sess
     assert "btn-edit-talk" in res.text
 
 
-def test_dashboard_edit_button_hidden_for_sso(client: TestClient, db_session):
+def test_dashboard_edit_button_hidden_for_sso(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "org_sso_btn@test.com", "organizer")
     ev = models.Event(name="SSO Btn Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -736,7 +805,9 @@ def test_dashboard_edit_button_hidden_for_sso(client: TestClient, db_session):
     assert "btn-edit-talk" not in res.text
 
 
-def test_studio_edit_button_visible_for_organizer(client: TestClient, db_session):
+def test_studio_edit_button_visible_for_organizer(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "org_edit_studio_btn@test.com", "organizer")
     ev = models.Event(name="Edit Studio Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -758,7 +829,9 @@ def test_studio_edit_button_visible_for_organizer(client: TestClient, db_session
     assert "btn-edit-talk-studio" in res.text
 
 
-def test_studio_edit_button_hidden_for_sso(client: TestClient, db_session):
+def test_studio_edit_button_hidden_for_sso(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "org_sso_studio_btn@test.com", "organizer")
     ev = models.Event(name="SSO Studio Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -782,7 +855,9 @@ def test_studio_edit_button_hidden_for_sso(client: TestClient, db_session):
     assert "btn-edit-talk-studio" not in res.text
 
 
-def test_dashboard_room_attribute_escaped(client: TestClient, db_session):
+def test_dashboard_room_attribute_escaped(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "org_xss@test.com", "organizer")
     ev = models.Event(name="XSS Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -807,7 +882,7 @@ def test_dashboard_room_attribute_escaped(client: TestClient, db_session):
     )
 
 
-def test_studio_room_attribute_escaped(client: TestClient, db_session):
+def test_studio_room_attribute_escaped(client: TestClient, db_session: Session) -> None:
     org = create_user(db_session, "org_studio_xss@test.com", "organizer")
     ev = models.Event(name="Studio XSS Conf", created_by_user_id=org.id)
     db_session.add(ev)
@@ -832,8 +907,15 @@ def test_studio_room_attribute_escaped(client: TestClient, db_session):
     )
 
 
-def _seed_room_talks(db_session):
-    from datetime import UTC, datetime, timedelta
+def _seed_room_talks(
+    db_session: Session,
+) -> tuple[
+    models.User,
+    models.User,
+    models.Event,
+    models.Event,
+    dict[str, models.Talk],
+]:
 
     org = create_user(db_session, "room_org@example.com", "organizer")
     other_org = create_user(db_session, "room_other_org@example.com", "organizer")
@@ -846,7 +928,9 @@ def _seed_room_talks(db_session):
 
     now = datetime.now(tz=UTC)
 
-    def make_talk(event_id: int, title: str, room: str | None, offset: int):
+    def make_talk(
+        event_id: int, title: str, room: str | None, offset: int
+    ) -> models.Talk:
         return models.Talk(
             event_id=event_id,
             title=title,
@@ -871,8 +955,6 @@ def _seed_room_talks(db_session):
 
 
 def _extract_href(page: str, css_class: str) -> str:
-    import html
-    import re
 
     match = re.search(
         rf'<a href="([^"]+)" class="[^"]*\b{re.escape(css_class)}\b[^"]*"', page
@@ -881,7 +963,9 @@ def _extract_href(page: str, css_class: str) -> str:
     return html.unescape(match.group(1))
 
 
-def test_room_page_lists_only_talks_in_that_room(client: TestClient, db_session):
+def test_room_page_lists_only_talks_in_that_room(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     authenticate_client(client, org)
 
@@ -901,7 +985,9 @@ def test_room_page_lists_only_talks_in_that_room(client: TestClient, db_session)
     assert f'name="event_id" value="{event.id}"' in resp.text
 
 
-def test_room_page_is_scoped_to_callers_events(client: TestClient, db_session):
+def test_room_page_is_scoped_to_callers_events(
+    client: TestClient, db_session: Session
+) -> None:
     org, other_org, _, other_event, _ = _seed_room_talks(db_session)
 
     # Without an event filter, a same-named room in another organizer's event
@@ -925,9 +1011,11 @@ def test_room_page_is_scoped_to_callers_events(client: TestClient, db_session):
     assert "1 result" in resp.text
 
 
-def test_room_page_supports_status_and_search_filters(client: TestClient, db_session):
+def test_room_page_supports_status_and_search_filters(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
-    talks["main_2"].status = "done"
+    talks["main_2"].status = TalkStatus.DONE
     db_session.commit()
     authenticate_client(client, org)
 
@@ -944,7 +1032,9 @@ def test_room_page_supports_status_and_search_filters(client: TestClient, db_ses
     assert f'{clear_href} class="btn btn-ghost" id="clear-btn"' in resp.text
 
 
-def test_event_page_shows_event_title_header(client: TestClient, db_session):
+def test_event_page_shows_event_title_header(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     authenticate_client(client, org)
 
@@ -982,7 +1072,9 @@ def test_event_page_shows_event_title_header(client: TestClient, db_session):
     assert '<span class="stat-value">5</span>' in resp.text
 
 
-def test_room_page_requires_authentication(client: TestClient, db_session):
+def test_room_page_requires_authentication(
+    client: TestClient, db_session: Session
+) -> None:
     _, _, event, _, _ = _seed_room_talks(db_session)
 
     resp = client.get(
@@ -1004,7 +1096,7 @@ def test_room_page_requires_authentication(client: TestClient, db_session):
     assert "Other Event Main Stage Talk" not in followed.text
 
 
-def test_room_page_accepts_event_slug(client: TestClient, db_session):
+def test_room_page_accepts_event_slug(client: TestClient, db_session: Session) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     event.source = "eventyay"
     event.external_id = "room-test-slug-262"
@@ -1024,7 +1116,9 @@ def test_room_page_accepts_event_slug(client: TestClient, db_session):
     assert "0 results" in resp.text
 
 
-def test_event_slug_resolves_within_callers_own_events(client: TestClient, db_session):
+def test_event_slug_resolves_within_callers_own_events(
+    client: TestClient, db_session: Session
+) -> None:
     """external_id is unique per source, so the caller's own event wins."""
     org, other_org, event, _, _ = _seed_room_talks(db_session)
     shared_slug = "shared-slug-262"
@@ -1072,8 +1166,8 @@ def test_event_slug_resolves_within_callers_own_events(client: TestClient, db_se
 
 
 def test_event_slug_owned_by_another_organizer_resolves_to_nothing(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     org, _, _, other_event, _ = _seed_room_talks(db_session)
     other_event.source = "eventyay"
     other_event.external_id = "foreign-only-slug-262"
@@ -1088,8 +1182,9 @@ def test_event_slug_owned_by_another_organizer_resolves_to_nothing(
     assert "talks-scope-title" not in resp.text
 
 
-def test_api_client_resolves_slugs_for_its_events(client: TestClient, db_session):
-    from app.auth import hash_api_key
+def test_api_client_resolves_slugs_for_its_events(
+    client: TestClient, db_session: Session
+) -> None:
 
     _, _, event, other_event, _ = _seed_room_talks(db_session)
     event.source = "eventyay"
@@ -1123,9 +1218,10 @@ def test_api_client_resolves_slugs_for_its_events(client: TestClient, db_session
     assert "0 results" in resp.text
 
 
-def test_talk_list_is_scoped_for_every_caller_type(client: TestClient, db_session):
+def test_talk_list_is_scoped_for_every_caller_type(
+    client: TestClient, db_session: Session
+) -> None:
     """The talk list, not just the stats, only ever contains visible events."""
-    from app.auth import hash_api_key
 
     org, other_org, event, other_event, _ = _seed_room_talks(db_session)
     admin = create_user(db_session, "room_scope_admin@example.com", "admin")
@@ -1140,8 +1236,8 @@ def test_talk_list_is_scoped_for_every_caller_type(client: TestClient, db_sessio
     db_session.commit()
     own, foreign = "Main Stage Opening", "Other Event Main Stage Talk"
 
-    def listing(url: str, **kwargs) -> str:
-        resp = client.get(url, **kwargs)
+    def listing(url: str, headers: dict[str, str] | None = None) -> str:
+        resp = client.get(url, headers=headers)
         assert resp.status_code == 200
         return resp.text
 
@@ -1174,7 +1270,9 @@ def test_talk_list_is_scoped_for_every_caller_type(client: TestClient, db_sessio
     assert own not in page and foreign not in page
 
 
-def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
+def test_room_page_rejects_invalid_api_key(
+    client: TestClient, db_session: Session
+) -> None:
     _seed_room_talks(db_session)
     resp = client.get(
         "/studio/rooms/Main Stage", headers={"X-API-Key": "not-a-real-key"}
@@ -1182,9 +1280,8 @@ def test_room_page_rejects_invalid_api_key(client: TestClient, db_session):
     assert resp.status_code == 401
 
 
-def _login_via_redirect(client: TestClient, email: str, start_url: str):
+def _login_via_redirect(client: TestClient, email: str, start_url: str) -> Response:
     """Hit start_url logged out, then log in with the `next` it hands back."""
-    import urllib.parse
 
     login_redirect = client.get(start_url, follow_redirects=False)
     assert login_redirect.status_code == 302
@@ -1202,7 +1299,9 @@ def _login_via_redirect(client: TestClient, email: str, start_url: str):
     )
 
 
-def test_login_next_returns_to_room_page(client: TestClient, db_session):
+def test_login_next_returns_to_room_page(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
 
     resp = _login_via_redirect(
@@ -1216,9 +1315,11 @@ def test_login_next_returns_to_room_page(client: TestClient, db_session):
     assert "Workshop Hands-On" not in resp.text
 
 
-def test_login_next_keeps_dashboard_filters(client: TestClient, db_session):
+def test_login_next_keeps_dashboard_filters(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
-    talks["main_2"].status = "done"
+    talks["main_2"].status = TalkStatus.DONE
     db_session.commit()
 
     resp = _login_via_redirect(
@@ -1232,7 +1333,7 @@ def test_login_next_keeps_dashboard_filters(client: TestClient, db_session):
     assert "Main Stage Opening" not in resp.text
 
 
-def _seed_delimiter_rooms(db_session, event):
+def _seed_delimiter_rooms(db_session: Session, event: models.Event) -> None:
     for title, room in (
         ("Ask Anything Session", "Ask Me? Anything"),
         ("Hash Room Session", "Room #5"),
@@ -1258,8 +1359,8 @@ def _seed_delimiter_rooms(db_session, event):
     ],
 )
 def test_room_page_keeps_question_mark_and_hash_in_room_names(
-    client: TestClient, db_session, room: str, encoded: str, title: str
-):
+    client: TestClient, db_session: Session, room: str, encoded: str, title: str
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     _seed_delimiter_rooms(db_session, event)
     authenticate_client(client, org)
@@ -1289,8 +1390,8 @@ def test_room_page_keeps_question_mark_and_hash_in_room_names(
     ],
 )
 def test_login_next_keeps_question_mark_and_hash_in_room_names(
-    client: TestClient, db_session, encoded: str, title: str
-):
+    client: TestClient, db_session: Session, encoded: str, title: str
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     _seed_delimiter_rooms(db_session, event)
 
@@ -1312,9 +1413,8 @@ def test_login_next_keeps_question_mark_and_hash_in_room_names(
 
 
 def test_room_page_redirects_talk_scoped_sso_to_its_talk(
-    client: TestClient, db_session
-):
-    from app.security import create_sso_token
+    client: TestClient, db_session: Session
+) -> None:
 
     _, _, event, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(
@@ -1331,7 +1431,9 @@ def test_room_page_redirects_talk_scoped_sso_to_its_talk(
         assert resp.headers["location"] == f"/studio/talks/{talks['main_1'].id}"
 
 
-def test_event_page_room_list_is_scoped_to_event(client: TestClient, db_session):
+def test_event_page_room_list_is_scoped_to_event(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     second = models.Event(name="Rooms Second Test Event", created_by_user_id=org.id)
     db_session.add(second)
@@ -1359,7 +1461,9 @@ def test_event_page_room_list_is_scoped_to_event(client: TestClient, db_session)
     assert '<option value="Annex Hall">' in resp.text
 
 
-def test_dashboard_room_and_event_links_navigate(client: TestClient, db_session):
+def test_dashboard_room_and_event_links_navigate(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, _ = _seed_room_talks(db_session)
     authenticate_client(client, org)
 
@@ -1386,7 +1490,9 @@ def test_dashboard_room_and_event_links_navigate(client: TestClient, db_session)
     assert "Other Event Main Stage Talk" not in event_page.text
 
 
-def test_studio_breadcrumb_links_to_event_and_room(client: TestClient, db_session):
+def test_studio_breadcrumb_links_to_event_and_room(
+    client: TestClient, db_session: Session
+) -> None:
     org, _, event, _, talks = _seed_room_talks(db_session)
     authenticate_client(client, org)
 
@@ -1404,6 +1510,8 @@ def test_studio_breadcrumb_links_to_event_and_room(client: TestClient, db_sessio
     assert 'id="talks-scope-title">Main Stage</h1>' in room_page.text
     assert "Main Stage Closing" in room_page.text
     assert "Workshop Hands-On" not in room_page.text
+    assert f'data-event-id="{event.id}"' in room_page.text
+    assert '<option value="Main Stage" selected>Main Stage</option>' in room_page.text
 
     # A talk without a room renders a placeholder instead of a link.
     roomless = client.get(f"/studio/talks/{talks['no_room'].id}")
@@ -1412,9 +1520,8 @@ def test_studio_breadcrumb_links_to_event_and_room(client: TestClient, db_sessio
 
 
 def test_studio_breadcrumb_is_plain_text_for_talk_scoped_sso(
-    client: TestClient, db_session
-):
-    from app.security import create_sso_token
+    client: TestClient, db_session: Session
+) -> None:
 
     _, _, _, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(
@@ -1430,8 +1537,8 @@ def test_studio_breadcrumb_is_plain_text_for_talk_scoped_sso(
 
 
 def test_post_events_create_and_edit_speaker_review_window(
-    client: TestClient, db_session
-):
+    client: TestClient, db_session: Session
+) -> None:
     """Organizer can set and edit per-event speaker review expiration window in /studio/events."""
     org = create_user(db_session, "window_org@test.com", "organizer")
     authenticate_client(client, org)
@@ -1447,10 +1554,8 @@ def test_post_events_create_and_edit_speaker_review_window(
     )
     assert response.status_code == 303
 
-    event = (
-        db_session.query(models.Event)
-        .filter(models.Event.name == "Custom Review Window Event")
-        .first()
+    event = db_session.scalar(
+        select(models.Event).where(models.Event.name == "Custom Review Window Event")
     )
     assert event is not None
     assert event.speaker_magic_link_expire_hours == 72
@@ -1482,7 +1587,9 @@ def test_post_events_create_and_edit_speaker_review_window(
     assert event.speaker_magic_link_expire_hours is None
 
 
-def test_studio_events_create_and_edit_invalid_review_window(client, db_session):
+def test_studio_events_create_and_edit_invalid_review_window(
+    client: TestClient, db_session: Session
+) -> None:
     org = create_user(db_session, "window_invalid_org@test.com", "organizer")
     authenticate_client(client, org)
 
@@ -1520,10 +1627,8 @@ def test_studio_events_create_and_edit_invalid_review_window(client, db_session)
         follow_redirects=False,
     )
     assert resp_valid.status_code == 303
-    event = (
-        db_session.query(models.Event)
-        .filter(models.Event.name == "Valid Event For Edit Test")
-        .first()
+    event = db_session.scalar(
+        select(models.Event).where(models.Event.name == "Valid Event For Edit Test")
     )
     assert event is not None
 
@@ -1554,3 +1659,187 @@ def test_studio_events_create_and_edit_invalid_review_window(client, db_session)
         "Speaker review window must be a positive integer"
         in resp_edit_nan.json()["detail"]
     )
+
+
+def test_create_and_edit_event_with_dates(
+    client: TestClient, db_session: Session
+) -> None:
+    user = create_user(db_session, "dates_organizer@test.com", "organizer")
+    authenticate_client(client, user)
+
+    # 1. Reject create when end_date < start_date
+    resp_invalid = client.post(
+        "/studio/events",
+        data={
+            "name": "Invalid Date Event",
+            "start_date": "2026-10-27",
+            "end_date": "2026-10-25",
+        },
+    )
+    assert resp_invalid.status_code == 400
+    assert "End date must be greater than or equal to start date" in resp_invalid.text
+
+    # 2. Successful create with start and end dates
+    resp_create = client.post(
+        "/studio/events",
+        data={
+            "name": "FOSSASIA Summit 2026",
+            "start_date": "2026-10-25",
+            "end_date": "2026-10-27",
+        },
+        follow_redirects=False,
+    )
+    assert resp_create.status_code == 303
+    event = (
+        db_session.query(models.Event)
+        .filter(models.Event.name == "FOSSASIA Summit 2026")
+        .first()
+    )
+    assert event is not None
+    assert event.start_date == date(2026, 10, 25)
+    assert event.end_date == date(2026, 10, 27)
+    assert event.duration_days == 3
+
+    # 3. GET /studio/events displays date range and duration
+    resp_list = client.get("/studio/events")
+    assert resp_list.status_code == 200
+    assert "Duration / Dates" in resp_list.text
+    assert "Oct 25" in resp_list.text
+    assert "Oct 27, 2026" in resp_list.text
+    assert "(3 days)" in resp_list.text
+    assert 'id="event-duration"' not in resp_list.text
+    assert 'id="edit-event-duration"' not in resp_list.text
+
+    # 4. Successful edit of dates
+    resp_edit = client.post(
+        f"/studio/events/{event.id}/edit",
+        data={
+            "name": "FOSSASIA Summit 2026 (Extended)",
+            "start_date": "2026-10-24",
+            "end_date": "2026-10-28",
+        },
+        follow_redirects=False,
+    )
+    assert resp_edit.status_code == 303
+    db_session.refresh(event)
+    assert event.name == "FOSSASIA Summit 2026 (Extended)"
+    assert event.start_date == date(2026, 10, 24)
+    assert event.end_date == date(2026, 10, 28)
+    assert event.duration_days == 5
+
+    # 5. Reject edit when end_date < start_date
+    resp_edit_invalid = client.post(
+        f"/studio/events/{event.id}/edit",
+        data={
+            "name": "FOSSASIA Summit 2026 (Extended)",
+            "start_date": "2026-10-28",
+            "end_date": "2026-10-24",
+        },
+    )
+    assert resp_edit_invalid.status_code == 400
+    assert (
+        "End date must be greater than or equal to start date"
+        in resp_edit_invalid.json()["detail"]
+    )
+
+    # 6. Events with multi-year date range, end-date only, and start-date only
+    ev_multiyear = models.Event(
+        name="New Year Festival",
+        start_date=date(2026, 12, 30),
+        end_date=date(2027, 1, 3),
+        created_by_user_id=user.id,
+    )
+    ev_endonly = models.Event(
+        name="Deadline Conf",
+        end_date=date(2026, 11, 15),
+        created_by_user_id=user.id,
+    )
+    ev_startonly = models.Event(
+        name="Ongoing Conf",
+        start_date=date(2026, 10, 20),
+        created_by_user_id=user.id,
+    )
+    db_session.add_all([ev_multiyear, ev_endonly, ev_startonly])
+    db_session.commit()
+
+    resp_rendered = client.get("/studio/events")
+    assert resp_rendered.status_code == 200
+    assert "Dec 30, 2026 – Jan 3, 2027" in resp_rendered.text
+    assert "Until Nov 15, 2026" in resp_rendered.text
+    assert "From Oct 20, 2026" in resp_rendered.text
+    assert "(Single Day)" not in resp_rendered.text
+
+
+def test_studio_event_timezone_create_edit_and_rendering(
+    client: TestClient, db_session: Session
+) -> None:
+    """Verify Studio create/edit forms support timezone selection and validation."""
+    user = create_user(db_session, "tz_organizer@example.com", "organizer")
+    authenticate_client(client, user)
+
+    # 1. Page renders timezone dropdowns in create form and edit modal
+    resp_page = client.get("/studio/events")
+    assert resp_page.status_code == 200
+    assert 'id="event-timezone"' in resp_page.text
+    assert 'name="timezone"' in resp_page.text
+    assert 'id="edit-event-timezone"' in resp_page.text
+    assert '<option value="Asia/Singapore">Asia/Singapore</option>' in resp_page.text
+
+    # 2. Creating event with valid timezone
+    resp_create = client.post(
+        "/studio/events",
+        data={
+            "name": "Tokyo Summit 2026",
+            "timezone": "Asia/Tokyo",
+        },
+        follow_redirects=False,
+    )
+    assert resp_create.status_code == 303
+    event = (
+        db_session.query(models.Event)
+        .filter(models.Event.name == "Tokyo Summit 2026")
+        .first()
+    )
+    assert event is not None
+    assert event.timezone == "Asia/Tokyo"
+
+    # 3. Timezone is rendered in table and in data-event-timezone on edit button
+    resp_list = client.get("/studio/events")
+    assert resp_list.status_code == 200
+    assert "Asia/Tokyo" in resp_list.text
+    assert 'data-event-timezone="Asia/Tokyo"' in resp_list.text
+
+    # 4. Editing event to update timezone
+    resp_edit = client.post(
+        f"/studio/events/{event.id}/edit",
+        data={
+            "name": "Tokyo Summit 2026 (Updated)",
+            "timezone": "America/New_York",
+        },
+        follow_redirects=False,
+    )
+    assert resp_edit.status_code == 303
+    db_session.refresh(event)
+    assert event.timezone == "America/New_York"
+
+    # 5. Invalid timezone on create renders error in page (HTTP 400)
+    resp_invalid_create = client.post(
+        "/studio/events",
+        data={
+            "name": "Bad TZ Event",
+            "timezone": "Asia/Singapur",
+        },
+    )
+    assert resp_invalid_create.status_code == 400
+    assert "Invalid timezone" in resp_invalid_create.text
+
+    # 6. Invalid timezone on edit returns HTTP 400
+    resp_invalid_edit = client.post(
+        f"/studio/events/{event.id}/edit",
+        data={
+            "name": "Tokyo Summit 2026 (Updated)",
+            "timezone": "Asia/Singapur",
+        },
+    )
+    assert resp_invalid_edit.status_code == 400
+    assert "Invalid timezone" in resp_invalid_edit.json()["detail"]

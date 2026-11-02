@@ -1,9 +1,10 @@
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     BaseModel,
@@ -14,9 +15,23 @@ from pydantic import (
     model_validator,
 )
 
+from app.consts import AuthRole, SSOScopeType
 from app.retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
+
+
+def validate_timezone(v: str | None) -> str | None:
+    if v is None:
+        return None
+    cleaned = v.strip()
+    if not cleaned:
+        return None
+    try:
+        ZoneInfo(cleaned)
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise ValueError(f"Unknown or invalid timezone: '{v}'") from exc
+    return cleaned
 
 
 class EventBase(BaseModel):
@@ -25,6 +40,9 @@ class EventBase(BaseModel):
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
     speaker_magic_link_expire_hours: StrictPositiveInt | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    timezone: str | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -32,6 +50,17 @@ class EventBase(BaseModel):
         cls, v: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         return validate_retention_overrides(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, v: str | None) -> str | None:
+        return validate_timezone(v)
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> Self:
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date")
+        return self
 
 
 class EventCreate(EventBase):
@@ -44,6 +73,9 @@ class EventUpdate(BaseModel):
     external_id: str | None = None
     retention_overrides: dict[str, Any] | None = None
     speaker_magic_link_expire_hours: StrictPositiveInt | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    timezone: str | None = None
 
     @field_validator("retention_overrides")
     @classmethod
@@ -51,6 +83,17 @@ class EventUpdate(BaseModel):
         cls, v: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         return validate_retention_overrides(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, v: str | None) -> str | None:
+        return validate_timezone(v)
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> Self:
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be greater than or equal to start_date")
+        return self
 
 
 class EventRead(EventBase):
@@ -201,7 +244,7 @@ class TalkRead(TalkBase):
 
     @field_validator("include_intro", "include_outro", mode="before")
     @classmethod
-    def _coerce_bool(cls, v):
+    def _coerce_bool(cls, v: Any) -> bool:
         return False if v is None else bool(v)
 
 
@@ -223,7 +266,7 @@ class JobRead(JobBase):
     talk_id: int
     model_config = ConfigDict(from_attributes=True)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
@@ -250,7 +293,7 @@ class JobRead(JobBase):
             end = datetime.now(UTC)
         return max(0.0, round((end - started).total_seconds(), 2))
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def estimated_remaining(self) -> float | None:
         """
@@ -334,7 +377,7 @@ class RecordingIngestRequest(BaseModel):
     )
 
     @model_validator(mode="after")
-    def exactly_one_path(self):
+    def exactly_one_path(self) -> Self:
         if bool(self.source_path) == bool(self.relative_key):
             raise ValueError("exactly one of source_path or relative_key is required")
         return self
@@ -372,7 +415,7 @@ class CutBoundsRequest(BaseModel):
     note: str | None = None
 
     @model_validator(mode="after")
-    def parse_and_validate(self):
+    def parse_and_validate(self) -> Self:
         start_s = _parse_hhmmss(self.cut_start)
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
@@ -398,7 +441,7 @@ class IntroOutroRequest(BaseModel):
     speaker_email: str | None = None
 
     @model_validator(mode="after")
-    def validate_custom_paths(self):
+    def validate_custom_paths(self) -> Self:
         if (
             self.include_intro
             and self.intro_source == "custom"
@@ -441,7 +484,7 @@ class OrganizerRequestCreate(BaseModel):
 
 
 class UserPromoteRequest(BaseModel):
-    role: Literal["user", "organizer"]
+    role: Literal[AuthRole.USER, AuthRole.ORGANIZER]
 
 
 class EventSSOTokenRequest(BaseModel):
@@ -487,7 +530,7 @@ class ApiKeyCreatedResponse(BaseModel):
 class SSOTokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
-    scope_type: Literal["event", "talk"]
+    scope_type: SSOScopeType
     scope_id: int
     role: str
     expires_in_seconds: int
@@ -527,6 +570,7 @@ class RoomRecordingAttachResponse(BaseModel):
     event_id: int
     talk_ids: list[int]
     recording_duration_seconds: float | None = None
+    target_date: date | None = None
 
 
 class SystemSettingOption(BaseModel):

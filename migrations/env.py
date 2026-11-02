@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+from typing import Any
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -6,6 +7,7 @@ from sqlalchemy import pool
 import os
 
 from alembic import context
+from alembic.runtime.migration import MigrationContext
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -62,7 +64,9 @@ def _next_rev_id() -> str:
     return f"{max_num + 1:04d}"
 
 
-def process_revision_directives(context, revision, directives):
+def process_revision_directives(
+    context: MigrationContext, revision: Any, directives: list[Any]
+) -> None:
     """Replace the random hex revision ID with a sequential number."""
     if directives:
         script = directives[0]

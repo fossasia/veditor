@@ -125,10 +125,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const id = btn.getAttribute('data-event-id');
       const name = btn.getAttribute('data-event-name');
       const expireHours = btn.getAttribute('data-event-expire-hours') || '';
+      const startDate = btn.getAttribute('data-event-start-date') || '';
+      const endDate = btn.getAttribute('data-event-end-date') || '';
+      const timezone = btn.getAttribute('data-event-timezone') || '';
       const editExpire = document.getElementById('edit-event-review-window');
+      const editTimezone = document.getElementById('edit-event-timezone');
+      const editStart = document.getElementById('edit-event-start-date');
+      const editEnd = document.getElementById('edit-event-end-date');
       if (editForm && editInput) {
         editForm.action = `/studio/events/${id}/edit`;
         editInput.value = name || '';
+      }
+      if (editStart) editStart.value = startDate;
+      if (editEnd) {
+        editEnd.value = endDate;
+        if (startDate) {
+          editEnd.min = startDate;
+        } else {
+          editEnd.removeAttribute('min');
+        }
+      }
+      if (editTimezone) {
+        if (timezone && !editTimezone.querySelector(`option[value="${timezone}"]`)) {
+          const opt = document.createElement('option');
+          opt.value = timezone;
+          opt.textContent = timezone;
+          editTimezone.appendChild(opt);
+        }
+        editTimezone.value = timezone;
       }
       if (editExpire) {
         if (expireHours && !editExpire.querySelector(`option[value="${expireHours}"]`)) {
@@ -174,6 +198,37 @@ document.addEventListener('DOMContentLoaded', () => {
       if (deleteModal) Modal.close(deleteModal);
     });
   });
+
+  // ── Date Range Sync ─────────────────────────────────────────────────
+  function wireDateRangeSync(startId, endId) {
+    const startInput = document.getElementById(startId);
+    const endInput = document.getElementById(endId);
+    if (!startInput || !endInput) return;
+
+    function syncMinMax() {
+      if (startInput.value) {
+        endInput.min = startInput.value;
+        if (endInput.value && endInput.value < startInput.value) {
+          endInput.value = startInput.value;
+        }
+      } else {
+        endInput.removeAttribute('min');
+      }
+    }
+
+    startInput.addEventListener('change', syncMinMax);
+    endInput.addEventListener('change', () => {
+      if (endInput.value && startInput.value && endInput.value < startInput.value) {
+        startInput.value = endInput.value;
+        endInput.min = startInput.value;
+      }
+    });
+
+    syncMinMax();
+  }
+
+  wireDateRangeSync('event-start-date', 'event-end-date');
+  wireDateRangeSync('edit-event-start-date', 'edit-event-end-date');
 
   // ── API Keys Modal Handling ─────────────────────────────────────
   const apiKeysModal = document.getElementById('modal-api-keys');

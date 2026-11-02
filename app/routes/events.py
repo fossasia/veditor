@@ -10,9 +10,10 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlsplit
+from urllib.request import Request as URLRequest
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import any_, func
+from sqlalchemy import any_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,9 +26,19 @@ from app.auth import (
     require_role,
 )
 from app.config import settings
-from app.consts import AuthRole
+from app.consts import AuthRole, SSOScopeType
 from app.db import get_db
+from app.models import Event
 from app.routes.talks import _cancel_talk_jobs, _lock_event_for_room_operation
+from app.schemas import (
+    ApiKeyCreatedResponse,
+    ApiKeyRead,
+    RoomRead,
+    SSOTokenResponse,
+    WebhookInfoResponse,
+    WebhookRegisterResponse,
+    WebhookTestResponse,
+)
 from app.security import create_sso_token
 from app.storage import StorageBackend, get_storage_backend
 from app.tasks import _webhook_opener
@@ -45,7 +56,7 @@ def create_event(
     payload: schemas.EventCreate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Event:
     if user.is_sso:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -58,6 +69,9 @@ def create_event(
         external_id=payload.external_id,
         retention_overrides=payload.retention_overrides,
         speaker_magic_link_expire_hours=payload.speaker_magic_link_expire_hours,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        timezone=payload.timezone,
         created_by_user_id=created_by,
     )
     db.add(event)
@@ -66,10 +80,8 @@ def create_event(
         if event.id not in user.event_ids:
             user.event_ids.append(event.id)
         if user.client_id:
-            client_record = (
-                db.query(models.Client)
-                .filter(models.Client.id == user.client_id)
-                .first()
+            client_record = db.scalar(
+                select(models.Client).where(models.Client.id == user.client_id)
             )
             if client_record and event.id not in (client_record.event_ids or []):
                 client_record.event_ids = list(
@@ -84,22 +96,26 @@ def create_event(
 def list_events(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> list[Event]:
     if user.is_sso:
-        if user.scope_type == "event" and user.scope_id:
-            return db.query(models.Event).filter(models.Event.id == user.scope_id).all()
+        if user.scope_type == SSOScopeType.EVENT and user.scope_id:
+            return list(
+                db.scalars(select(models.Event).where(models.Event.id == user.scope_id))
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="SSO session is not authorized to list events",
         )
     if user.is_machine:
-        if getattr(user, "is_platform", False):
-            return db.query(models.Event).all()
-        return db.query(models.Event).filter(models.Event.id.in_(user.event_ids)).all()
-    return (
-        db.query(models.Event)
-        .filter(models.Event.created_by_user_id == user.user_id)
-        .all()
+        if user.is_platform:
+            return list(db.scalars(select(models.Event)))
+        return list(
+            db.scalars(select(models.Event).where(models.Event.id.in_(user.event_ids)))
+        )
+    return list(
+        db.scalars(
+            select(models.Event).where(models.Event.created_by_user_id == user.user_id)
+        )
     )
 
 
@@ -119,21 +135,20 @@ def list_event_rooms(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> list[RoomRead]:
     """List event rooms without mutating event or talk records."""
     check_event_access(event_id, user, db)
-    rows = (
-        db.query(models.Room, func.count(models.Talk.id))
+    rows = db.execute(
+        select(models.Room, func.count(models.Talk.id))
         .outerjoin(
             models.Talk,
             (models.Talk.event_id == models.Room.event_id)
             & (models.Talk.room == models.Room.name),
         )
-        .filter(models.Room.event_id == event_id)
+        .where(models.Room.event_id == event_id)
         .group_by(models.Room.id)
         .order_by(func.lower(models.Room.name), models.Room.name)
-        .all()
-    )
+    ).all()
     return [_room_read(room, count) for room, count in rows]
 
 
@@ -147,7 +162,7 @@ def create_event_room(
     payload: schemas.RoomCreate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> RoomRead:
     """Create an organizer-managed room scoped to one event."""
     if user.is_sso:
         raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
@@ -173,38 +188,40 @@ def update_event_room(
     payload: schemas.RoomUpdate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> RoomRead:
     """Update a room and synchronize its talk assignments atomically."""
     if user.is_sso:
         raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
     check_event_access(event_id, user, db)
     _lock_event_for_room_operation(db, event_id)
-    room = (
-        db.query(models.Room)
-        .filter(models.Room.id == room_id, models.Room.event_id == event_id)
+    room = db.scalar(
+        select(models.Room)
+        .where(models.Room.id == room_id, models.Room.event_id == event_id)
         .with_for_update()
-        .first()
     )
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
     if payload.name is not None and payload.name != room.name:
-        duplicate = (
-            db.query(models.Room)
-            .filter(
+        duplicate = db.scalar(
+            select(models.Room).where(
                 models.Room.event_id == event_id,
                 func.lower(models.Room.name) == func.lower(payload.name),
                 models.Room.id != room_id,
             )
-            .first()
         )
         if duplicate:
             raise HTTPException(status_code=409, detail="Room name already exists")
         old_name = room.name
         room.name = payload.name
-        db.query(models.Talk).filter(
-            models.Talk.event_id == event_id,
-            func.lower(func.trim(models.Talk.room)) == func.lower(old_name),
-        ).update({models.Talk.room: payload.name}, synchronize_session=False)
+        db.execute(
+            update(models.Talk)
+            .where(
+                models.Talk.event_id == event_id,
+                func.lower(func.trim(models.Talk.room)) == func.lower(old_name),
+            )
+            .values(room=payload.name)
+            .execution_options(synchronize_session=False)
+        )
     update_data = payload.model_dump(exclude_unset=True)
     if "description" in update_data:
         room.description = update_data["description"]
@@ -215,9 +232,12 @@ def update_event_room(
         raise HTTPException(status_code=409, detail="Room name already exists") from exc
     db.refresh(room)
     count = (
-        db.query(models.Talk)
-        .filter(models.Talk.event_id == event_id, models.Talk.room == room.name)
-        .count()
+        db.scalar(
+            select(func.count())
+            .select_from(models.Talk)
+            .where(models.Talk.event_id == event_id, models.Talk.room == room.name)
+        )
+        or 0
     )
     return _room_read(room, count)
 
@@ -228,24 +248,28 @@ def delete_event_room(
     room_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> dict[str, int | str]:
     """Delete a room and clear assignments for talks in the same event."""
     if user.is_sso:
         raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
     check_event_access(event_id, user, db)
     _lock_event_for_room_operation(db, event_id)
-    room = (
-        db.query(models.Room)
-        .filter(models.Room.id == room_id, models.Room.event_id == event_id)
+    room = db.scalar(
+        select(models.Room)
+        .where(models.Room.id == room_id, models.Room.event_id == event_id)
         .with_for_update()
-        .first()
     )
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
-    db.query(models.Talk).filter(
-        models.Talk.event_id == event_id,
-        func.lower(func.trim(models.Talk.room)) == func.lower(room.name),
-    ).update({models.Talk.room: None}, synchronize_session=False)
+    db.execute(
+        update(models.Talk)
+        .where(
+            models.Talk.event_id == event_id,
+            func.lower(func.trim(models.Talk.room)) == func.lower(room.name),
+        )
+        .values(room=None)
+        .execution_options(synchronize_session=False)
+    )
     db.delete(room)
     db.commit()
     return {"status": "ok", "deleted_id": room_id}
@@ -257,7 +281,7 @@ def update_event(
     payload: schemas.EventUpdate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Event:
     if user.is_sso:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -286,6 +310,21 @@ def update_event(
     if payload.speaker_magic_link_expire_hours is not None:
         event.speaker_magic_link_expire_hours = payload.speaker_magic_link_expire_hours
 
+    fields_set = payload.model_fields_set
+    new_start = payload.start_date if "start_date" in fields_set else event.start_date
+    new_end = payload.end_date if "end_date" in fields_set else event.end_date
+    if new_start and new_end and new_end < new_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="end_date must be greater than or equal to start_date",
+        )
+    if "start_date" in fields_set:
+        event.start_date = payload.start_date
+    if "end_date" in fields_set:
+        event.end_date = payload.end_date
+    if "timezone" in fields_set:
+        event.timezone = payload.timezone
+
     db.commit()
     db.refresh(event)
     return event
@@ -297,18 +336,15 @@ def delete_event(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> dict[str, int | str]:
     if user.is_sso:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="SSO sessions are not permitted to delete events",
         )
     check_event_access(event_id, user, db)
-    event = (
-        db.query(models.Event)
-        .filter(models.Event.id == event_id)
-        .with_for_update()
-        .first()
+    event = db.scalar(
+        select(models.Event).where(models.Event.id == event_id).with_for_update()
     )
     if not event:
         raise HTTPException(
@@ -320,8 +356,8 @@ def delete_event(
         _cancel_talk_jobs(talk.id, storage)
 
     for talk in talks:
-        db.query(models.Review).filter(models.Review.talk_id == talk.id).delete()
-        db.query(models.Job).filter(models.Job.talk_id == talk.id).delete()
+        db.execute(delete(models.Review).where(models.Review.talk_id == talk.id))
+        db.execute(delete(models.Job).where(models.Job.talk_id == talk.id))
         db.delete(talk)
 
     db.delete(event)
@@ -339,7 +375,7 @@ def create_event_sso_token(
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
     payload: schemas.EventSSOTokenRequest | None = None,
-):
+) -> SSOTokenResponse:
     """
     Issues a short-lived, event-scoped SSO token carrying role=organizer.
     Resolves event by integer ID or external slug (external_id=event_slug).
@@ -347,35 +383,31 @@ def create_event_sso_token(
     """
     event = None
     if event_identifier.isdigit():
-        event = (
-            db.query(models.Event)
-            .filter(models.Event.id == int(event_identifier))
-            .first()
+        event = db.scalar(
+            select(models.Event).where(models.Event.id == int(event_identifier))
         )
     if not event:
         event_filters = [models.Event.external_id == event_identifier]
-        if not getattr(client, "is_platform", False) and client.event_ids:
+        if not client.is_platform and client.event_ids:
             event_filters.append(models.Event.id.in_(client.event_ids))
-        event = db.query(models.Event).filter(*event_filters).first()
+        event = db.scalar(select(models.Event).where(*event_filters))
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Event not found",
         )
-    if not getattr(client, "is_platform", False) and event.id not in (
-        client.event_ids or []
-    ):
+    if not client.is_platform and event.id not in (client.event_ids or []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this event",
         )
 
-    target_role = payload.role if payload and payload.role else "organizer"
+    target_role = payload.role if payload and payload.role else AuthRole.ORGANIZER
     target_email = payload.email if payload else None
     target_display_name = payload.display_name if payload else None
 
     token = create_sso_token(
-        scope_type="event",
+        scope_type=SSOScopeType.EVENT,
         scope_id=event.id,
         role=target_role,
         expires_in_seconds=settings.sso_token_expire_seconds,
@@ -385,7 +417,7 @@ def create_event_sso_token(
     return schemas.SSOTokenResponse(
         token=token,
         token_type="bearer",
-        scope_type="event",
+        scope_type=SSOScopeType.EVENT,
         scope_id=event.id,
         role=target_role,
         expires_in_seconds=settings.sso_token_expire_seconds,
@@ -395,13 +427,13 @@ def create_event_sso_token(
 
 def _get_event_client(event_id: int, db: Session) -> models.Client | None:
     """Retrieve the primary Client record associated with this event."""
-    clients = (
-        db.query(models.Client)
-        .filter(
-            models.Client.is_platform.is_(False),
-            any_(models.Client.event_ids) == event_id,
+    clients = list(
+        db.scalars(
+            select(models.Client).where(
+                models.Client.is_platform.is_(False),
+                any_(models.Client.event_ids) == event_id,
+            )
         )
-        .all()
     )
     matching = [c for c in clients if event_id in (c.event_ids or [])]
     if not matching:
@@ -421,7 +453,7 @@ def list_event_api_keys(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> list[ApiKeyRead]:
     """List all active API keys scoped to this event."""
     if user.is_sso:
         raise HTTPException(
@@ -429,13 +461,13 @@ def list_event_api_keys(
             detail="SSO sessions are not permitted to manage API keys",
         )
     check_event_access(event_id, user, db)
-    event_clients = (
-        db.query(models.Client)
-        .filter(
-            models.Client.is_platform.is_(False),
-            any_(models.Client.event_ids) == event_id,
+    event_clients = list(
+        db.scalars(
+            select(models.Client).where(
+                models.Client.is_platform.is_(False),
+                any_(models.Client.event_ids) == event_id,
+            )
         )
-        .all()
     )
     event_clients = [c for c in event_clients if event_id in (c.event_ids or [])]
 
@@ -450,8 +482,8 @@ def list_event_api_keys(
                 event_ids=list(c.event_ids or []),
                 webhook_url=c.webhook_url,
                 has_webhook_secret=bool(c.webhook_secret),
-                created_at=getattr(c, "created_at", None),
-                last_used_at=getattr(c, "last_used_at", None),
+                created_at=c.created_at,
+                last_used_at=c.last_used_at,
             )
         )
     return results
@@ -467,7 +499,7 @@ def create_event_api_key(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     payload: schemas.ApiKeyCreate | None = None,
-):
+) -> ApiKeyCreatedResponse:
     """Generate a new event-scoped API key and return the unhashed key once."""
     if user.is_sso:
         raise HTTPException(
@@ -487,13 +519,13 @@ def create_event_api_key(
     webhook_secret = payload.webhook_secret if payload else None
 
     # Enforce at most 1 active API key per event by revoking previous key(s)
-    existing_clients = (
-        db.query(models.Client)
-        .filter(
-            models.Client.is_platform.is_(False),
-            any_(models.Client.event_ids) == event_id,
+    existing_clients = list(
+        db.scalars(
+            select(models.Client).where(
+                models.Client.is_platform.is_(False),
+                any_(models.Client.event_ids) == event_id,
+            )
         )
-        .all()
     )
     # Preserve existing webhook config from the same client if not explicitly provided
     if existing_clients and (not webhook_url or not webhook_secret):
@@ -541,7 +573,7 @@ def revoke_event_api_key(
     client_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> dict[str, int | str]:
     """Revoke an API key scoped to this event."""
     if user.is_sso:
         raise HTTPException(
@@ -550,7 +582,7 @@ def revoke_event_api_key(
         )
     check_event_access(event_id, user, db)
 
-    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    client = db.scalar(select(models.Client).where(models.Client.id == client_id))
     if not client or client.is_platform or event_id not in (client.event_ids or []):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -575,7 +607,7 @@ def get_event_webhook(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> WebhookInfoResponse:
     """Retrieve the event's configured outbound webhook settings."""
     check_event_access(event_id, user, db)
     client = _get_event_client(event_id, db)
@@ -612,7 +644,7 @@ def update_event_webhook(
     payload: schemas.WebhookRegisterRequest,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> WebhookRegisterResponse:
     """Configure or update the outbound webhook URL and secret for an event."""
     if user.is_sso:
         raise HTTPException(
@@ -646,13 +678,14 @@ def update_event_webhook(
         )
         db.add(client)
 
-    was_secret_provided = bool(payload.secret and payload.secret.strip())
-    had_existing_secret = bool(client.webhook_secret)
+    provided_secret = (
+        payload.secret.strip() if payload.secret and payload.secret.strip() else None
+    )
 
-    if was_secret_provided:
-        secret = payload.secret.strip()
+    if provided_secret is not None:
+        secret = provided_secret
         secret_was_generated_or_rotated = True
-    elif had_existing_secret:
+    elif client.webhook_secret:
         secret = client.webhook_secret
         secret_was_generated_or_rotated = False
     else:
@@ -673,7 +706,7 @@ def update_event_webhook(
 
     return schemas.WebhookRegisterResponse(
         status="registered",
-        url=client.webhook_url,
+        url=payload.url,
         secret=response_secret,
     )
 
@@ -686,7 +719,7 @@ def delete_event_webhook(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> None:
     """Clear outbound webhook configuration for this event."""
     if user.is_sso:
         raise HTTPException(
@@ -747,7 +780,7 @@ def test_event_webhook(
     payload: schemas.WebhookTestRequest,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
-):
+) -> WebhookTestResponse:
     """Send a signed test ping webhook to verify destination URL and HMAC secret."""
     if user.is_sso:
         raise HTTPException(
@@ -816,14 +849,14 @@ def test_event_webhook(
             "X-VEditor-Signature": f"sha256={signature}",
             "User-Agent": "VEditor-Webhook/1.0",
         }
-        req = urllib.request.Request(
+        req = URLRequest(
             target_url,
             data=payload_bytes,
             headers=headers,
             method="POST",
         )
         with _webhook_opener.open(req, timeout=5) as resp:
-            status_code = getattr(resp, "status", getattr(resp, "code", 200))
+            status_code = resp.status
             return schemas.WebhookTestResponse(
                 success=True,
                 status_code=status_code,

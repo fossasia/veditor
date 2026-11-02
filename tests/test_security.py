@@ -1,10 +1,13 @@
 import stat
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import jwt
 import pytest
 
-from app.config import settings
+import app.security as sec
+from app.config import Settings, settings
 from app.consts import SSOScopeType
 from app.security import (
     SSOTokenPayload,
@@ -21,7 +24,7 @@ from app.security import (
 )
 
 
-def test_hash_password_format_and_salt():
+def test_hash_password_format_and_salt() -> None:
     pw = "supersecret123"
     hash1 = hash_password(pw)
     hash2 = hash_password(pw)
@@ -31,7 +34,7 @@ def test_hash_password_format_and_salt():
     assert hash1 != hash2, "Argon2 should generate unique salts per hash"
 
 
-def test_verify_password():
+def test_verify_password() -> None:
     pw = "my-secure-password"
     hashed = hash_password(pw)
 
@@ -40,27 +43,27 @@ def test_verify_password():
     assert verify_password("", hashed) is False
     assert verify_password(pw, "") is False
     assert verify_password(pw, "not-a-valid-argon2-hash") is False
-    assert verify_password(12345, hashed) is False
-    assert verify_password(pw, 12345) is False
-    assert verify_password(["pw"], hashed) is False
-    assert verify_password(pw, None) is False
+    assert verify_password(12345, hashed) is False  # type: ignore[arg-type]
+    assert verify_password(pw, 12345) is False  # type: ignore[arg-type]
+    assert verify_password(["pw"], hashed) is False  # type: ignore[arg-type]
+    assert verify_password(pw, None) is False  # type: ignore[arg-type]
 
 
-def test_hash_password_validation():
+def test_hash_password_validation() -> None:
     with pytest.raises(ValueError, match="Password cannot be empty"):
         hash_password("")
 
     with pytest.raises(TypeError, match="Password must be a string"):
-        hash_password(None)
+        hash_password(None)  # type: ignore[arg-type]
 
     with pytest.raises(TypeError, match="Password must be a string"):
-        hash_password(12345)
+        hash_password(12345)  # type: ignore[arg-type]
 
     with pytest.raises(TypeError, match="Password must be a string"):
-        hash_password(b"password-bytes")
+        hash_password(b"password-bytes")  # type: ignore[arg-type]
 
 
-def test_session_token_roundtrip():
+def test_session_token_roundtrip() -> None:
     token = create_session_token(user_id=42, role="admin", expires_in_hours=24)
     assert isinstance(token, str)
 
@@ -74,18 +77,18 @@ def test_session_token_roundtrip():
     assert "iat" in payload
 
 
-def test_session_token_expired():
+def test_session_token_expired() -> None:
     token = create_session_token(user_id=42, role="admin", expires_in_hours=-1)
     assert decode_session_token(token) is None
 
 
-def test_session_token_tampered():
+def test_session_token_tampered() -> None:
     token = create_session_token(user_id=42, role="admin")
     tampered_token = token[:-5] + "aaaaa"
     assert decode_session_token(tampered_token) is None
 
 
-def test_access_token_roundtrip():
+def test_access_token_roundtrip() -> None:
     token = create_access_token(
         user_id=99, email="user@example.com", role="organizer", expires_in_seconds=3600
     )
@@ -102,20 +105,20 @@ def test_access_token_roundtrip():
     assert "iat" in payload
 
 
-def test_access_token_expired():
+def test_access_token_expired() -> None:
     token = create_access_token(
         user_id=99, email="user@example.com", role="organizer", expires_in_seconds=-10
     )
     assert decode_access_token(token) is None
 
 
-def test_access_token_tampered():
+def test_access_token_tampered() -> None:
     token = create_access_token(user_id=99, email="user@example.com", role="organizer")
     tampered_token = token[:-5] + "zzzzz"
     assert decode_access_token(tampered_token) is None
 
 
-def test_token_type_separation():
+def test_token_type_separation() -> None:
     session_token = create_session_token(user_id=1, role="user")
     access_token = create_access_token(user_id=1, email="user@example.com", role="user")
 
@@ -126,18 +129,18 @@ def test_token_type_separation():
     assert decode_access_token(session_token) is None
 
 
-def test_decode_invalid_tokens():
+def test_decode_invalid_tokens() -> None:
     assert decode_session_token("invalid.token.here") is None
     assert decode_access_token("not-a-token") is None
     assert decode_session_token("") is None
     assert decode_access_token("") is None
-    assert decode_session_token(None) is None
-    assert decode_access_token(None) is None
-    assert decode_session_token(12345) is None
-    assert decode_access_token(12345) is None
+    assert decode_session_token(None) is None  # type: ignore[arg-type]
+    assert decode_access_token(None) is None  # type: ignore[arg-type]
+    assert decode_session_token(12345) is None  # type: ignore[arg-type]
+    assert decode_access_token(12345) is None  # type: ignore[arg-type]
 
 
-def test_token_defaults_from_settings():
+def test_token_defaults_from_settings() -> None:
     session_token = create_session_token(user_id=1, role="user")
     payload_session = decode_session_token(session_token)
     assert payload_session is not None
@@ -149,7 +152,7 @@ def test_token_defaults_from_settings():
     assert payload_access["email"] == "u@e.com"
 
 
-def test_decode_session_token_missing_claims():
+def test_decode_session_token_missing_claims() -> None:
     secret = get_session_secret()
     # Missing sub or user_id or role
     t1 = jwt.encode(
@@ -176,7 +179,7 @@ def test_decode_session_token_missing_claims():
     assert decode_session_token(t4) is None
 
 
-def test_decode_access_token_missing_claims():
+def test_decode_access_token_missing_claims() -> None:
     secret = get_session_secret()
     # Missing email
     t1 = jwt.encode(
@@ -201,10 +204,9 @@ def test_decode_access_token_missing_claims():
     assert decode_access_token(t2) is None
 
 
-def test_get_session_secret_from_settings(monkeypatch):
+def test_get_session_secret_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     valid_secret = "configured-secret-key-that-is-at-least-32-chars-long"
     monkeypatch.setattr(settings, "session_secret", valid_secret)
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
@@ -218,10 +220,11 @@ def test_get_session_secret_from_settings(monkeypatch):
         get_session_secret()
 
 
-def test_get_session_secret_production_missing_raises(monkeypatch):
+def test_get_session_secret_production_missing_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "production")
-    import app.security as sec
 
     # Even if dev secret was previously cached, production mode must block it
     monkeypatch.setattr(
@@ -232,11 +235,12 @@ def test_get_session_secret_production_missing_raises(monkeypatch):
         get_session_secret()
 
 
-def test_get_session_secret_dev_persists(monkeypatch, tmp_path):
+def test_get_session_secret_dev_persists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
@@ -253,17 +257,18 @@ def test_get_session_secret_dev_persists(monkeypatch, tmp_path):
     assert secret2 == secret1
 
 
-def test_get_session_secret_concurrent_creation(monkeypatch, tmp_path):
+def test_get_session_secret_concurrent_creation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(settings, "session_secret", None)
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "data_dir", str(tmp_path))
-    import app.security as sec
 
     monkeypatch.setattr(sec, "_session_secret", None)
 
     secret_file = tmp_path / ".session_secret"
 
-    def fake_os_open(*args, **kwargs):
+    def fake_os_open(*args: object, **kwargs: object) -> None:
         # Simulate competing process creating the file during os.open call
         secret_file.write_text(
             "concurrent-secret-val-32-bytes-long\n", encoding="utf-8"
@@ -275,8 +280,7 @@ def test_get_session_secret_concurrent_creation(monkeypatch, tmp_path):
         assert secret == "concurrent-secret-val-32-bytes-long"
 
 
-def test_settings_expiration_validation():
-    from app.config import Settings
+def test_settings_expiration_validation() -> None:
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(session_token_expire_hours=0)
@@ -291,8 +295,7 @@ def test_settings_expiration_validation():
         Settings(access_token_expire_seconds=-10)
 
 
-def test_settings_session_secret_validation():
-    from app.config import Settings
+def test_settings_session_secret_validation() -> None:
 
     with pytest.raises(
         ValueError, match="SESSION_SECRET must be at least 32 bytes long"
@@ -304,8 +307,7 @@ def test_settings_session_secret_validation():
     assert s.session_secret == valid
 
 
-def test_settings_jwt_algorithm_validation():
-    from app.config import Settings
+def test_settings_jwt_algorithm_validation() -> None:
 
     with pytest.raises(ValueError, match="jwt_algorithm must be one of"):
         Settings(jwt_algorithm="none")
@@ -320,7 +322,7 @@ def test_settings_jwt_algorithm_validation():
     assert s2.jwt_algorithm == "HS384"
 
 
-def test_decode_rejects_unallowed_algorithm():
+def test_decode_rejects_unallowed_algorithm() -> None:
     # If a token is crafted with an algorithm not in ALLOWED_JWT_ALGORITHMS (e.g. none), decode must return None
     fake_token = jwt.encode(
         {"type": "session", "sub": "1", "user_id": 1, "role": "admin"},
@@ -332,7 +334,7 @@ def test_decode_rejects_unallowed_algorithm():
     assert decode_sso_token(fake_token) is None
 
 
-def test_create_sso_token_event():
+def test_create_sso_token_event() -> None:
     token = create_sso_token(scope_type="event", scope_id=10, role="organizer")
     assert isinstance(token, str)
 
@@ -353,7 +355,7 @@ def test_create_sso_token_event():
     assert payload.email is None
 
 
-def test_create_sso_token_talk():
+def test_create_sso_token_talk() -> None:
     token = create_sso_token(scope_type="talk", scope_id=42, role="speaker")
     assert isinstance(token, str)
 
@@ -369,9 +371,9 @@ def test_create_sso_token_talk():
     assert not hasattr(payload, "sub")
 
 
-def test_create_sso_token_invalid_inputs():
+def test_create_sso_token_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="scope_type must be 'event' or 'talk'"):
-        create_sso_token(scope_type="invalid", scope_id=1, role="organizer")
+        create_sso_token(scope_type="invalid", scope_id=1, role="organizer")  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="scope_id must be a positive integer"):
         create_sso_token(scope_type="event", scope_id=0, role="organizer")
@@ -395,8 +397,7 @@ def test_create_sso_token_invalid_inputs():
         create_sso_token(scope_type="event", scope_id=1, role="speaker")
 
 
-def test_decode_sso_token_expired():
-    from datetime import UTC, datetime, timedelta
+def test_decode_sso_token_expired() -> None:
 
     secret = get_session_secret()
     now = datetime.now(UTC)
@@ -415,13 +416,13 @@ def test_decode_sso_token_expired():
     assert decode_sso_token(expired_tok) is None
 
 
-def test_decode_sso_token_tampered():
+def test_decode_sso_token_tampered() -> None:
     token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
     tampered = token[:-5] + "xxxxx"
     assert decode_sso_token(tampered) is None
 
 
-def test_decode_sso_token_missing_exp():
+def test_decode_sso_token_missing_exp() -> None:
     secret = get_session_secret()
     token_without_exp = jwt.encode(
         {
@@ -436,7 +437,7 @@ def test_decode_sso_token_missing_exp():
     assert decode_sso_token(token_without_exp) is None
 
 
-def test_decode_sso_token_rejects_user_id():
+def test_decode_sso_token_rejects_user_id() -> None:
     secret = get_session_secret()
     # Craft a token that includes a user_id or sub claim
     bad_token = jwt.encode(
@@ -466,7 +467,7 @@ def test_decode_sso_token_rejects_user_id():
     assert decode_sso_token(bad_token_sub) is None
 
 
-def test_decode_sso_token_wrong_type():
+def test_decode_sso_token_wrong_type() -> None:
     session_tok = create_session_token(user_id=1, role="admin")
     assert decode_sso_token(session_tok) is None
 
@@ -474,7 +475,7 @@ def test_decode_sso_token_wrong_type():
     assert decode_sso_token(access_tok) is None
 
 
-def test_decode_sso_token_malformed_claims():
+def test_decode_sso_token_malformed_claims() -> None:
     secret = get_session_secret()
     # Non-int scope_id
     bad_tok = jwt.encode(
@@ -592,8 +593,7 @@ def test_decode_sso_token_malformed_claims():
     assert payload.email == "speaker@example.com"
 
 
-def test_settings_sso_token_expire_seconds_validation():
-    from app.config import Settings
+def test_settings_sso_token_expire_seconds_validation() -> None:
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(sso_token_expire_seconds=0)
@@ -605,8 +605,7 @@ def test_settings_sso_token_expire_seconds_validation():
     assert s.sso_token_expire_seconds == 600
 
 
-def test_settings_speaker_magic_link_expire_hours_validation():
-    from app.config import Settings
+def test_settings_speaker_magic_link_expire_hours_validation() -> None:
 
     with pytest.raises(ValueError, match="token expiration values must be positive"):
         Settings(speaker_magic_link_expire_hours=0)
@@ -618,7 +617,7 @@ def test_settings_speaker_magic_link_expire_hours_validation():
     assert s.speaker_magic_link_expire_hours == 72
 
 
-def test_is_valid_email():
+def test_is_valid_email() -> None:
     # Valid RFC 5322 emails
     assert is_valid_email("user@example.com") is True
     assert is_valid_email("user.name+tag@sub.domain.co") is True
@@ -629,8 +628,8 @@ def test_is_valid_email():
 
     # Invalid emails
     assert is_valid_email("") is False
-    assert is_valid_email(None) is False
-    assert is_valid_email(12345) is False
+    assert is_valid_email(None) is False  # type: ignore[arg-type]
+    assert is_valid_email(12345) is False  # type: ignore[arg-type]
     assert is_valid_email("invalid-email") is False
     assert is_valid_email("@missinguser.com") is False
     assert is_valid_email("missingdomain@") is False
@@ -642,8 +641,7 @@ def test_is_valid_email():
     assert is_valid_email("<script>@domain.com") is False
 
 
-def test_database_url_encodes_reserved_characters():
-    from app.config import Settings
+def test_database_url_encodes_reserved_characters() -> None:
 
     s = Settings(
         postgres_user="ved@user",

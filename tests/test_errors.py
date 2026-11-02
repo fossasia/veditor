@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.main import _STATIC_DIR, _add_vary_accept, app, not_found_handler
 
 
-def test_404_page_not_found_browser():
+def test_404_page_not_found_browser() -> None:
     client = TestClient(app)
     resp = client.get("/stud", headers={"Accept": "text/html,application/xhtml+xml"})
     assert resp.status_code == 404
@@ -18,7 +18,7 @@ def test_404_page_not_found_browser():
     assert "Accept" in resp.headers.get("Vary", "")
 
 
-def test_404_page_not_found_xhtml():
+def test_404_page_not_found_xhtml() -> None:
     client = TestClient(app)
     resp = client.get("/stud", headers={"Accept": "application/xhtml+xml"})
     assert resp.status_code == 404
@@ -27,7 +27,7 @@ def test_404_page_not_found_xhtml():
     assert "Accept" in resp.headers.get("Vary", "")
 
 
-def test_404_json_api():
+def test_404_json_api() -> None:
     client = TestClient(app)
     resp = client.get("/stud", headers={"Accept": "application/json"})
     assert resp.status_code == 404
@@ -36,7 +36,7 @@ def test_404_json_api():
     assert "Accept" in resp.headers.get("Vary", "")
 
 
-def test_404_content_negotiation_quality_values():
+def test_404_content_negotiation_quality_values() -> None:
     client = TestClient(app)
     # text/html;q=0 should reject HTML and fall back to JSON
     resp = client.get("/stud", headers={"Accept": "text/html;q=0, application/json"})
@@ -67,7 +67,7 @@ def test_404_content_negotiation_quality_values():
     assert "application/json" in resp4.headers.get("content-type", "")
 
 
-def test_404_root_path_support():
+def test_404_root_path_support() -> None:
     client = TestClient(app, root_path="/custom-root")
     resp = client.get("/stud", headers={"Accept": "text/html"})
     assert resp.status_code == 404
@@ -89,14 +89,14 @@ def test_404_root_path_support():
     assert studio_resp.headers["location"] == "/custom-root/studio"
 
 
-def test_404_preserves_exception_headers_and_vary():
+def test_404_preserves_exception_headers_and_vary() -> None:
     # Instantiate an isolated FastAPI app to avoid mutating global app instance
     test_app = FastAPI()
     test_app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     test_app.add_exception_handler(404, not_found_handler)
 
     @test_app.get("/test-404-headers")
-    def route_404_with_headers():
+    def route_404_with_headers() -> None:
         raise HTTPException(
             status_code=404,
             detail="Item missing",
@@ -127,13 +127,13 @@ def test_404_preserves_exception_headers_and_vary():
     assert "Accept" in vary_json
 
 
-def test_404_html_filters_payload_headers():
+def test_404_html_filters_payload_headers() -> None:
     test_app = FastAPI()
     test_app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     test_app.add_exception_handler(404, not_found_handler)
 
     @test_app.get("/test-payload-headers")
-    def route_payload_headers():
+    def route_payload_headers() -> None:
         raise HTTPException(
             status_code=404,
             detail="Item missing",
@@ -152,7 +152,7 @@ def test_404_html_filters_payload_headers():
     assert resp.headers.get("content-length") != "999"
 
 
-def test_add_vary_accept():
+def test_add_vary_accept() -> None:
     # Empty vary header
     h1 = {"Vary": ""}
     _add_vary_accept(h1)
@@ -164,7 +164,7 @@ def test_add_vary_accept():
     assert h2["Vary"] == "Accept"
 
     # No vary header
-    h3 = {}
+    h3: dict[str, str] = {}
     _add_vary_accept(h3)
     assert h3["Vary"] == "Accept"
 

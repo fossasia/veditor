@@ -1,9 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, tzinfo
 from typing import Any, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -15,12 +17,17 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.db import Base
 from app.retention import validate_retention_overrides
+
+from .consts import TalkStatus
 
 
 class RetentionOverrides(MutableDict):
@@ -41,7 +48,7 @@ class RetentionOverrides(MutableDict):
             validate_retention_overrides({**self, key: default})
         return super().setdefault(key, default)
 
-    def __ior__(self, other: Any) -> Self:
+    def __ior__(self, other: Any) -> Self:  # type: ignore[misc]
         self.update(other)
         return self
 
@@ -141,6 +148,11 @@ class Event(Base):
     speaker_magic_link_expire_hours: Mapped[int | None] = mapped_column(
         Integer, nullable=True, default=None
     )
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    timezone: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey(
             "users.id",
@@ -163,6 +175,22 @@ class Event(Base):
     @validates("retention_overrides")
     def _validate_retention_overrides(self, key: str, value: Any) -> Any:
         return validate_retention_overrides(value)
+
+    @property
+    def duration_days(self) -> int:
+        if self.start_date and self.end_date:
+            return max(1, (self.end_date - self.start_date).days + 1)
+        return 1
+
+    @property
+    def event_tz(self) -> tzinfo:
+        """Return the event's timezone, falling back to UTC if unset or invalid."""
+        if self.timezone:
+            try:
+                return ZoneInfo(self.timezone)
+            except ZoneInfoNotFoundError, ValueError, KeyError:
+                pass
+        return UTC
 
     @property
     def is_eventyay_synced(self) -> bool:
@@ -241,8 +269,16 @@ class Talk(Base):
     room: Mapped[str | None] = mapped_column(String(255))
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="waiting_for_files"
+    status: Mapped[TalkStatus] = mapped_column(
+        SAEnum(
+            TalkStatus,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+        default=TalkStatus.WAITING_FILES,
     )
     speaker_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
@@ -290,8 +326,8 @@ class Talk(Base):
 
     @property
     def is_eventyay_synced(self) -> bool:
-        ev = getattr(self, "event", None)
-        return ev.is_eventyay_synced if ev else False
+        ev = self.event
+        return ev.is_eventyay_synced if ev is not None else False
 
 
 class Job(Base):

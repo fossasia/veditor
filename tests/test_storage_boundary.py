@@ -206,7 +206,7 @@ def find_storage_violations(
     return violations
 
 
-def test_app_storage_boundary():
+def test_app_storage_boundary() -> None:
     """
     Ensure that no file inside app/ (excluding app/storage.py) performs
     direct filesystem I/O operations without an explicit exemption marker.
@@ -237,7 +237,7 @@ def test_app_storage_boundary():
         )
 
 
-def test_storage_boundary_detects_violations():
+def test_storage_boundary_detects_violations() -> None:
     """
     Regression test: Verify that deliberate direct file I/O operations are detected,
     including aliased imports, os.open, and Path.open calls.
@@ -298,7 +298,7 @@ def do_forbidden():
     assert any(".open()" in v for v in violations), "Should catch Path.open()"
 
 
-def test_storage_boundary_allows_non_path_open_calls():
+def test_storage_boundary_allows_non_path_open_calls() -> None:
     """
     Verify that legitimate .open() calls on non-Path objects (e.g. webbrowser, PIL, zipfile)
     are not falsely flagged as violations.
@@ -320,7 +320,7 @@ def open_unrelated_things():
     )
 
 
-def test_storage_boundary_respects_exemptions():
+def test_storage_boundary_respects_exemptions() -> None:
     """
     Verify that operations annotated with `# storage-boundary-exempt: <reason>` are permitted.
     """

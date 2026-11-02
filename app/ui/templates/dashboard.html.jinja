@@ -392,7 +392,7 @@
 
 {% if can_attach_room %}
 <!-- ── MODAL: Attach Room Video ─────────────────────────────────── -->
-<dialog id="modal-attach-room" class="v-modal">
+<dialog id="modal-attach-room" class="v-modal"{% if event_id %} data-event-id="{{ event_id }}"{% endif %}>
   <div class="v-modal-card modal-attach-card">
     <div class="v-modal-header">
       <h3 class="v-modal-title">Attach Room Recording</h3>
@@ -405,30 +405,78 @@
       </p>
 
       <div class="v-modal-field">
-        <label class="v-modal-label v-modal-label-tight">Select Room</label>
-        <input type="text" id="attach-room-input" list="room-options" class="input-field" placeholder="e.g. Auditorium A" value="{% if all_rooms %}{{ all_rooms[0] }}{% endif %}">
-        <datalist id="room-options">
-          {% for r in all_rooms %}
-            <option value="{{ r }}">
-          {% endfor %}
-        </datalist>
+        <label for="attach-event-select" class="v-modal-label v-modal-label-tight">Select Event</label>
+        <select id="attach-event-select" class="input-field">
+          {% if not user_events %}
+            <option value="" disabled selected>No events found</option>
+          {% else %}
+            {% for ev in user_events %}
+              <option value="{{ ev.id }}" data-event-id="{{ ev.id }}"{% if event_id == ev.id %} selected{% endif %}>{{ ev.name }}</option>
+            {% endfor %}
+          {% endif %}
+        </select>
       </div>
 
       <div class="v-modal-field">
-        <label class="v-modal-label v-modal-label-tight">Recording Video URL (Direct HTTP/HTTPS, Google Drive, Dropbox)</label>
+        <label for="attach-room-select" class="v-modal-label v-modal-label-tight">Select Room</label>
+        <select id="attach-room-select" class="input-field">
+          {% if not all_rooms %}
+            <option value="" disabled selected>No rooms found</option>
+          {% else %}
+            {% for r in all_rooms %}
+              <option value="{{ r }}"{% if room and r == room %} selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          {% endif %}
+        </select>
+      </div>
+
+      <div class="v-modal-field">
+        <label for="attach-room-date" class="v-modal-label v-modal-label-tight">Select Day / Date</label>
+        <select id="attach-room-date" class="input-field">
+          <option value="">All Days / Select Day</option>
+        </select>
+      </div>
+
+      <div class="v-modal-field">
+        <label class="v-modal-label v-modal-label-tight">Recording Source</label>
+        <div class="attach-source-toggle" role="group" aria-label="Recording source switcher">
+          <button type="button" class="attach-source-btn attach-source-active" id="btn-source-url" data-source="url">
+            🔗 Video URL
+          </button>
+          <button type="button" class="attach-source-btn" id="btn-source-file" data-source="file">
+            📁 Upload File
+          </button>
+        </div>
+      </div>
+
+      <div id="attach-source-url-panel" class="v-modal-field">
+        <label for="attach-room-url" class="v-modal-label v-modal-label-tight">Recording Video URL (Direct HTTP/HTTPS, Google Drive, Dropbox)</label>
         <input type="url" id="attach-room-url" class="input-field" placeholder="https://example.com/recording.mp4 or cloud storage link">
       </div>
 
-      <div class="v-modal-field-lg">
-        <label class="v-modal-label v-modal-label-tight">OR Upload Video File</label>
-        <input type="file" id="attach-room-file" accept="video/*" class="input-field v-modal-file-input">
+      <div id="attach-source-file-panel" class="v-modal-field attach-source-hidden">
+        <label class="v-modal-label v-modal-label-tight">Upload Video File</label>
+        <div class="attach-dropzone" id="attach-dropzone" role="button" tabindex="0" aria-label="Drop video file or click to browse">
+          <div class="attach-dropzone-icon" aria-hidden="true">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+          </div>
+          <p class="attach-dropzone-text" id="attach-dropzone-label">
+            <strong>Choose a video file</strong> or drag & drop here
+          </p>
+          <p class="attach-dropzone-subtext">MP4, MKV, MOV, WebM up to max allowed upload size</p>
+          <input type="file" id="attach-room-file" accept="video/*" class="attach-file-input">
+        </div>
       </div>
     </div>
 
     <div class="v-modal-footer">
       <button type="button" class="btn btn-ghost btn-sm btn-close-attach-room" data-modal-close>Cancel</button>
       <button type="button" class="btn btn-primary btn-sm" id="btn-submit-attach-room">
-        Attach to All Sessions in Room
+        Attach Recording
       </button>
     </div>
   </div>

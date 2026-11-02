@@ -9,6 +9,7 @@ import uuid
 from decimal import ROUND_CEILING, Decimal
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.request import Request
 
 import av
 
@@ -49,6 +50,10 @@ def stage_recording(
     talk_id: int, payload: RecordingIngestRequest, backend: StorageBackend
 ) -> str:
     path_str = payload.source_path or payload.relative_key
+    if path_str is None:
+        raise IngestPathRejectedError(
+            "exactly one of source_path or relative_key is required"
+        )
     if "\0" in path_str:
         raise IngestPathRejectedError("Invalid path")
 
@@ -263,7 +268,7 @@ def download_media_url(url: str, output_path: Path) -> Path:
     temp_target = output_path.with_suffix(
         output_path.suffix + f".part_{uuid.uuid4().hex[:8]}"
     )
-    max_bytes = getattr(settings, "max_url_download_bytes", 20 * 1024 * 1024 * 1024)
+    max_bytes = settings.max_url_download_bytes
 
     cookie_jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
@@ -278,7 +283,7 @@ def download_media_url(url: str, output_path: Path) -> Path:
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    req = urllib.request.Request(resolved_url, headers=headers)
+    req = Request(resolved_url, headers=headers)
 
     try:
         resp = opener.open(req, timeout=120)
@@ -305,7 +310,7 @@ def download_media_url(url: str, output_path: Path) -> Path:
                     )
 
                 if confirm_url:
-                    req_confirm = urllib.request.Request(confirm_url, headers=headers)
+                    req_confirm = Request(confirm_url, headers=headers)
                     resp = opener.open(req_confirm, timeout=120)
                 else:
                     raise ValueError(
