@@ -1,5 +1,7 @@
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -648,7 +650,7 @@ def test_job_cut_multi_segment_concatenates_cuts(
     assert storage.exists("1/cut/cut.mp4")
     out_file = storage.get("1/cut/cut.mp4")
 
-    observed_colors = []
+    observed_colors: list[str] = []
     with av.open(str(out_file)) as c:
         out_dur = container_duration_seconds(c)
         for frame in c.decode(video=0):
@@ -699,7 +701,7 @@ def test_job_cut_discarded_if_aborted_or_superseded(
     talk.raw_duration_seconds = 2.0
     db_session.commit()
 
-    def fake_cut(inp, out, *args, **kwargs):
+    def fake_cut(inp: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         with new_session() as db:
             t = db.get(Talk, talk.id)
             if t:
@@ -707,7 +709,7 @@ def test_job_cut_discarded_if_aborted_or_superseded(
                 db.commit()
         Path(out).write_bytes(b"stale worker output")
 
-    def fake_concat(segs, out, *args, **kwargs):
+    def fake_concat(segs: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         Path(out).write_bytes(b"concatenated output")
 
     with (
@@ -752,13 +754,15 @@ def test_job_cut_resynchronizes_stale_cut_segments(
     ]
     db_session.commit()
 
-    captured_bounds = []
+    captured_bounds: list[tuple[float, float]] = []
 
-    def fake_cut(inp, out, start, end, *args, **kwargs):
+    def fake_cut(
+        inp: Any, out: Any, start: float, end: float, *args: Any, **kwargs: Any
+    ) -> None:
         captured_bounds.append((start, end))
         Path(out).write_bytes(b"cut content")
 
-    def fake_concat(segs, out, *args, **kwargs):
+    def fake_concat(segs: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         Path(out).write_bytes(b"concatenated output")
 
     with (
@@ -803,13 +807,15 @@ def test_job_cut_multi_segment_enforces_frame_accurate_fallback(
     ]
     db_session.commit()
 
-    cut_calls = []
+    cut_calls: list[tuple[float, float, dict[str, Any]]] = []
 
-    def fake_cut(inp, out, start, end, *args, **kwargs):
+    def fake_cut(
+        inp: Any, out: Any, start: float, end: float, *args: Any, **kwargs: Any
+    ) -> None:
         cut_calls.append((start, end, kwargs))
         Path(out).write_bytes(b"cut segment")
 
-    def fake_concat(segs, out, *args, **kwargs):
+    def fake_concat(segs: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         Path(out).write_bytes(b"concatenated output")
 
     with (
@@ -846,25 +852,25 @@ def test_job_cut_fails_closed_when_newer_job_query_errors(
     talk.cut_segments = [{"start": 10.0, "end": 50.0}]
     db_session.commit()
 
-    def fake_cut(inp, out, *args, **kwargs):
+    def fake_cut(inp: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         Path(out).write_bytes(b"cut content")
 
     call_count = 0
 
     @contextmanager
-    def buggy_new_session():
+    def buggy_new_session() -> Generator[Session]:
         nonlocal call_count
         call_count += 1
         with new_session() as sess:
             if call_count > 1:
                 orig_query = sess.query
 
-                def query_raise(model):
+                def query_raise(model: Any, *args: Any, **kwargs: Any) -> Any:
                     if model == Job:
                         raise RuntimeError("Database query failure")
-                    return orig_query(model)
+                    return orig_query(model, *args, **kwargs)
 
-                sess.query = query_raise
+                sess.query = query_raise  # type: ignore[method-assign,assignment]
             yield sess
 
     with (
@@ -897,7 +903,7 @@ def test_job_cut_discards_output_when_talk_superseded_or_aborted(
     )
     db_session.commit()
 
-    def fake_cut(inp, out, *args, **kwargs):
+    def fake_cut(inp: Any, out: Any, *args: Any, **kwargs: Any) -> None:
         with new_session() as db:
             t = db.get(Talk, talk.id)
             if t:

@@ -124,7 +124,7 @@ def test_cut_bounds_high_precision_ordering_lost_rejected() -> None:
         CutBoundsRequest(cut_start="00:00:59.9999999999999999", cut_end="00:01:00")
 
 
-def test_cut_bounds_multiple_segments_valid():
+def test_cut_bounds_multiple_segments_valid() -> None:
     req = CutBoundsRequest(
         segments=[
             {"start": "00:05:00", "end": "00:15:00"},
@@ -140,7 +140,7 @@ def test_cut_bounds_multiple_segments_valid():
     assert end_s == 1800.0
 
 
-def test_cut_bounds_multiple_segments_overlapping_rejected():
+def test_cut_bounds_multiple_segments_overlapping_rejected() -> None:
     with pytest.raises(ValueError, match="non-overlapping"):
         CutBoundsRequest(
             segments=[
@@ -150,7 +150,7 @@ def test_cut_bounds_multiple_segments_overlapping_rejected():
         )
 
 
-def test_cut_bounds_segment_end_must_exceed_start():
+def test_cut_bounds_segment_end_must_exceed_start() -> None:
     with pytest.raises(ValueError, match="greater than start"):
         CutBoundsRequest(
             segments=[
@@ -159,13 +159,13 @@ def test_cut_bounds_segment_end_must_exceed_start():
         )
 
 
-def test_cut_bounds_empty_segments_rejected():
+def test_cut_bounds_empty_segments_rejected() -> None:
     with pytest.raises(ValueError, match="cannot be empty"):
         CutBoundsRequest(segments=[])
 
 
 @pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
-def test_cut_segment_rejects_non_finite_values(bad_val: float):
+def test_cut_segment_rejects_non_finite_values(bad_val: float) -> None:
     with pytest.raises(ValueError, match="finite"):
         CutSegment(start=bad_val, end=10.0)
     with pytest.raises(ValueError, match="finite"):

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -311,7 +312,7 @@ def test_smart_cut_frame_accurate(tmp_path: Path) -> None:
     assert abs(info.duration - 5.6) <= 0.15
 
 
-def test_cut_frame_accurate_preserves_vfr_timestamps(tmp_path: Path):
+def test_cut_frame_accurate_preserves_vfr_timestamps(tmp_path: Path) -> None:
     """Verify frame-accurate fallback preserves variable-frame-rate timestamps."""
     from fractions import Fraction
 
@@ -345,10 +346,11 @@ def test_cut_frame_accurate_preserves_vfr_timestamps(tmp_path: Path):
 
     with av.open(str(out_cut)) as inp:
         st = inp.streams.video[0]
-        decoded_times = []
+        decoded_times: list[float] = []
         for p in inp.demux(st):
             for f in p.decode():
-                decoded_times.append(float(f.pts * f.time_base))
+                if f.pts is not None and f.time_base is not None:
+                    decoded_times.append(float(f.pts * f.time_base))
 
         expected = [round(t - 0.4, 3) for t in [0.4, 0.5, 0.9, 1.2, 1.8]]
         assert len(decoded_times) == len(expected)
@@ -356,7 +358,7 @@ def test_cut_frame_accurate_preserves_vfr_timestamps(tmp_path: Path):
             assert abs(act - exp) < 0.02
 
 
-def test_cut_frame_accurate_flushes_resampler(tmp_path: Path):
+def test_cut_frame_accurate_flushes_resampler(tmp_path: Path) -> None:
     """Verify fallback audio resampler is flushed with None before encoder flush."""
     from unittest.mock import patch
 
@@ -368,18 +370,18 @@ def test_cut_frame_accurate_flushes_resampler(tmp_path: Path):
     out = tmp_path / "resampler_flushed.mp4"
 
     real_resampler_factory = av.AudioResampler
-    flushed = []
+    flushed: list[bool] = []
 
     class ResamplerWrapper:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._real = real_resampler_factory(*args, **kwargs)
 
-        def resample(self, frame=None):
+        def resample(self, frame: Any = None) -> Any:
             if frame is None:
                 flushed.append(True)
             return self._real.resample(frame)
 
-        def __getattr__(self, name):
+        def __getattr__(self, name: str) -> Any:
             return getattr(self._real, name)
 
     with patch("av.AudioResampler", side_effect=ResamplerWrapper):
