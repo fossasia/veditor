@@ -553,17 +553,30 @@ function updateCutMarkersUI() {
         tab.className = `segment-tab${idx === activeSegmentIndex ? ' active' : ''}`;
         tab.setAttribute('role', 'tab');
         tab.setAttribute('aria-selected', idx === activeSegmentIndex ? 'true' : 'false');
+        tab.tabIndex = 0;
 
         const titleSpan = document.createElement('span');
         const segDur = Math.max(0, seg.end - seg.start);
         titleSpan.textContent = `Cut ${idx + 1} (${formatSelectedDuration(segDur)})`;
         tab.appendChild(titleSpan);
 
-        tab.addEventListener('click', (e) => {
-          if (e.target.closest('.segment-tab-del')) return;
+        const activateTab = () => {
           selectActiveSegment(idx);
           if (video && isFinite(video.duration)) {
             video.currentTime = seg.start;
+          }
+        };
+
+        tab.addEventListener('click', (e) => {
+          if (e.target.closest('.segment-tab-del')) return;
+          activateTab();
+        });
+
+        tab.addEventListener('keydown', (e) => {
+          if (e.target.closest('.segment-tab-del')) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activateTab();
           }
         });
 
@@ -1056,7 +1069,7 @@ document.addEventListener('keydown', e => {
     if (video && btnSetIn) setInPoint(video.currentTime);
   } else if (e.code === 'KeyO') {
     if (video && btnSetOut) setOutPoint(video.currentTime);
-  } else if (e.code === 'KeyS') {
+  } else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
     if (video && btnSplitSegment) splitCurrentSegment();
   } else if (e.code === 'ArrowLeft') {
     if (video && video.src) seekBy(e.shiftKey ? -60 : -5);
@@ -1128,8 +1141,12 @@ window.approveTalk = async function(id) {
     if (talkStatus === 'pending_approval') {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
+      const isPreview = getActiveVideoCategory() === 'preview';
+      if (isPreview && cutSegments && cutSegments.length > 1) {
+        throw new Error('Multi-segment cuts cannot be edited or submitted from the preview source. Please switch to the Raw Recording source.');
+      }
       const dur = (video?.duration > 0) ? video.duration : (outPointSec || 10);
-      const base = getActiveVideoCategory() === 'preview' ? (parseFloat(getStudioShell()?.dataset?.cutStart) || 0) : 0;
+      const base = isPreview ? (parseFloat(getStudioShell()?.dataset?.cutStart) || 0) : 0;
       const formattedSegments = (cutSegments && cutSegments.length > 0 ? cutSegments : [{ start: inPointSec, end: outPointSec }]).map(s => {
         const clampedIn = Math.max(0, Math.min(s.start, dur - 0.1));
         const clampedOut = Math.min(dur, Math.max(s.end, clampedIn + 0.1));

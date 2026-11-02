@@ -671,6 +671,7 @@ def submit_cut_bounds(
         talk.cut_segments = [{"start": s[0], "end": s[1]} for s in parsed_segs]
         cut_fn = job_cut_multi
 
+    prior_status = talk.status
     advance(talk, TalkStatus.CUTTING)
     if payload.note:
         user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
@@ -684,12 +685,21 @@ def submit_cut_bounds(
     db.commit()
     db.refresh(talk)
 
-    light_queue.enqueue(
-        cut_fn,
-        talk.id,
-        raw_key,
-        job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
-    )
+    try:
+        light_queue.enqueue(
+            cut_fn,
+            talk.id,
+            raw_key,
+            job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
+        )
+    except (OSError, RedisError, RuntimeError) as exc:
+        logger.error("Failed to enqueue cut job for talk %s: %s", talk.id, exc)
+        talk.status = prior_status
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cut processing queue is temporarily unavailable; cut bounds were not queued. Please try again.",
+        ) from exc
 
     return schemas.TalkRead.model_validate(talk)
 

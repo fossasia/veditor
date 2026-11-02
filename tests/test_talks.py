@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1419,3 +1420,29 @@ def test_handoff_platform_user_on_regular_event_sends_email(
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email in enqueued_jobs
+
+
+def test_submit_cut_bounds_enqueue_failure_restores_prior_status(
+    db_session: Session,
+    fake_storage: FakeStorageBackend,
+) -> None:
+    event = _create_event(db_session)
+    talk = _create_pending_bounds_talk(db_session, event.id)
+    _create_api_client(db_session, event_ids=[event.id])
+    fake_storage.put(f"{talk.id}/raw/raw.mp4", b"data")
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    with patch(
+        "app.routes.talks.light_queue.enqueue", side_effect=RedisError("Redis down")
+    ):
+        resp = client.post(
+            f"/talks/{talk.id}/cut",
+            json={"cut_start": "00:00:01", "cut_end": "00:00:05"},
+            headers={"X-API-Key": API_KEY},
+        )
+        assert resp.status_code == 503
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS

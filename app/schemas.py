@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -412,6 +413,8 @@ def _parse_hhmmss(value: str) -> Decimal:
 
 def _parse_time_value(value: str | float) -> Decimal:
     if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise ValueError(f"Time value must be finite, got {value}")
         if value < 0:
             raise ValueError(f"Time value must be non-negative, got {value}")
         return Decimal(str(value))

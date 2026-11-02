@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.schemas import CutBoundsRequest, _parse_hhmmss
+from app.schemas import CutBoundsRequest, CutSegment, _parse_hhmmss
 
 
 @pytest.mark.parametrize(
@@ -162,3 +162,11 @@ def test_cut_bounds_segment_end_must_exceed_start():
 def test_cut_bounds_empty_segments_rejected():
     with pytest.raises(ValueError, match="cannot be empty"):
         CutBoundsRequest(segments=[])
+
+
+@pytest.mark.parametrize("bad_val", [float("nan"), float("inf"), float("-inf")])
+def test_cut_segment_rejects_non_finite_values(bad_val: float):
+    with pytest.raises(ValueError, match="finite"):
+        CutSegment(start=bad_val, end=10.0)
+    with pytest.raises(ValueError, match="finite"):
+        CutSegment(start=0.0, end=bad_val)

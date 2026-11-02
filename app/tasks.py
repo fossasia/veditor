@@ -724,27 +724,29 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     len(segments),
                     sum(s["end"] - s["start"] for s in segments),
                 )
-            with new_session() as db:
-                talk = None
-                if hasattr(db, "query"):
-                    try:
-                        q = db.query(Talk).filter(Talk.id == talk_id)
-                        if hasattr(q, "with_for_update"):
-                            res = q.with_for_update().first()
-                            if isinstance(res, Talk):
-                                talk = res
-                        if talk is None:
-                            res = q.first()
-                            if isinstance(res, Talk):
-                                talk = res
-                    except Exception:  # noqa: BLE001
-                        talk = None
-                if talk is None and hasattr(db, "get"):
-                    talk = db.get(Talk, talk_id)
+            # Precompute waveform and stage cut file before acquiring talk lock
+            try:
+                waveform_bytes = json.dumps(
+                    {"peaks": extract_waveform_peaks(tmp_out)}
+                ).encode("utf-8")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to precompute waveform cache for talk %s: %s",
+                    talk_id,
+                    exc,
+                )
+                waveform_bytes = None
 
-                job = db.get(Job, job_id)
+            staging_cut_key = f"{talk_id}/cut/.staging_{uuid.uuid4().hex}.mp4"
+            storage.put(staging_cut_key, tmp_out)
+
+            with new_session() as db:
+                talk = (
+                    db.query(Talk).filter(Talk.id == talk_id).with_for_update().first()
+                )
+                job = db.get(Job, job_id) if job_id is not None else None
                 newer_cut_job = None
-                if hasattr(db, "query") and job_id is not None:
+                if job_id is not None:
                     job_res = (
                         db.query(Job)
                         .filter(
@@ -754,7 +756,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                         )
                         .first()
                     )
-                    if isinstance(job_res, Job) and getattr(job_res, "id", 0) > job_id:
+                    if job_res is not None and getattr(job_res, "id", 0) > job_id:
                         newer_cut_job = job_res
 
                 if (
@@ -769,14 +771,26 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                         talk_id,
                         job_id,
                     )
+                    storage.delete(staging_cut_key)
                     if job and getattr(job, "status", None) == "running":
                         job.status = "cancelled"
                         job.updated_at = datetime.now(UTC)
                         db.commit()
                     return
 
-                _cache_waveform(storage, cut_key, tmp_out)
-                storage.put(cut_key, tmp_out)
+                staged_path = storage.get(staging_cut_key)
+                storage.link_or_copy(cut_key, staged_path)
+                storage.delete(staging_cut_key)
+
+                if waveform_bytes is not None:
+                    try:
+                        storage.put(f"{cut_key}.waveform.json", waveform_bytes)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to store waveform cache for %s: %s",
+                            cut_key,
+                            exc,
+                        )
 
                 advance(talk, TalkStatus.GENERATING_PREVIEWS)
                 job.status = "done"

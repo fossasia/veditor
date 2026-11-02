@@ -10,6 +10,7 @@ import pytest
 from app.pipeline.concat import (
     _can_stream_copy,
     concat,
+    concat_segments,
 )
 from app.pipeline.intro import generate_intro_clip
 from app.storage import LocalDiskBackend
@@ -410,3 +411,12 @@ def test_concat_mismatched_extradata_reencodes_successfully(tmp_path: Path) -> N
             for _ in packet.decode():
                 decoded_frames += 1
         assert decoded_frames > 0
+
+
+def test_concat_segments_rejects_output_matching_input(tmp_path: Path) -> None:
+    seg1 = tmp_path / "seg1.mp4"
+    seg2 = tmp_path / "seg2.mp4"
+    seg1.touch()
+    seg2.touch()
+    with pytest.raises(ValueError, match="Output path matches input segment"):
+        concat_segments([seg1, seg2], seg1)

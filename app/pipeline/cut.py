@@ -276,7 +276,6 @@ def _cut_frame_accurate(
                 can_fps = Fraction(fps_val, 1)
             else:
                 can_fps = Fraction(24, 1)
-            v_enc_name = _resolve_video_encoder(in_v.codec_context.name)
 
         can_sr = 44100
         can_layout = "stereo"
@@ -334,6 +333,9 @@ def _cut_frame_accurate(
                 )
                 if s is not None
             ]
+            stream_passed_end: dict[int, bool] = {s.index: False for s in streams}
+            video_margin = 2.0
+            audio_margin = 0.5
             seek_target = max(0, int((start_seconds - 1.0) * av.time_base))
             in_c.seek(seek_target, backward=True, any_frame=False)
 
@@ -344,6 +346,17 @@ def _cut_frame_accurate(
             )
 
             for packet in in_c.demux(*streams):
+                pkt_ts = packet.pts if packet.pts is not None else packet.dts
+                if pkt_ts is not None and packet.stream.time_base is not None:
+                    pkt_time = float(pkt_ts * packet.stream.time_base)
+                    margin = (
+                        video_margin if packet.stream.type == "video" else audio_margin
+                    )
+                    if pkt_time > end_seconds + margin:
+                        stream_passed_end[packet.stream.index] = True
+                        if all(stream_passed_end.values()):
+                            break
+
                 try:
                     frames = packet.decode()
                 except Exception as exc:  # noqa: BLE001
