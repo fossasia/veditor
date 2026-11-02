@@ -747,6 +747,23 @@ def _validate_webhook_target_ip(url: str) -> None:
         raise ValueError("Invalid URL: missing hostname")
 
     try:
+        raw_ip = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        raw_ip = None
+
+    if raw_ip is not None and (
+        not raw_ip.is_global
+        or raw_ip.is_multicast
+        or raw_ip.is_reserved
+        or raw_ip.is_private
+        or raw_ip.is_loopback
+        or raw_ip.is_link_local
+    ):
+        raise ValueError(
+            f"Requests to private, loopback, link-local, or special IP addresses ({hostname}) are not allowed"
+        )
+
+    try:
         addr_info = socket.getaddrinfo(hostname, None)
     except socket.gaierror as exc:
         raise ValueError(
@@ -764,10 +781,25 @@ def _validate_webhook_target_ip(url: str) -> None:
         except ValueError as exc:
             raise ValueError(f"Invalid IP address resolved for host: {ip_str}") from exc
 
-        if not ip_obj.is_global or ip_obj.is_multicast:
-            raise ValueError(
-                f"Requests to private, loopback, link-local, or special IP addresses ({ip_str}) are not allowed"
-            )
+        check_ips = [ip_obj]
+        if isinstance(ip_obj, ipaddress.IPv6Address):
+            if ip_obj.ipv4_mapped:
+                check_ips.append(ip_obj.ipv4_mapped)
+            elif ip_obj in ipaddress.IPv6Network("64:ff9b::/96"):
+                check_ips.append(ipaddress.IPv4Address(ip_obj.packed[-4:]))
+
+        for target_ip in check_ips:
+            if (
+                not target_ip.is_global
+                or target_ip.is_multicast
+                or target_ip.is_reserved
+                or target_ip.is_private
+                or target_ip.is_loopback
+                or target_ip.is_link_local
+            ):
+                raise ValueError(
+                    f"Requests to private, loopback, link-local, or special IP addresses ({ip_str}) are not allowed"
+                )
 
 
 @router.post(

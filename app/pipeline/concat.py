@@ -113,8 +113,10 @@ def _concat_stream_copy(
 
             last_dts_end: dict[int, int] = {}
             last_pts_end: dict[int, int] = {}
+            shared_end_seconds: float = 0.0
 
             for seg_idx, seg_p in enumerate(segments):
+                current_seg_max_end_s: float = shared_end_seconds
                 with av.open(str(seg_p)) as in_container:
                     stream_map: dict[int, av.stream.Stream] = {}
                     in_type_counts: dict[str, int] = {}
@@ -145,9 +147,16 @@ def _concat_stream_copy(
                             if seg_idx == 0:
                                 seg_offset[out_s.index] = -packet.dts
                             else:
+                                tb = (
+                                    float(out_s.time_base)
+                                    if out_s.time_base
+                                    else 1.0 / 90000.0
+                                )
+                                target_pts = round(shared_end_seconds / tb)
                                 prev_dts_end = last_dts_end.get(out_s.index, 0)
                                 prev_pts_end = last_pts_end.get(out_s.index, 0)
                                 seg_offset[out_s.index] = max(
+                                    target_pts - packet.dts,
                                     prev_dts_end - packet.dts,
                                     prev_pts_end - packet.pts,
                                 )
@@ -169,7 +178,18 @@ def _concat_stream_copy(
                             last_pts_end.get(out_s.index, 0), packet.pts + dur
                         )
 
+                        tb = (
+                            float(out_s.time_base) if out_s.time_base else 1.0 / 90000.0
+                        )
+                        pkt_end_s = max(
+                            float((packet.dts + dur) * tb),
+                            float((packet.pts + dur) * tb),
+                        )
+                        current_seg_max_end_s = max(current_seg_max_end_s, pkt_end_s)
+
                         out_container.mux(packet)
+
+                shared_end_seconds = max(shared_end_seconds, current_seg_max_end_s)
 
     return str(output_path)
 
@@ -291,15 +311,13 @@ def _concat_reencode(
 
                 fps_graph = None
                 if v_stream is not None and out_video is not None:
-                    in_rate = v_stream.average_rate or v_stream.guessed_rate
-                    if in_rate and abs(float(in_rate) - float(can_fps)) > 0.05:
-                        fps_graph = av.filter.Graph()
-                        buffer = fps_graph.add_buffer(template=v_stream)
-                        fps_filter = fps_graph.add("fps", f"fps={float(can_fps)}")
-                        sink = fps_graph.add("buffersink")
-                        buffer.link_to(fps_filter)
-                        fps_filter.link_to(sink)
-                        fps_graph.configure()
+                    fps_graph = av.filter.Graph()
+                    buffer = fps_graph.add_buffer(template=v_stream)
+                    fps_filter = fps_graph.add("fps", f"fps={float(can_fps)}")
+                    sink = fps_graph.add("buffersink")
+                    buffer.link_to(fps_filter)
+                    fps_filter.link_to(sink)
+                    fps_graph.configure()
 
                 streams = [s for s in (v_stream, a_stream) if s is not None]
                 for packet in in_c.demux(*streams):
@@ -498,3 +516,27 @@ def concat(
             _concat_reencode(segments, cut_p, tmp_target, threads=threads)
 
         return _persist(tmp_target)
+
+
+def concat_segments(
+    segments: list[Path],
+    output_path: Path,
+    *,
+    threads: int | None = None,
+) -> Path:
+    """Concatenate a list of media segments into output_path."""
+    if not segments:
+        raise ValueError("No segments provided for concatenation")
+    out_resolved = output_path.resolve()
+    if any(out_resolved == seg.resolve() for seg in segments):
+        raise ValueError(f"Output path matches input segment: {output_path}")
+    if _can_stream_copy(segments):
+        try:
+            _concat_stream_copy(segments, output_path, canonical_cut_path=segments[0])
+            return output_path
+        except (av.FFmpegError, ValueError, RuntimeError, OSError) as exc:
+            logger.warning(
+                "Stream-copy concat failed (%s); falling back to re-encode", exc
+            )
+    _concat_reencode(segments, segments[0], output_path, threads=threads)
+    return output_path
