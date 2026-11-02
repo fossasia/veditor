@@ -730,7 +730,7 @@
                 <span>Download Master Video</span>
               </a>
 
-              {% if is_admin_or_org %}
+              {% if is_admin_or_org and not is_other_organizer_talk %}
               <button class="btn btn-warning w-full btn-edit-done btn-step-spacing" id="btn-needs-work" data-edit-control="true">
                 Edit Video
               </button>

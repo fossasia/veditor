@@ -1117,3 +1117,64 @@ def test_speaker_cannot_reopen_completed_talk(
     )
     assert response.status_code == 403
     assert "Operation requires minimum role 'organizer'" in response.json()["detail"]
+
+
+def test_machine_client_without_organizer_role_cannot_reopen_completed_talk(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Machine client without organizer or admin role cannot reopen a completed talk."""
+    preview_talk.status = TalkStatus.DONE
+    db_session.commit()
+
+    machine_user = CurrentUser(
+        user_id=None,
+        client_id=1,
+        role=AuthRole.USER,
+        source="api_key",
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: machine_user
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work"},
+    )
+    assert response.status_code == 403
+    assert "Operation requires minimum role 'organizer'" in response.json()["detail"]
+
+
+def test_reopening_completed_talk_clears_stale_assembly_jobs(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Reopening a completed talk removes stale downstream jobs so bumpers and assembly can regenerate."""
+    admin = _create_user(db_session, "admin_jobs@example.com", role=AuthRole.ADMIN)
+    preview_talk.status = TalkStatus.DONE
+    db_session.add_all(
+        [
+            models.Job(talk_id=preview_talk.id, kind="intro", status="done"),
+            models.Job(talk_id=preview_talk.id, kind="outro", status="done"),
+            models.Job(talk_id=preview_talk.id, kind="concat", status="done"),
+            models.Job(talk_id=preview_talk.id, kind="publish", status="done"),
+        ]
+    )
+    db_session.commit()
+
+    admin_user = CurrentUser(
+        user_id=admin.id,
+        email=admin.email,
+        role=admin.role,
+        source="cookie",
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work"},
+    )
+    assert response.status_code == 200
+
+    remaining_jobs = db_session.scalars(
+        select(models.Job.kind).where(models.Job.talk_id == preview_talk.id)
+    ).all()
+    assert not any(k in remaining_jobs for k in ["intro", "outro", "concat", "publish"])

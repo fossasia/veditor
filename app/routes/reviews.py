@@ -63,10 +63,7 @@ def review_talk(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",
             )
-        if (
-            user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN)
-            and not user.is_machine
-        ):
+        if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operation requires minimum role 'organizer'",

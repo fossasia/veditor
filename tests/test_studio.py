@@ -4072,6 +4072,52 @@ def test_admin_can_edit_completed_talk_ui(
     client.cookies.clear()
 
 
+def test_admin_viewing_other_organizer_completed_talk_omits_edit_button(
+    client: TestClient, db_session: Session
+) -> None:
+    """Admin viewing another organizer's completed talk does not see 'Edit Video' button."""
+    now = datetime.now(UTC)
+    other_org = models.User(
+        email="other_org@example.com",
+        hashed_password="hash",
+        role="organizer",
+        is_active=True,
+    )
+    admin = models.User(
+        email="viewing_admin@example.com",
+        hashed_password="hash",
+        role="admin",
+        is_active=True,
+    )
+    db_session.add_all([other_org, admin])
+    db_session.commit()
+
+    event = models.Event(name="Other Org Event", created_by_user_id=other_org.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title="Other Org Completed Talk",
+        status="done",
+        cut_start=10.0,
+        cut_end=60.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set("veditor_session", token)
+
+    response = client.get(f"/studio/talks/{talk.id}")
+    assert response.status_code == 200
+    assert "Download Master Video" in response.text
+    assert "btn-edit-done" not in response.text
+    client.cookies.clear()
+
+
 def test_admin_not_blocked_by_awaiting_speaker_in_preview(
     client: TestClient, db_session: Session
 ) -> None:

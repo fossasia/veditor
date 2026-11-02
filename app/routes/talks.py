@@ -670,15 +670,21 @@ def submit_cut_bounds(
             user_id=user_id,
         )
         db.add(review)
+    db.flush()
+
+    try:
+        light_queue.enqueue(
+            job_cut,
+            talk.id,
+            raw_key,
+            job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
+        )
+    except Exception:
+        db.rollback()
+        raise
+
     db.commit()
     db.refresh(talk)
-
-    light_queue.enqueue(
-        job_cut,
-        talk.id,
-        raw_key,
-        job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
-    )
 
     return schemas.TalkRead.model_validate(talk)
 
