@@ -5,6 +5,7 @@ import traceback
 from collections.abc import Callable
 
 from fastapi import HTTPException, status
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -121,6 +122,15 @@ def handle_needs_work(
     storage: StorageBackend | None = None,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
+    if talk.status == TalkStatus.DONE:
+        db.execute(
+            delete(models.Job).where(
+                models.Job.talk_id == talk.id,
+                models.Job.kind.in_(
+                    ["intro", "outro", "concat", "loudness", "transcode", "publish"]
+                ),
+            )
+        )
     return _record_review_and_advance(
         talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )

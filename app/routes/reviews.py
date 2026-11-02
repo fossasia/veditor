@@ -11,13 +11,11 @@ from app.auth import (
     check_talk_access,
     get_current_user,
 )
-from app.consts import AuthRole
+from app.consts import AuthRole, TalkStatus
 from app.db import get_db
 from app.review_handlers import DECISION_HANDLERS
 from app.schemas import ReviewResponse
 from app.storage import StorageBackend, get_storage_backend
-
-from ..consts import TalkStatus
 
 router = APIRouter(
     prefix="/talks",
@@ -59,7 +57,18 @@ def review_talk(
             )
         check_event_access(talk.event_id, user, db)
 
-    if talk.status != TalkStatus.PREVIEW:
+    if talk.status == TalkStatus.DONE:
+        if payload.decision != schemas.ReviewDecision.needs_work:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",
+            )
+        if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operation requires minimum role 'organizer'",
+            )
+    elif talk.status != TalkStatus.PREVIEW:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot review talk in status '{talk.status}'; talk must be in 'preview'",
