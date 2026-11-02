@@ -24,7 +24,7 @@ from fastapi import (
 )
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
-from rq.exceptions import InvalidJobOperation
+from rq.exceptions import InvalidJobOperation, NoSuchJobError
 from rq.job import Job
 from rq.registry import StartedJobRegistry
 from sqlalchemy import delete, func, select
@@ -1002,6 +1002,8 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                         rq_job.delete()
                 except (InvalidJobOperation, RedisError) as exc:
                     errors.append(f"Failed cancelling queued job {job_id}: {exc}")
+                except NoSuchJobError:
+                    pass
 
             # 2. Stop running/started/deferred/scheduled jobs
             registries = [
@@ -1022,6 +1024,8 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                                 rq_job.delete()
                         except (InvalidJobOperation, RedisError) as exc:
                             errors.append(f"Failed stopping job {job_id}: {exc}")
+                        except NoSuchJobError:
+                            pass
                 except RedisError as exc:
                     errors.append(f"Failed accessing queue registry: {exc}")
 
@@ -1036,6 +1040,8 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                             rq_job.delete()
                     except (InvalidJobOperation, RedisError) as exc:
                         errors.append(f"Failed stopping started job {job_id}: {exc}")
+                    except NoSuchJobError:
+                        pass
             except RedisError as exc:
                 errors.append(f"Failed accessing StartedJobRegistry: {exc}")
     except RedisError as exc:

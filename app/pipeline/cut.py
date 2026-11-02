@@ -196,7 +196,13 @@ def cut(
             strategy.value,
         )
         return strategy
-    except (av.FFmpegError, OSError, RuntimeError, ValueError) as smart_exc:
+    except (
+        av.FFmpegError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        ZeroDivisionError,
+    ) as smart_exc:
         smart_err = str(smart_exc)
         logger.warning(
             "Smart cut failed for %s [%.2fs -> %.2fs] (%s); falling back to stream copy at nearest keyframes.",

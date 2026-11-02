@@ -1585,7 +1585,7 @@ def job_deliver_webhook(
                     resp_status,
                     attempt,
                 )
-        except (urllib.error.URLError, http.client.HTTPException) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, ValueError) as exc:
             logger.warning(
                 "Webhook delivery to %s failed on attempt %d: %s",
                 redacted_url,

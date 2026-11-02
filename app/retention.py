@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from redis.exceptions import RedisError
 from rq import Retry
-from rq.exceptions import NoSuchJobError
+from rq.exceptions import InvalidJobOperation, NoSuchJobError
 from rq.job import Job
 from rq.repeat import Repeat
 from sqlalchemy import select
@@ -253,7 +253,7 @@ def register_periodic_retention_sweep(
         elif existing_job:
             # Delete stale/finished/failed job so enqueue_in does not raise JobAlreadyExistsError
             existing_job.delete()
-    except (NoSuchJobError, RedisError) as exc:
+    except (InvalidJobOperation, NoSuchJobError, RedisError) as exc:
         logger.debug(
             "Periodic retention sweep job not found or connection failed: %s", exc
         )

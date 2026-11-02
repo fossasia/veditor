@@ -10,6 +10,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.formparsers import MultiPartException
 
 from app import models, schemas
@@ -398,7 +399,13 @@ async def api_auth_token(
             form = await request.form()
             email_or_username = form.get("email") or form.get("username")
             password = form.get("password")
-        except (MultiPartException, ValueError, TypeError, RuntimeError) as exc:
+        except (
+            MultiPartException,
+            StarletteHTTPException,
+            ValueError,
+            TypeError,
+            RuntimeError,
+        ) as exc:
             logger.debug("Failed parsing form request body: %s", exc)
         if not email_or_username and not password:
             try:
