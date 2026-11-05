@@ -470,7 +470,7 @@ def ingest_recording(
         raw_key,
         payload.recording_start,
         is_room_recording=payload.recording_start is not None,
-        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
     )
 
     return schemas.TalkRead.model_validate(talk)
@@ -665,7 +665,7 @@ def submit_cut_bounds(
         job_cut,
         talk.id,
         raw_key,
-        job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CUT]["job_timeout"],
     )
 
     return schemas.TalkRead.model_validate(talk)
@@ -1301,7 +1301,7 @@ async def upload_recording(
             talk.id,
             str(staged_path),
             raw_key,
-            job_timeout=STAGE_CONFIG["ingest"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.INGEST]["job_timeout"],
         )
     except Exception:
         # storage-boundary-exempt: upload staging cleanup
@@ -2427,7 +2427,7 @@ async def attach_room_recording(
                 rec_start,
                 tolerance_seconds=float("inf"),
                 is_room_recording=True,
-                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
             )
         except (OSError, RedisError, RuntimeError) as exc:
             for failed_tid in talk_ids[index:]:

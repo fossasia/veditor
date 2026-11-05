@@ -1072,12 +1072,12 @@ def test_e2e_heavy_light_queue_isolation() -> None:
     """
 
     # 1. Verify queue configuration segregation
-    assert STAGE_CONFIG["transcode"]["queue"] == "heavy"
-    assert STAGE_CONFIG["detect"]["queue"] == "light"
-    assert STAGE_CONFIG["cut"]["queue"] == "light"
-    assert STAGE_CONFIG["preview"]["queue"] == "light"
-    assert STAGE_CONFIG["loudness"]["queue"] == "light"
-    assert STAGE_CONFIG["publish"]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.TRANSCODE]["queue"] == "heavy"
+    assert STAGE_CONFIG[JobKind.DETECT]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.CUT]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.PREVIEW]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.LOUDNESS]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.PUBLISH]["queue"] == "light"
 
     # 2. Verify independent Queue instances and names
     assert light_queue.name == "light"

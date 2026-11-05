@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import CurrentUser, get_client, get_current_user, hash_api_key
-from app.consts import AuthRole, TalkStatus
+from app.consts import AuthRole, JobKind, TalkStatus
 from app.db import get_db
 from app.ingest import IngestPathRejectedError, InsufficientStorageError
 from app.main import app
@@ -465,7 +465,7 @@ def test_post_recording_success_enqueues_detect(
             raw_key,
             None,
             is_room_recording=False,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
         )
 
 
@@ -1067,7 +1067,7 @@ def test_post_recording_with_recording_start_enqueues_detect(
             raw_key,
             expected_dt,
             is_room_recording=True,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
         )
 
         # Verify forwarded intent and resulting detection behavior for a room recording

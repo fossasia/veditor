@@ -390,7 +390,7 @@ def test_intro_outro_skip_both_success(
         None,
         None,
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -437,7 +437,7 @@ def test_intro_outro_generated_both_success(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -485,7 +485,7 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/outro/outro.mp4",
-        job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
     )
 
 
@@ -533,7 +533,7 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -585,7 +585,7 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
         f"{stored_talk.id}/intro/intro.mp4",
         f"{stored_talk.id}/outro/outro.mp4",
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -625,7 +625,7 @@ def test_intro_outro_custom_cut_key_threading(
         None,
         None,
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -661,7 +661,7 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
         f"{talk.id}/intro/intro.mp4",
         f"{talk.id}/outro/outro.mp4",
         f"{talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -709,7 +709,7 @@ def test_job_concat_success_enqueues_job_loudness(
         talk.id,
         f"{talk.id}/assemble/assemble.mp4",
         f"{talk.id}/assemble/assemble_loud.mp4",
-        job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]["job_timeout"],
     )
 
 
@@ -749,7 +749,7 @@ def test_job_loudness_success_advances_to_transcoding(
         talk.id,
         f"{talk.id}/assemble/assemble_loud.mp4",
         f"{talk.id}/final/final.mp4",
-        job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]["job_timeout"],
     )
 
 

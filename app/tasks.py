@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from email.message import Message
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, TypedDict
 from urllib.request import Request
 
 import av
@@ -91,17 +91,25 @@ TRANSCODE_PRESETS = {
 
 logger = logging.getLogger(__name__)
 
-STAGE_CONFIG: dict[str, dict[str, str | int]] = {
-    "ingest": {"queue": "light", "job_timeout": 600},
-    "detect": {"queue": "light", "job_timeout": 300},
-    "cut": {"queue": "light", "job_timeout": 900},
-    "intro": {"queue": "light", "job_timeout": 300},
-    "outro": {"queue": "light", "job_timeout": 300},
-    "concat": {"queue": "light", "job_timeout": 1800},
-    "preview": {"queue": "light", "job_timeout": 1800},
-    "loudness": {"queue": "light", "job_timeout": 900},
-    "transcode": {"queue": "heavy", "job_timeout": 14400},
-    "publish": {"queue": "light", "job_timeout": 300},
+
+class StageConfig(TypedDict):
+    """Queue and timeout settings applied when a pipeline stage is enqueued."""
+
+    queue: str
+    job_timeout: int
+
+
+STAGE_CONFIG: dict[JobKind, StageConfig] = {
+    JobKind.INGEST: {"queue": "light", "job_timeout": 600},
+    JobKind.DETECT: {"queue": "light", "job_timeout": 300},
+    JobKind.CUT: {"queue": "light", "job_timeout": 900},
+    JobKind.INTRO: {"queue": "light", "job_timeout": 300},
+    JobKind.OUTRO: {"queue": "light", "job_timeout": 300},
+    JobKind.CONCAT: {"queue": "light", "job_timeout": 1800},
+    JobKind.PREVIEW: {"queue": "light", "job_timeout": 1800},
+    JobKind.LOUDNESS: {"queue": "light", "job_timeout": 900},
+    JobKind.TRANSCODE: {"queue": "heavy", "job_timeout": 14400},
+    JobKind.PUBLISH: {"queue": "light", "job_timeout": 300},
 }
 
 
@@ -236,7 +244,7 @@ def job_ingest(
             talk_id,
             raw_key,
             recording_start,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
         )
     except Exception as exc:
         if claimed:
@@ -445,7 +453,7 @@ def job_ingest_room_url(
                 tid,
                 f"{tid}/raw/raw.mp4",
                 tolerance_seconds=float("inf"),
-                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
             )
             enqueued_talk_ids.add(tid)
 
@@ -672,7 +680,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             talk_id,
             cut_key,
             preview_key,
-            job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PREVIEW]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -707,7 +715,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 talk_id,
                 cut_key,
                 f"{talk_id}/intro/intro.mp4",
-                job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
             )
             return
 
@@ -729,7 +737,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 talk_id,
                 cut_key,
                 f"{talk_id}/outro/outro.mp4",
-                job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
             )
             return
 
@@ -744,7 +752,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             intro_key,
             outro_key,
             concat_key,
-            job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
         )
 
 
@@ -1010,7 +1018,7 @@ def job_concat(
             talk_id,
             concat_key,
             loud_key,
-            job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1240,7 +1248,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             talk_id,
             loud_key,
             final_key,
-            job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1371,7 +1379,7 @@ def job_transcode(
             job_publish,
             talk_id,
             final_key,
-            job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PUBLISH]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)

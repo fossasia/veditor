@@ -78,7 +78,7 @@ def test_job_ingest_success(
         talk.id,
         f"{talk.id}/raw/raw.mp4",
         None,
-        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
     )
     # Staged file is unlinked
     assert not staged_file.exists()
@@ -115,7 +115,7 @@ def test_dispatch_assembly_generated_intro_enqueues_job_intro(
         talk.id,
         f"{talk.id}/cut/special.mp4",
         f"{talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -153,7 +153,7 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
         talk.id,
         f"{talk.id}/cut/special.mp4",
         f"{talk.id}/outro/outro.mp4",
-        job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
     )
 
 
