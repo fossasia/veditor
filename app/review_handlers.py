@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from . import models, schemas
 from . import tasks as app_tasks
-from .consts import JobKind, TalkStatus
+from .consts import JobKind, JobStatus, TalkStatus
 from .states import advance
 from .storage import StorageBackend, cleanup_intermediates
 from .webhook import dispatch_talk_webhook
@@ -107,7 +107,7 @@ def handle_approve(
             models.Job(
                 talk_id=talk.id,
                 kind=JobKind.ASSEMBLY,
-                status="failed",
+                status=JobStatus.FAILED,
                 log_path=log_key,
             )
         )

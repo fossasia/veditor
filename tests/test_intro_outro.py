@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import get_client
 from app.config import Settings, settings
-from app.consts import JobKind, TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.ingest import get_bumper_staging_dir
 from app.main import app
 from app.storage import get_storage_backend
@@ -643,8 +643,8 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
     )
     db_session.add_all(
         [
-            models.Job(talk_id=talk.id, kind=JobKind.INTRO, status="done"),
-            models.Job(talk_id=talk.id, kind=JobKind.OUTRO, status="done"),
+            models.Job(talk_id=talk.id, kind=JobKind.INTRO, status=JobStatus.DONE),
+            models.Job(talk_id=talk.id, kind=JobKind.OUTRO, status=JobStatus.DONE),
         ]
     )
     db_session.commit()
@@ -703,7 +703,7 @@ def test_job_concat_success_enqueues_job_loudness(
             models.Job.talk_id == talk.id, models.Job.kind == JobKind.CONCAT
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_light_enqueue.assert_called_once_with(
         job_loudness,
         talk.id,
@@ -743,7 +743,7 @@ def test_job_loudness_success_advances_to_transcoding(
             models.Job.talk_id == talk.id, models.Job.kind == JobKind.LOUDNESS
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_heavy_enqueue.assert_called_once_with(
         job_transcode,
         talk.id,
@@ -842,7 +842,7 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
             models.Job.talk_id == talk.id, models.Job.kind == JobKind.INTRO
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
 
 
@@ -871,7 +871,7 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
             models.Job.talk_id == talk.id, models.Job.kind == JobKind.OUTRO
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
 
 
@@ -906,7 +906,7 @@ def test_configure_assembly_dispatch_failure_advances_to_broken(
         select(models.Job).where(
             models.Job.talk_id == stored_talk.id,
             models.Job.kind == JobKind.ASSEMBLY,
-            models.Job.status == "failed",
+            models.Job.status == JobStatus.FAILED,
         )
     )
     assert failed_job is not None

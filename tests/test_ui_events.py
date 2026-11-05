@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import hash_api_key
-from app.consts import JobKind, TalkStatus
+from app.consts import AuthRole, JobKind, JobStatus, TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
@@ -434,7 +434,7 @@ def test_delete_studio_event_teardown_and_failure_resilience(
     db_session.commit()
     db_session.refresh(talk)
 
-    job = models.Job(talk_id=talk.id, kind=JobKind.TRANSCODE, status="queued")
+    job = models.Job(talk_id=talk.id, kind=JobKind.TRANSCODE, status=JobStatus.QUEUED)
     review = models.Review(talk_id=talk.id, user_id=org.id, decision="approve")
     db_session.add_all([job, review])
     db_session.commit()
@@ -531,9 +531,9 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
     db_session.refresh(talk1)
     db_session.refresh(talk2)
 
-    job1 = models.Job(talk_id=talk1.id, kind=JobKind.TRANSCODE, status="queued")
+    job1 = models.Job(talk_id=talk1.id, kind=JobKind.TRANSCODE, status=JobStatus.QUEUED)
     review1 = models.Review(talk_id=talk1.id, user_id=org.id, decision="approve")
-    job2 = models.Job(talk_id=talk2.id, kind=JobKind.TRANSCODE, status="queued")
+    job2 = models.Job(talk_id=talk2.id, kind=JobKind.TRANSCODE, status=JobStatus.QUEUED)
     review2 = models.Review(talk_id=talk2.id, user_id=org.id, decision="approve")
     db_session.add_all([job1, review1, job2, review2])
     db_session.commit()
@@ -797,7 +797,9 @@ def test_dashboard_edit_button_hidden_for_sso(
     db_session.add(talk)
     db_session.commit()
 
-    sso_token = create_sso_token(scope_type="talk", scope_id=talk.id, role="speaker")
+    sso_token = create_sso_token(
+        scope_type="talk", scope_id=talk.id, role=AuthRole.SPEAKER
+    )
     client.cookies.set("veditor_session", sso_token)
 
     res = client.get("/studio")
@@ -847,7 +849,9 @@ def test_studio_edit_button_hidden_for_sso(
     db_session.add(talk)
     db_session.commit()
 
-    sso_token = create_sso_token(scope_type="talk", scope_id=talk.id, role="speaker")
+    sso_token = create_sso_token(
+        scope_type="talk", scope_id=talk.id, role=AuthRole.SPEAKER
+    )
     client.cookies.set("veditor_session", sso_token)
 
     res = client.get(f"/studio/talks/{talk.id}")
@@ -1418,7 +1422,7 @@ def test_room_page_redirects_talk_scoped_sso_to_its_talk(
 
     _, _, event, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(
-        scope_type="talk", scope_id=talks["main_1"].id, role="speaker"
+        scope_type="talk", scope_id=talks["main_1"].id, role=AuthRole.SPEAKER
     )
     client.cookies.set("veditor_session", token)
 
@@ -1525,7 +1529,7 @@ def test_studio_breadcrumb_is_plain_text_for_talk_scoped_sso(
 
     _, _, _, _, talks = _seed_room_talks(db_session)
     token = create_sso_token(
-        scope_type="talk", scope_id=talks["main_1"].id, role="speaker"
+        scope_type="talk", scope_id=talks["main_1"].id, role=AuthRole.SPEAKER
     )
     client.cookies.set("veditor_session", token)
 

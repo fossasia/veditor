@@ -99,7 +99,7 @@ def lock_active_admins(session: Session) -> list[int]:
     """Locks active administrator rows in ascending ID order and returns their IDs."""
     rows = session.scalars(
         select(models.User.id)
-        .where(models.User.role == "admin", models.User.is_active.is_(True))
+        .where(models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True))
         .order_by(models.User.id.asc())
         .with_for_update()
     ).all()
@@ -330,7 +330,7 @@ def get_current_user(
                 return CurrentUser(
                     user_id=user.id,
                     email=user.email,
-                    role=AuthRole(user.role),
+                    role=user.role,
                     source="cookie",
                     event_ids=[],
                 )
@@ -407,7 +407,7 @@ def get_current_user(
             return CurrentUser(
                 user_id=user.id,
                 email=user.email,
-                role=AuthRole(user.role),
+                role=user.role,
                 source="jwt",
                 event_ids=[],
             )
@@ -521,7 +521,7 @@ def check_event_access(
         )
 
     # Human administrator: unconditional access
-    if user.role == "admin":
+    if user.role == AuthRole.ADMIN:
         return event
 
     # Event creator: ownership match
@@ -609,7 +609,7 @@ def check_talk_access(
             )
         return target_talk
 
-    if user.role == "admin":
+    if user.role == AuthRole.ADMIN:
         return target_talk
 
     if (

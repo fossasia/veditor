@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from . import models, retention
 from .auth import hash_api_key, lock_active_admins
+from .consts import AuthRole
 from .db import new_session
 from .schemas import WebhookRegisterRequest
 from .security import hash_password, is_valid_email
@@ -108,7 +109,7 @@ def create_admin(session: Session, email: str, password: str) -> None:
     user = models.User(
         email=clean_email,
         hashed_password=hash_password(password),
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     session.add(user)
@@ -117,21 +118,21 @@ def create_admin(session: Session, email: str, password: str) -> None:
     print(f"Created admin user '{user.email}' with ID {user.id}")
 
 
-def promote_user(session: Session, email: str, role: str) -> None:
+def promote_user(session: Session, email: str, role: AuthRole) -> None:
     clean_email = email.strip().lower() if email else ""
     user = session.scalar(select(models.User).where(models.User.email == clean_email))
     if not user:
         print(f"Error: User with email '{clean_email}' not found.")
         sys.exit(1)
 
-    if role not in ("user", "organizer", "admin"):
+    if role not in (AuthRole.USER, AuthRole.ORGANIZER, AuthRole.ADMIN):
         print(f"Error: Invalid role '{role}'. Must be one of: user, organizer, admin.")
         sys.exit(1)
 
-    if user.role == "admin" and user.is_active and role != "admin":
+    if user.role == AuthRole.ADMIN and user.is_active and role != AuthRole.ADMIN:
         admin_ids = lock_active_admins(session)
         session.refresh(user)
-        if user.role == "admin" and user.is_active and len(admin_ids) <= 1:
+        if user.role == AuthRole.ADMIN and user.is_active and len(admin_ids) <= 1:
             print(
                 "Error: Cannot demote user; operation would leave zero active administrators."
             )
@@ -220,7 +221,7 @@ def main() -> None:
         "--role",
         type=str,
         required=True,
-        choices=["user", "organizer", "admin"],
+        choices=[AuthRole.USER, AuthRole.ORGANIZER, AuthRole.ADMIN],
         help="Target role (user, organizer, admin)",
     )
 
@@ -261,7 +262,7 @@ def main() -> None:
                     password = getpass.getpass("Password: ")
                 create_admin(db, args.email, password)
             elif args.subcommand == "promote-user":
-                promote_user(db, args.email, args.role)
+                promote_user(db, args.email, AuthRole(args.role))
             elif args.subcommand == "list-users":
                 list_users(db)
             elif args.subcommand == "run-retention-sweep":

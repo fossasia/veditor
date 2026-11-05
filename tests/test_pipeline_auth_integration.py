@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key, require_event_access
 from app.cli import create_admin
-from app.consts import TalkStatus
+from app.consts import AuthRole, TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_access_token, create_session_token, hash_password
@@ -49,10 +49,10 @@ def test_complete_user_lifecycle_and_pipeline_auth(
 ) -> None:
     """
     End-to-end integration test covering complete user lifecycle and pipeline authentication/authorization:
-    a) Public registration: POST /signup creates user with role="user"
+    a) Public registration: POST /signup creates user with role=AuthRole.USER
     b) Initial admin assignment: Provision admin via create_admin
     c) Admin lists users via GET /admin/users
-    d) Role elevation: Admin calls POST /admin/users/{user1.id}/promote with role="organizer"
+    d) Role elevation: Admin calls POST /admin/users/{user1.id}/promote with role=AuthRole.ORGANIZER
     e) Event & talk creation: Organizer 1 creates an event and a talk (Event.created_by_user_id == user1.id)
     f) Permission denial boundaries:
        - Unauthenticated request returns 401
@@ -83,7 +83,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     )
     assert user1 is not None
     assert user1.email == "user1@pipeline-test.com"
-    assert user1.role == "user"
+    assert user1.role == AuthRole.USER
     assert user1.is_active is True
 
     # -------------------------------------------------------------------------
@@ -95,7 +95,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     )
     assert admin is not None
     assert admin.email == "root_admin@test.com"
-    assert admin.role == "admin"
+    assert admin.role == AuthRole.ADMIN
     assert admin.is_active is True
 
     # -------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     assert promote_resp.status_code == 200
     assert promote_resp.json()["role"] == "organizer"
     db_session.refresh(user1)
-    assert user1.role == "organizer"
+    assert user1.role == AuthRole.ORGANIZER
 
     # -------------------------------------------------------------------------
     # e) Event & talk creation: Organizer 1 creates an event and a talk
@@ -192,7 +192,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     org2 = models.User(
         email="org2@pipeline-test.com",
         hashed_password=hash_password("Pass12345!"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
         created_at=datetime.now(UTC),
     )
@@ -224,7 +224,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
     regular_user = models.User(
         email="regular@pipeline-test.com",
         hashed_password=hash_password("Pass12345!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         created_at=datetime.now(UTC),
     )

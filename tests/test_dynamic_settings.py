@@ -18,7 +18,7 @@ from app.config import (
     get_setting,
     settings,
 )
-from app.consts import JobKind, TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.db import Base
 from app.pipeline.detect import DetectResult
 from app.routes.admin import _get_all_settings_data, _validate_system_setting
@@ -282,7 +282,7 @@ def test_pipeline_job_detect_dynamic_tolerance() -> None:
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
         status=TalkStatus.DETECTING,
     )
-    job = models.Job(id=101, talk_id=999, kind=JobKind.DETECT, status="running")
+    job = models.Job(id=101, talk_id=999, kind=JobKind.DETECT, status=JobStatus.RUNNING)
 
     mock_detect = MagicMock(
         return_value=DetectResult(
@@ -332,7 +332,9 @@ def test_pipeline_job_loudness_dynamic_lufs() -> None:
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
         status=TalkStatus.ASSEMBLING,
     )
-    job = models.Job(id=102, talk_id=999, kind=JobKind.LOUDNESS, status="running")
+    job = models.Job(
+        id=102, talk_id=999, kind=JobKind.LOUDNESS, status=JobStatus.RUNNING
+    )
 
     mock_normalize = MagicMock()
     mock_storage = MagicMock()
@@ -375,7 +377,9 @@ def test_pipeline_job_preview_dynamic_preset() -> None:
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
         status=TalkStatus.GENERATING_PREVIEWS,
     )
-    job = models.Job(id=103, talk_id=999, kind=JobKind.PREVIEW, status="running")
+    job = models.Job(
+        id=103, talk_id=999, kind=JobKind.PREVIEW, status=JobStatus.RUNNING
+    )
 
     mock_preview = MagicMock()
     mock_storage = MagicMock()
@@ -411,7 +415,7 @@ def test_pipeline_job_preview_dynamic_preset() -> None:
     mock_preview.assert_called_once()
     assert mock_preview.call_args.kwargs.get("preset") == PREVIEW_PRESETS["big_video"]
     assert talk.status == TalkStatus.PREVIEW
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
 
 
 def test_pipeline_job_transcode_dynamic_preset() -> None:
@@ -431,7 +435,9 @@ def test_pipeline_job_transcode_dynamic_preset() -> None:
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
         status=TalkStatus.TRANSCODING,
     )
-    job = models.Job(id=104, talk_id=999, kind=JobKind.TRANSCODE, status="running")
+    job = models.Job(
+        id=104, talk_id=999, kind=JobKind.TRANSCODE, status=JobStatus.RUNNING
+    )
 
     mock_transcode = MagicMock()
     mock_storage = MagicMock()
@@ -465,4 +471,4 @@ def test_pipeline_job_transcode_dynamic_preset() -> None:
     mock_transcode.assert_called_once()
     assert mock_transcode.call_args.kwargs.get("preset") == TRANSCODE_PRESETS["720p"]
     assert talk.status == TalkStatus.UPLOADING
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE

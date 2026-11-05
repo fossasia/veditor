@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.auth import CurrentUser, get_current_user, hash_api_key
-from app.consts import AuthRole, JobKind, TalkStatus
+from app.consts import AuthRole, JobKind, JobStatus, TalkStatus
 from app.db import SessionLocal
 from app.main import app
 from app.review_handlers import (
@@ -1052,7 +1052,7 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
         )
     )
     assert job is not None
-    assert job.status == "failed"
+    assert job.status == JobStatus.FAILED
     assert job.log_path == f"{preview_talk.id}/logs/assembly.log"
     assert fake_storage.exists(f"{preview_talk.id}/logs/assembly.log")
     assert (

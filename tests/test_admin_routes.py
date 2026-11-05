@@ -255,7 +255,7 @@ def test_promote_user_success(
     assert data["role"] == "organizer"
 
     db_session.refresh(target_user)
-    assert target_user.role == "organizer"
+    assert target_user.role == AuthRole.ORGANIZER
 
     # Promote back to user
     res2 = client.post(f"/admin/users/{target_user.id}/promote", json={"role": "user"})
@@ -263,7 +263,7 @@ def test_promote_user_success(
     assert res2.json()["role"] == "user"
 
     db_session.refresh(target_user)
-    assert target_user.role == "user"
+    assert target_user.role == AuthRole.USER
 
 
 def test_promote_guard_cannot_demote_last_admin(
@@ -274,7 +274,7 @@ def test_promote_guard_cannot_demote_last_admin(
     try:
         existing_admin_ids = db_session.scalars(
             select(models.User.id).where(
-                models.User.role == "admin", models.User.is_active.is_(True)
+                models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True)
             )
         ).all()
         if existing_admin_ids:
@@ -329,7 +329,7 @@ def test_promote_demote_admin_allowed_if_another_admin_exists(
     assert res.json()["role"] == "organizer"
 
     db_session.refresh(admin2)
-    assert admin2.role == "organizer"
+    assert admin2.role == AuthRole.ORGANIZER
 
 
 def test_deactivate_self_prevented(
@@ -369,7 +369,7 @@ def test_deactivate_guard_cannot_deactivate_last_admin(
     try:
         existing_admin_ids = db_session.scalars(
             select(models.User.id).where(
-                models.User.role == "admin", models.User.is_active.is_(True)
+                models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True)
             )
         ).all()
         if existing_admin_ids:
@@ -546,7 +546,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
         )
         other_admins = s.scalars(
             select(models.User).where(
-                models.User.role == "admin",
+                models.User.role == AuthRole.ADMIN,
                 ~models.User.email.like("%@concurrent-test.com"),
             )
         ).all()
@@ -575,8 +575,8 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
         id1, id2 = admin1.id, admin2.id
 
     try:
-        token1 = create_session_token(id1, "admin")
-        token2 = create_session_token(id2, "admin")
+        token1 = create_session_token(id1, AuthRole.ADMIN)
+        token2 = create_session_token(id2, AuthRole.ADMIN)
 
         results = []
 
@@ -604,7 +604,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
             remaining_admins = s.scalars(
                 select(models.User).where(
                     models.User.email.like("%@concurrent-test.com"),
-                    models.User.role == "admin",
+                    models.User.role == AuthRole.ADMIN,
                     models.User.is_active.is_(True),
                 )
             ).all()
@@ -1539,7 +1539,7 @@ def test_promote_demote_to_user_role(
     assert res.json()["role"] == "user"
 
     db_session.refresh(target_user)
-    assert target_user.role == "user"
+    assert target_user.role == AuthRole.USER
 
 
 def test_promote_rejects_speaker_role(
@@ -1581,7 +1581,7 @@ def test_admin_users_role_alias_endpoint(
     assert res.json()["role"] == "organizer"
 
     db_session.refresh(target_user)
-    assert target_user.role == "organizer"
+    assert target_user.role == AuthRole.ORGANIZER
 
 
 def test_admin_nav_includes_users_link(

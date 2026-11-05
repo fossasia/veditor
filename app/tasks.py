@@ -34,7 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from . import email as app_email
 from .config import PREVIEW_PRESETS, get_setting, settings
-from .consts import JobKind, TalkStatus
+from .consts import JobKind, JobStatus, TalkStatus
 from .db import new_session
 from .ingest import (
     InsufficientStorageError,
@@ -131,7 +131,7 @@ def _handle_failure(
             job = db.get(Job, job_id)
             if not job:
                 return
-            job.status = "failed"
+            job.status = JobStatus.FAILED
             job.log_path = log_key
             job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
@@ -193,7 +193,7 @@ def job_ingest(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.INGEST,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -222,12 +222,12 @@ def job_ingest(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
 
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -285,7 +285,7 @@ def job_ingest_room_url(
                     new_job = Job(
                         talk_id=talk.id,
                         kind=JobKind.INGEST,
-                        status="running",
+                        status=JobStatus.RUNNING,
                         started_at=datetime.now(UTC),
                         updated_at=datetime.now(UTC),
                     )
@@ -344,7 +344,7 @@ def job_ingest_room_url(
                 for jid in job_ids.values():
                     job = db.get(Job, jid)
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
                 for tid in job_ids:
                     db_talk = db.get(Talk, tid)
@@ -401,7 +401,7 @@ def job_ingest_room_url(
                 if untalk.id in job_ids:
                     job = db.get(Job, job_ids[untalk.id])
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
                 untalk.status = TalkStatus.WAITING_FILES
 
@@ -431,7 +431,7 @@ def job_ingest_room_url(
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
                     if job:
-                        job.status = "done"
+                        job.status = JobStatus.DONE
                         job.updated_at = datetime.now(UTC)
 
                 matched_ids.append(talk.id)
@@ -459,7 +459,7 @@ def job_ingest_room_url(
                     continue
                 job = db.get(Job, jid)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.updated_at = datetime.now(UTC)
                 db_talk = db.get(Talk, tid)
                 if db_talk and db_talk.status == TalkStatus.DETECTING:
@@ -494,7 +494,7 @@ def job_detect(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.DETECT,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -540,7 +540,7 @@ def job_detect(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
@@ -583,7 +583,7 @@ def job_detect(
                     talk.cut_end = offset_e
 
             advance(talk, TalkStatus.PENDING_APPROVAL)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
@@ -605,7 +605,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.CUT,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -657,12 +657,12 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.GENERATING_PREVIEWS)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -696,7 +696,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 select(Job.id).where(
                     Job.talk_id == talk_id,
                     Job.kind == JobKind.INTRO,
-                    Job.status == "done",
+                    Job.status == JobStatus.DONE,
                 )
             )
             is not None
@@ -718,7 +718,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 select(Job.id).where(
                     Job.talk_id == talk_id,
                     Job.kind == JobKind.OUTRO,
-                    Job.status == "done",
+                    Job.status == JobStatus.DONE,
                 )
             )
             is not None
@@ -796,7 +796,7 @@ def job_intro(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.INTRO,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -845,12 +845,12 @@ def job_intro(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -881,7 +881,7 @@ def job_outro(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.OUTRO,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -919,12 +919,12 @@ def job_outro(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -953,7 +953,7 @@ def job_concat(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.CONCAT,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -996,11 +996,11 @@ def job_concat(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -1029,7 +1029,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.PREVIEW,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1089,12 +1089,12 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.PREVIEW)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
@@ -1157,7 +1157,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.LOUDNESS,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1225,12 +1225,12 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.TRANSCODING)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -1266,7 +1266,7 @@ def job_transcode(
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.TRANSCODE,
-                status="running",
+                status=JobStatus.RUNNING,
                 progress_pct=None,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1315,7 +1315,7 @@ def job_transcode(
                 try:
                     with new_session() as progress_db:
                         j = progress_db.get(Job, job_id)
-                        if j and j.status == "running":
+                        if j and j.status == JobStatus.RUNNING:
                             j.progress_pct = round(pct * 100.0, 2)
                             j.updated_at = datetime.now(UTC)
                             progress_db.commit()
@@ -1354,12 +1354,12 @@ def job_transcode(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.UPLOADING)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.progress_pct = 100.0
             job.updated_at = datetime.now(UTC)
             custom_paths = (talk.custom_intro_path, talk.custom_outro_path)
@@ -1389,7 +1389,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.PUBLISH,
-                status="running",
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1420,12 +1420,12 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.DONE)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)

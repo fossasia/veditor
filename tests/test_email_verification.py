@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.config import settings
+from app.consts import AuthRole
 from app.db import SessionLocal
 from app.email import (
     send_password_reset_email,
@@ -70,7 +71,7 @@ def test_verification_token_tampered() -> None:
 
 def test_verification_token_rejects_wrong_type() -> None:
     access_token = create_access_token(
-        user_id=42, email="user@example.com", role="user"
+        user_id=42, email="user@example.com", role=AuthRole.USER
     )
     assert decode_email_verification_token(access_token) is None
 
@@ -167,7 +168,7 @@ def test_job_send_verification_email() -> None:
     user = models.User(
         email=f"worker_test_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password=hash_password("Pass1234!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -308,7 +309,7 @@ def test_unverified_user_cannot_login(db_session: Session) -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -342,7 +343,7 @@ def test_verify_email_flow_success(db_session: Session) -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -391,7 +392,7 @@ def test_verify_email_deactivated_user_fails(db_session: Session) -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=False,
         is_verified=False,
     )
@@ -428,7 +429,7 @@ def test_verify_email_resend_endpoints(db_session: Session) -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -469,7 +470,7 @@ def test_verify_email_concurrent_update_rejected() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -526,7 +527,7 @@ def test_verify_email_resend_enqueue_failure_clears_rate_key_and_returns_uniform
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -585,7 +586,7 @@ def test_verify_email_resend_preserves_next_parameter(db_session: Session) -> No
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )

@@ -90,8 +90,10 @@ def test_event_sso_token_unauthenticated() -> None:
 
 def test_event_sso_token_rejects_human_session_auth() -> None:
     """Human caller with session cookie or Bearer token is rejected with 401."""
-    session_cookie = create_session_token(user_id=1, role="admin")
-    bearer_token = create_access_token(user_id=1, email="admin@test.com", role="admin")
+    session_cookie = create_session_token(user_id=1, role=AuthRole.ADMIN)
+    bearer_token = create_access_token(
+        user_id=1, email="admin@test.com", role=AuthRole.ADMIN
+    )
 
     # With session cookie
     resp_cookie = client.post(
@@ -152,7 +154,7 @@ def test_event_sso_token_success(db_session: Session) -> None:
     assert payload is not None
     assert payload.scope_type == "event"
     assert payload.scope_id == 1
-    assert payload.role == "organizer"
+    assert payload.role == AuthRole.ORGANIZER
     # Identity claims are explicitly excluded from the typed SSO payload.
     assert not hasattr(payload, "user_id")
     assert not hasattr(payload, "sub")
@@ -169,7 +171,9 @@ def test_talk_sso_token_unauthenticated() -> None:
 
 def test_talk_sso_token_rejects_human_auth() -> None:
     """Human caller with bearer token is rejected with 401."""
-    bearer_token = create_access_token(user_id=1, email="admin@test.com", role="admin")
+    bearer_token = create_access_token(
+        user_id=1, email="admin@test.com", role=AuthRole.ADMIN
+    )
     resp = client.post(
         "/talks/10/sso-token", headers={"Authorization": f"Bearer {bearer_token}"}
     )
@@ -224,7 +228,7 @@ def test_talk_sso_token_success(db_session: Session) -> None:
     assert payload is not None
     assert payload.scope_type == "talk"
     assert payload.scope_id == 10
-    assert payload.role == "speaker"
+    assert payload.role == AuthRole.SPEAKER
     assert not hasattr(payload, "user_id")
     assert not hasattr(payload, "sub")
 
@@ -282,7 +286,7 @@ def test_talk_sso_token_invalid_expires_in_seconds(db_session: Session) -> None:
 
 def test_get_current_user_rejects_sso_token_query_param(db_session: Session) -> None:
     """get_current_user does not accept SSO tokens from query parameters (restricted to handoff handler)."""
-    token = create_sso_token(scope_type="event", scope_id=5, role="organizer")
+    token = create_sso_token(scope_type="event", scope_id=5, role=AuthRole.ORGANIZER)
 
     request = MagicMock()
     request.query_params.get.side_effect = lambda k: token if k == "sso_token" else None
@@ -297,7 +301,7 @@ def test_get_current_user_rejects_sso_token_query_param(db_session: Session) -> 
 
 def test_get_current_user_via_x_sso_token_header(db_session: Session) -> None:
     """get_current_user resolves SSO token from X-SSO-Token header."""
-    token = create_sso_token(scope_type="talk", scope_id=12, role="speaker")
+    token = create_sso_token(scope_type="talk", scope_id=12, role=AuthRole.SPEAKER)
 
     request = MagicMock()
     request.query_params.get.return_value = None
@@ -307,14 +311,14 @@ def test_get_current_user_via_x_sso_token_header(db_session: Session) -> None:
     user = get_current_user(request=request, db=db_session)
     assert user.is_sso is True
     assert user.source == "sso"
-    assert user.role == "speaker"
+    assert user.role == AuthRole.SPEAKER
     assert user.scope_type == "talk"
     assert user.scope_id == 12
 
 
 def test_get_current_user_via_veditor_session_cookie(db_session: Session) -> None:
     """get_current_user resolves SSO token stored in veditor_session cookie."""
-    token = create_sso_token(scope_type="talk", scope_id=12, role="speaker")
+    token = create_sso_token(scope_type="talk", scope_id=12, role=AuthRole.SPEAKER)
 
     request = MagicMock()
     request.query_params.get.return_value = None
@@ -328,7 +332,7 @@ def test_get_current_user_via_veditor_session_cookie(db_session: Session) -> Non
 
 def test_get_current_user_via_bearer_sso_token(db_session: Session) -> None:
     """get_current_user resolves SSO token passed in Authorization: Bearer header."""
-    token = create_sso_token(scope_type="event", scope_id=7, role="organizer")
+    token = create_sso_token(scope_type="event", scope_id=7, role=AuthRole.ORGANIZER)
 
     request = MagicMock()
     request.query_params.get.return_value = None
@@ -348,7 +352,7 @@ def test_get_current_user_via_bearer_sso_token(db_session: Session) -> None:
 
 def test_get_current_user_tampered_sso_token(db_session: Session) -> None:
     """Tampered or invalid SSO token immediately raises 401 Unauthorized."""
-    token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    token = create_sso_token(scope_type="event", scope_id=1, role=AuthRole.ORGANIZER)
     tampered = token[:-5] + "wrong"
 
     request = MagicMock()
@@ -439,7 +443,7 @@ def test_check_talk_access_sso(db_session: Session) -> None:
 
 def test_sso_speaker_submits_review_success(db_session: Session) -> None:
     """Talk-scoped speaker submits review on target talk; user_id recorded as None."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -471,7 +475,7 @@ def test_sso_speaker_submits_review_success(db_session: Session) -> None:
 
 def test_sso_speaker_cannot_review_other_talk(db_session: Session) -> None:
     """Talk-scoped speaker attempting to review another talk receives 403."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -492,7 +496,7 @@ def test_sso_speaker_cannot_review_other_talk(db_session: Session) -> None:
 
 def test_sso_speaker_submits_cut_bounds_success(db_session: Session) -> None:
     """Talk-scoped speaker can submit cut bounds for their scoped talk."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -529,7 +533,7 @@ def test_sso_speaker_submits_cut_bounds_success(db_session: Session) -> None:
 
 def test_sso_speaker_cannot_submit_cut_bounds_other_talk(db_session: Session) -> None:
     """Talk-scoped speaker cannot submit cut bounds for another talk."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -551,7 +555,7 @@ def test_sso_speaker_cannot_submit_cut_bounds_other_talk(db_session: Session) ->
 
 def test_sso_speaker_raw_preview_success(db_session: Session) -> None:
     """Talk-scoped speaker can fetch raw preview URL for their scoped talk."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -577,7 +581,7 @@ def test_sso_speaker_raw_preview_success(db_session: Session) -> None:
 
 def test_sso_speaker_raw_preview_other_talk_forbidden(db_session: Session) -> None:
     """Talk-scoped speaker cannot fetch raw preview URL for another talk."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     add_event(db_session, id=1, name="Conf 2026")
     add_talk(
         db_session,
@@ -599,7 +603,9 @@ def test_studio_dashboard_sso_session_binds_event_id_to_template_context(
     db_session: Session,
 ) -> None:
     """When event SSO accesses /studio without ?event_id, template context receives scoped event_id."""
-    event_token = create_sso_token(scope_type="event", scope_id=42, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=42, role=AuthRole.ORGANIZER
+    )
     add_event(db_session, id=42, name="Scoped Event")
     add_talk(
         db_session,
@@ -620,7 +626,9 @@ def test_studio_dashboard_sso_session_binds_event_id_to_template_context(
 
 def test_studio_dashboard_landing_with_event_sso_token() -> None:
     """Landing on /studio?event_id=1&sso_token=... sets cookie and 303 redirects."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     response = client.get(
         f"/studio?event_id=1&sso_token={event_token}", follow_redirects=False
@@ -636,7 +644,7 @@ def test_studio_talk_landing_with_talk_sso_token() -> None:
     talk_token = create_sso_token(
         scope_type="talk",
         scope_id=10,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         expires_in_seconds=settings.speaker_magic_link_expire_hours * 3600,
     )
 
@@ -666,14 +674,16 @@ def test_studio_landing_with_invalid_sso_token() -> None:
 
 def test_studio_events_endpoint_forbidden_for_sso() -> None:
     """SSO sessions attempting to access /studio/events receive 403 Forbidden."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
     response = client.get("/studio/events", cookies={"veditor_session": event_token})
     assert response.status_code == 403
 
 
 def test_studio_dashboard_redirects_talk_scoped_sso() -> None:
     """Talk-scoped SSO session accessing /studio is redirected to /studio/talks/{id}."""
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
     response = client.get(
         "/studio", cookies={"veditor_session": talk_token}, follow_redirects=False
     )
@@ -683,7 +693,9 @@ def test_studio_dashboard_redirects_talk_scoped_sso() -> None:
 
 def test_studio_dashboard_hides_action_buttons_for_sso(db_session: Session) -> None:
     """In rendered HTML, dashboard permits management controls for SSO organizers while hiding global events links, and suppresses management controls for speakers."""
-    org_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    org_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     add_event(db_session, id=1, name="Test Conf")
     add_talk(
@@ -724,7 +736,10 @@ def test_studio_dashboard_hides_action_buttons_for_sso(db_session: Session) -> N
 
     # 2. Speaker arriving via SSO
     spk_token = create_sso_token(
-        scope_type="event", scope_id=1, role="speaker", email="speaker@example.com"
+        scope_type="event",
+        scope_id=1,
+        role=AuthRole.SPEAKER,
+        email="speaker@example.com",
     )
     response_spk = client.get("/studio", cookies={"veditor_session": spk_token})
     assert response_spk.status_code == 200
@@ -744,7 +759,9 @@ def test_studio_dashboard_hides_action_buttons_for_sso(db_session: Session) -> N
 
 def test_create_event_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from creating new events."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.post(
         "/events",
@@ -757,7 +774,9 @@ def test_create_event_rejected_for_sso(db_session: Session) -> None:
 
 def test_update_event_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from modifying events."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.patch(
         "/events/1",
@@ -770,7 +789,9 @@ def test_update_event_rejected_for_sso(db_session: Session) -> None:
 
 def test_delete_event_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from deleting events."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.delete(
         "/events/1",
@@ -782,7 +803,9 @@ def test_delete_event_rejected_for_sso(db_session: Session) -> None:
 
 def test_create_talk_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from creating talks."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.post(
         "/talks",
@@ -801,7 +824,9 @@ def test_create_talk_rejected_for_sso(db_session: Session) -> None:
 
 def test_update_talk_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from modifying talk metadata."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.patch(
         "/talks/1",
@@ -817,7 +842,9 @@ def test_update_talk_rejected_for_sso(db_session: Session) -> None:
 
 def test_delete_talk_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions are forbidden from deleting talks."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
 
     resp = client.delete(
         "/talks/1",
@@ -829,8 +856,10 @@ def test_delete_talk_rejected_for_sso(db_session: Session) -> None:
 
 def test_list_events_sso_scoping(db_session: Session) -> None:
     """Event SSO only sees its scoped event; talk SSO is forbidden."""
-    event_token = create_sso_token(scope_type="event", scope_id=42, role="organizer")
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=42, role=AuthRole.ORGANIZER
+    )
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
 
     add_event(db_session, id=42, name="Scoped Conf")
 
@@ -848,8 +877,10 @@ def test_list_events_sso_scoping(db_session: Session) -> None:
 
 def test_bulk_delete_talks_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions (both event-scoped and talk-scoped) are forbidden from bulk deleting talks."""
-    event_token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=1, role=AuthRole.ORGANIZER
+    )
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
 
     # Talk SSO is forbidden (role requirement)
     resp = client.post(
@@ -873,8 +904,10 @@ def test_bulk_delete_talks_rejected_for_sso(db_session: Session) -> None:
 
 def test_import_schedule_rejected_for_sso(db_session: Session) -> None:
     """SSO sessions (both event-scoped and talk-scoped) are forbidden from importing schedules."""
-    event_token = create_sso_token(scope_type="event", scope_id=5, role="organizer")
-    talk_token = create_sso_token(scope_type="talk", scope_id=10, role="speaker")
+    event_token = create_sso_token(
+        scope_type="event", scope_id=5, role=AuthRole.ORGANIZER
+    )
+    talk_token = create_sso_token(scope_type="talk", scope_id=10, role=AuthRole.SPEAKER)
 
     payload = {
         "event_name": "Test Event",
@@ -911,13 +944,13 @@ def test_sso_token_organizer_role_and_identity() -> None:
     token = create_sso_token(
         scope_type="event",
         scope_id=42,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         email="organizer@example.org",
         display_name="Lead Organizer",
     )
     payload = decode_sso_token(token)
     assert payload is not None
-    assert payload.role == "organizer"
+    assert payload.role == AuthRole.ORGANIZER
     assert payload.email == "organizer@example.org"
     assert payload.display_name == "Lead Organizer"
     assert payload.scope_type == "event"
@@ -929,7 +962,7 @@ def test_get_current_user_populates_identity_from_sso(db_session: Session) -> No
     token = create_sso_token(
         scope_type="event",
         scope_id=1,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         email="organizer@example.org",
         display_name="Lead Organizer",
     )
@@ -944,7 +977,7 @@ def test_get_current_user_populates_identity_from_sso(db_session: Session) -> No
         db=db_session,
         bearer_creds=bearer,
     )
-    assert user.role == "organizer"
+    assert user.role == AuthRole.ORGANIZER
     assert user.email == "organizer@example.org"
     assert user.display_name == "Lead Organizer"
     assert user.is_sso is True
@@ -961,7 +994,7 @@ def test_studio_dashboard_displays_sso_email_identity(db_session: Session) -> No
     event_token = create_sso_token(
         scope_type="event",
         scope_id=1,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         email="organizer@eventyay.com",
         display_name="Organizer User",
     )

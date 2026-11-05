@@ -1259,7 +1259,7 @@ def test_handoff_sso_session_does_not_send_mail(
     token = create_sso_token(
         scope_type="event",
         scope_id=event.id,
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         email="organizer@eventyay.com",
     )
 
@@ -1342,7 +1342,7 @@ def test_handoff_platform_user_on_regular_event_sends_email(
     organizer = models.User(
         email="platform-organizer@example.com",
         hashed_password="x",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(organizer)

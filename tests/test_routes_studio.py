@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import hash_api_key
-from app.consts import TalkStatus
+from app.consts import AuthRole, TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token
@@ -111,7 +111,7 @@ def test_authenticated_user_studio_dashboard_returns_200(
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="hash",
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(admin)
@@ -170,7 +170,7 @@ def test_sso_token_studio_dashboard_returns_200(
     db_session.add(event)
     db_session.commit()
 
-    sso_token = create_sso_token("event", event.id, "organizer")
+    sso_token = create_sso_token("event", event.id, AuthRole.ORGANIZER)
     response = client.get(f"/studio?sso_token={sso_token}", follow_redirects=True)
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
@@ -195,7 +195,7 @@ def test_sso_cookie_session_studio_dashboard_returns_200(
     db_session.add(talk)
     db_session.commit()
 
-    sso_token = create_sso_token("event", event.id, "organizer")
+    sso_token = create_sso_token("event", event.id, AuthRole.ORGANIZER)
     client.cookies.set("veditor_session", sso_token)
 
     response = client.get("/studio", follow_redirects=False)
@@ -224,7 +224,7 @@ def test_sso_token_studio_talk_detail_returns_200(
     db_session.add(talk)
     db_session.commit()
 
-    sso_token = create_sso_token("talk", talk.id, "speaker")
+    sso_token = create_sso_token("talk", talk.id, AuthRole.SPEAKER)
     response = client.get(
         f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
     )
@@ -355,7 +355,7 @@ def test_normal_user_accessing_studio_events_redirects_to_studio_with_error(
     """Normal user accessing /studio/events is redirected back to /studio with error notification."""
     user = models.User(
         email="normal_user@test.com",
-        role="user",
+        role=AuthRole.USER,
         hashed_password="hash",
         is_active=True,
     )
@@ -391,13 +391,13 @@ def test_admin_viewing_other_organizer_talk_renders_view_only_mode(
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="hash",
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add_all([organizer, admin])
@@ -461,7 +461,7 @@ def test_admin_viewing_own_talk_renders_editable_mode(
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="hash",
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(admin)
@@ -526,7 +526,7 @@ def test_organizer_viewing_own_talk_renders_editable_mode(
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(organizer)

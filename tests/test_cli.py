@@ -1,5 +1,6 @@
 import io
 import sys
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key
 from app.cli import create_admin, create_client, list_users, main, promote_user
+from app.consts import AuthRole
 from app.security import hash_password, verify_password
 
 
@@ -112,7 +114,7 @@ def test_create_admin_success(db_session: Session) -> None:
     db_session.expire_all()
     user = db_session.scalars(select(models.User)).one()
     assert user.email == "admin@example.com"
-    assert user.role == "admin"
+    assert user.role == AuthRole.ADMIN
     assert user.is_active is True
     assert verify_password("validpassword123", user.hashed_password)
 
@@ -141,58 +143,60 @@ def test_create_admin_duplicate_email(db_session: Session) -> None:
 
 
 def test_promote_user_success(db_session: Session) -> None:
-    user = _create_user(db_session, email="user@example.com", role="user")
+    user = _create_user(db_session, email="user@example.com", role=AuthRole.USER)
 
-    promote_user(db_session, email="user@example.com", role="organizer")
+    promote_user(db_session, email="user@example.com", role=AuthRole.ORGANIZER)
 
     db_session.expire_all()
     reloaded = db_session.get(models.User, user.id)
     assert reloaded is not None
-    assert reloaded.role == "organizer"
+    assert reloaded.role == AuthRole.ORGANIZER
 
 
 def test_promote_user_not_found(db_session: Session) -> None:
     with pytest.raises(SystemExit) as exc:
-        promote_user(db_session, email="missing@example.com", role="admin")
+        promote_user(db_session, email="missing@example.com", role=AuthRole.ADMIN)
     assert exc.value.code == 1
 
 
 def test_promote_user_invalid_role(db_session: Session) -> None:
-    user = _create_user(db_session, email="user@example.com", role="user")
+    user = _create_user(db_session, email="user@example.com", role=AuthRole.USER)
 
     with pytest.raises(SystemExit) as exc:
-        promote_user(db_session, email="user@example.com", role="superhero")
+        promote_user(
+            db_session, email="user@example.com", role=cast("AuthRole", "superhero")
+        )
     assert exc.value.code == 1
     db_session.expire_all()
     reloaded = db_session.get(models.User, user.id)
     assert reloaded is not None
-    assert reloaded.role == "user"
+    assert reloaded.role == AuthRole.USER
 
 
 def test_promote_user_guard_cannot_demote_last_admin(db_session: Session) -> None:
-    user = _create_user(db_session, email="admin@example.com", role="admin")
+    user = _create_user(db_session, email="admin@example.com", role=AuthRole.ADMIN)
 
     with pytest.raises(SystemExit) as exc:
-        promote_user(db_session, email="admin@example.com", role="organizer")
+        promote_user(db_session, email="admin@example.com", role=AuthRole.ORGANIZER)
     assert exc.value.code == 1
     db_session.expire_all()
     reloaded = db_session.get(models.User, user.id)
     assert reloaded is not None
-    assert reloaded.role == "admin"
+    assert reloaded.role == AuthRole.ADMIN
 
 
 def test_promote_user_demote_admin_allowed_with_multiple_admins(
     db_session: Session,
 ) -> None:
-    _create_user(db_session, email="other-admin@example.com", role="admin")
-    user = _create_user(db_session, email="admin@example.com", role="admin")
+    _create_user(db_session, email="other-admin@example.com", role=AuthRole.ADMIN)
+    user = _create_user(db_session, email="admin@example.com", role=AuthRole.ADMIN)
 
-    promote_user(db_session, email="admin@example.com", role="organizer")
+    promote_user(db_session, email="admin@example.com", role=AuthRole.ORGANIZER)
 
     db_session.expire_all()
     reloaded = db_session.get(models.User, user.id)
     assert reloaded is not None
-    assert reloaded.role == "organizer"
+    assert reloaded.role == AuthRole.ORGANIZER
 
 
 def test_list_users_empty(capsys: CaptureFixture[str], db_session: Session) -> None:
@@ -202,8 +206,10 @@ def test_list_users_empty(capsys: CaptureFixture[str], db_session: Session) -> N
 
 
 def test_list_users_populated(capsys: CaptureFixture[str], db_session: Session) -> None:
-    _create_user(db_session, email="first@example.com", role="admin")
-    _create_user(db_session, email="second@example.com", role="user", is_active=False)
+    _create_user(db_session, email="first@example.com", role=AuthRole.ADMIN)
+    _create_user(
+        db_session, email="second@example.com", role=AuthRole.USER, is_active=False
+    )
 
     list_users(db_session)
     captured = capsys.readouterr()
@@ -267,7 +273,7 @@ def test_cli_main_create_admin_piped_stdin(
 def test_cli_main_promote_user(
     db_session: Session, out_of_band_sessions: None, capsys: CaptureFixture[str]
 ) -> None:
-    user = _create_user(db_session, email="user@example.com", role="user")
+    user = _create_user(db_session, email="user@example.com", role=AuthRole.USER)
 
     test_args = [
         "veditor",
@@ -286,14 +292,14 @@ def test_cli_main_promote_user(
     db_session.expire_all()
     reloaded = db_session.get(models.User, user.id)
     assert reloaded is not None
-    assert reloaded.role == "organizer"
+    assert reloaded.role == AuthRole.ORGANIZER
     assert "Updated user" in capsys.readouterr().out
 
 
 def test_cli_main_list_users(
     db_session: Session, out_of_band_sessions: None, capsys: CaptureFixture[str]
 ) -> None:
-    _create_user(db_session, email="listed@example.com", role="user")
+    _create_user(db_session, email="listed@example.com", role=AuthRole.USER)
 
     test_args = ["veditor", "admin", "list-users"]
     with (

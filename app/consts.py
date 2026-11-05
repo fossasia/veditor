@@ -22,15 +22,6 @@ class AuthRole(StrEnum):
         return 0
 
 
-# Note: May be redundant
-ROLE_HIERARCHY: dict[str, int] = {
-    "user": 0,
-    "speaker": 1,
-    "organizer": 2,
-    "admin": 3,
-}
-
-
 class SSOScopeType(StrEnum):
     """
     Scope shapes an SSO token can be minted for.
@@ -74,3 +65,23 @@ class JobKind(StrEnum):
     LOUDNESS = "loudness"
     TRANSCODE = "transcode"
     PUBLISH = "publish"
+
+
+class JobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    BROKEN = "broken"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (
+            JobStatus.DONE,
+            JobStatus.FAILED,
+            JobStatus.BROKEN,
+            JobStatus.REJECTED,
+            JobStatus.CANCELLED,
+        )

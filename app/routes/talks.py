@@ -41,7 +41,7 @@ from ..auth import (
     require_role,
 )
 from ..config import get_setting, settings
-from ..consts import AuthRole, JobKind, SSOScopeType, TalkStatus
+from ..consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
 from ..db import get_db
 from ..ingest import (
     IngestPathRejectedError,
@@ -244,7 +244,7 @@ def get_room_days(
             pass
         elif user.source in ("api_key", "sso"):
             query = query.where(models.Event.id.in_(user.event_ids))
-        elif user.role != "admin":
+        elif user.role != AuthRole.ADMIN:
             query = query.where(models.Event.created_by_user_id == user.user_id)
 
         matching_events = list(db.scalars(query))
@@ -945,7 +945,7 @@ def configure_assembly(
         job = models.Job(
             talk_id=talk.id,
             kind=JobKind.ASSEMBLY,
-            status="failed",
+            status=JobStatus.FAILED,
             log_path=job_log_path,
         )
         db.add(job)

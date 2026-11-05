@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
-from app.consts import TalkStatus
+from app.consts import AuthRole, TalkStatus
 from app.main import app
 from app.security import create_session_token
 
@@ -463,7 +463,7 @@ def test_create_event_api_key_returns_created_at(db_session: Session) -> None:
     organizer = models.User(
         email="org_apikey@test.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(organizer)

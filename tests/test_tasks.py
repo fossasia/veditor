@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.consts import JobKind, TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.ingest import download_media_url, resolve_direct_media_url
 from app.models import Event, Job, Talk
 from app.pipeline.detect import DetectResult
@@ -70,7 +70,7 @@ def test_job_ingest_success(
     assert reloaded is not None
     assert reloaded.status == TalkStatus.DETECTING
     job = db_session.scalars(select(Job)).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     assert job.kind == JobKind.INGEST
     assert mock_storage.put.call_count == 1
     mock_enqueue.assert_called_once_with(
@@ -140,7 +140,7 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
     )
     db_session.add(talk)
     db_session.commit()
-    db_session.add(Job(talk_id=talk.id, kind=JobKind.INTRO, status="done"))
+    db_session.add(Job(talk_id=talk.id, kind=JobKind.INTRO, status=JobStatus.DONE))
     db_session.commit()
 
     with (
@@ -325,7 +325,7 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
     assert reloaded is not None
     assert reloaded.status == TalkStatus.BROKEN
     job = db_session.scalars(select(Job)).one()
-    assert job.status == "failed"
+    assert job.status == JobStatus.FAILED
 
 
 def test_resolve_direct_media_url() -> None:

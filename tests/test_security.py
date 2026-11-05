@@ -8,7 +8,7 @@ import pytest
 
 import app.security as sec
 from app.config import Settings, settings
-from app.consts import SSOScopeType
+from app.consts import AuthRole, SSOScopeType
 from app.security import (
     SSOTokenPayload,
     create_access_token,
@@ -64,7 +64,7 @@ def test_hash_password_validation() -> None:
 
 
 def test_session_token_roundtrip() -> None:
-    token = create_session_token(user_id=42, role="admin", expires_in_hours=24)
+    token = create_session_token(user_id=42, role=AuthRole.ADMIN, expires_in_hours=24)
     assert isinstance(token, str)
 
     payload = decode_session_token(token)
@@ -78,19 +78,22 @@ def test_session_token_roundtrip() -> None:
 
 
 def test_session_token_expired() -> None:
-    token = create_session_token(user_id=42, role="admin", expires_in_hours=-1)
+    token = create_session_token(user_id=42, role=AuthRole.ADMIN, expires_in_hours=-1)
     assert decode_session_token(token) is None
 
 
 def test_session_token_tampered() -> None:
-    token = create_session_token(user_id=42, role="admin")
+    token = create_session_token(user_id=42, role=AuthRole.ADMIN)
     tampered_token = token[:-5] + "aaaaa"
     assert decode_session_token(tampered_token) is None
 
 
 def test_access_token_roundtrip() -> None:
     token = create_access_token(
-        user_id=99, email="user@example.com", role="organizer", expires_in_seconds=3600
+        user_id=99,
+        email="user@example.com",
+        role=AuthRole.ORGANIZER,
+        expires_in_seconds=3600,
     )
     assert isinstance(token, str)
 
@@ -107,20 +110,27 @@ def test_access_token_roundtrip() -> None:
 
 def test_access_token_expired() -> None:
     token = create_access_token(
-        user_id=99, email="user@example.com", role="organizer", expires_in_seconds=-10
+        user_id=99,
+        email="user@example.com",
+        role=AuthRole.ORGANIZER,
+        expires_in_seconds=-10,
     )
     assert decode_access_token(token) is None
 
 
 def test_access_token_tampered() -> None:
-    token = create_access_token(user_id=99, email="user@example.com", role="organizer")
+    token = create_access_token(
+        user_id=99, email="user@example.com", role=AuthRole.ORGANIZER
+    )
     tampered_token = token[:-5] + "zzzzz"
     assert decode_access_token(tampered_token) is None
 
 
 def test_token_type_separation() -> None:
-    session_token = create_session_token(user_id=1, role="user")
-    access_token = create_access_token(user_id=1, email="user@example.com", role="user")
+    session_token = create_session_token(user_id=1, role=AuthRole.USER)
+    access_token = create_access_token(
+        user_id=1, email="user@example.com", role=AuthRole.USER
+    )
 
     # Session decoder must reject access token
     assert decode_session_token(access_token) is None
@@ -141,12 +151,12 @@ def test_decode_invalid_tokens() -> None:
 
 
 def test_token_defaults_from_settings() -> None:
-    session_token = create_session_token(user_id=1, role="user")
+    session_token = create_session_token(user_id=1, role=AuthRole.USER)
     payload_session = decode_session_token(session_token)
     assert payload_session is not None
     assert payload_session["user_id"] == 1
 
-    access_token = create_access_token(user_id=1, email="u@e.com", role="user")
+    access_token = create_access_token(user_id=1, email="u@e.com", role=AuthRole.USER)
     payload_access = decode_access_token(access_token)
     assert payload_access is not None
     assert payload_access["email"] == "u@e.com"
@@ -335,7 +345,7 @@ def test_decode_rejects_unallowed_algorithm() -> None:
 
 
 def test_create_sso_token_event() -> None:
-    token = create_sso_token(scope_type="event", scope_id=10, role="organizer")
+    token = create_sso_token(scope_type="event", scope_id=10, role=AuthRole.ORGANIZER)
     assert isinstance(token, str)
 
     payload = decode_sso_token(token)
@@ -347,7 +357,7 @@ def test_create_sso_token_event() -> None:
     # compare ``payload.scope_type == "event"`` continue to work.
     assert payload.scope_type == "event"
     assert payload.scope_id == 10
-    assert payload.role == "organizer"
+    assert payload.role == AuthRole.ORGANIZER
     # Decoded data is normalized, so identity claims never leak through:
     # user_id/sub are never attributes of SSOTokenPayload
     assert not hasattr(payload, "user_id")
@@ -356,7 +366,7 @@ def test_create_sso_token_event() -> None:
 
 
 def test_create_sso_token_talk() -> None:
-    token = create_sso_token(scope_type="talk", scope_id=42, role="speaker")
+    token = create_sso_token(scope_type="talk", scope_id=42, role=AuthRole.SPEAKER)
     assert isinstance(token, str)
 
     payload = decode_sso_token(token)
@@ -366,35 +376,38 @@ def test_create_sso_token_talk() -> None:
     assert payload.scope_type is SSOScopeType.TALK
     assert payload.scope_type == "talk"
     assert payload.scope_id == 42
-    assert payload.role == "speaker"
+    assert payload.role == AuthRole.SPEAKER
     assert not hasattr(payload, "user_id")
     assert not hasattr(payload, "sub")
 
 
 def test_create_sso_token_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="scope_type must be 'event' or 'talk'"):
-        create_sso_token(scope_type="invalid", scope_id=1, role="organizer")  # type: ignore[arg-type]
+        create_sso_token(scope_type="invalid", scope_id=1, role=AuthRole.ORGANIZER)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="scope_id must be a positive integer"):
-        create_sso_token(scope_type="event", scope_id=0, role="organizer")
+        create_sso_token(scope_type="event", scope_id=0, role=AuthRole.ORGANIZER)
 
     with pytest.raises(ValueError, match="scope_id must be a positive integer"):
-        create_sso_token(scope_type="event", scope_id=-5, role="organizer")
+        create_sso_token(scope_type="event", scope_id=-5, role=AuthRole.ORGANIZER)
 
     with pytest.raises(ValueError, match="role must be 'organizer' or 'speaker'"):
-        create_sso_token(scope_type="event", scope_id=1, role="admin")
+        create_sso_token(scope_type="event", scope_id=1, role=AuthRole.ADMIN)
 
     with pytest.raises(
         ValueError, match="expires_in_seconds must be a positive integer"
     ):
         create_sso_token(
-            scope_type="event", scope_id=1, role="organizer", expires_in_seconds=0
+            scope_type="event",
+            scope_id=1,
+            role=AuthRole.ORGANIZER,
+            expires_in_seconds=0,
         )
 
     with pytest.raises(
         ValueError, match="email is required for event-scoped speaker tokens"
     ):
-        create_sso_token(scope_type="event", scope_id=1, role="speaker")
+        create_sso_token(scope_type="event", scope_id=1, role=AuthRole.SPEAKER)
 
 
 def test_decode_sso_token_expired() -> None:
@@ -417,7 +430,7 @@ def test_decode_sso_token_expired() -> None:
 
 
 def test_decode_sso_token_tampered() -> None:
-    token = create_sso_token(scope_type="event", scope_id=1, role="organizer")
+    token = create_sso_token(scope_type="event", scope_id=1, role=AuthRole.ORGANIZER)
     tampered = token[:-5] + "xxxxx"
     assert decode_sso_token(tampered) is None
 
@@ -468,10 +481,10 @@ def test_decode_sso_token_rejects_user_id() -> None:
 
 
 def test_decode_sso_token_wrong_type() -> None:
-    session_tok = create_session_token(user_id=1, role="admin")
+    session_tok = create_session_token(user_id=1, role=AuthRole.ADMIN)
     assert decode_sso_token(session_tok) is None
 
-    access_tok = create_access_token(user_id=1, email="a@b.c", role="admin")
+    access_tok = create_access_token(user_id=1, email="a@b.c", role=AuthRole.ADMIN)
     assert decode_sso_token(access_tok) is None
 
 

@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from .consts import AuthRole, SSOScopeType, TalkStatus
+from .consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
 from .retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
@@ -249,8 +249,8 @@ class TalkRead(TalkBase):
 
 
 class JobBase(BaseModel):
-    kind: str
-    status: str
+    kind: JobKind
+    status: JobStatus
     log_path: str | None = None
     progress_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     started_at: datetime | None = None
@@ -271,7 +271,7 @@ class JobRead(JobBase):
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        Uses `updated_at` as the end time for terminal statuses (`JobStatus.is_terminal`)
         when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
@@ -281,7 +281,7 @@ class JobRead(JobBase):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed", "broken", "rejected", "cancelled"):
+        if self.status.is_terminal:
             if self.updated_at is None:
                 return None
             end = (
@@ -302,10 +302,10 @@ class JobRead(JobBase):
         Returns None if not running, or if progress_pct is None or <= 0.
         Returns 0.0 if progress_pct >= 100.0.
         """
-        if self.status != "running":
+        if self.status != JobStatus.RUNNING:
             return (
                 0.0
-                if self.status == "done"
+                if self.status == JobStatus.DONE
                 and self.progress_pct is not None
                 and self.progress_pct >= 100.0
                 else None
@@ -470,7 +470,7 @@ class TokenResponse(BaseModel):
 class UserRead(BaseModel):
     id: int
     email: str
-    role: str
+    role: AuthRole
     is_active: bool
     organizer_requested: bool = False
     organizer_request_note: str | None = None
@@ -488,13 +488,13 @@ class UserPromoteRequest(BaseModel):
 
 
 class EventSSOTokenRequest(BaseModel):
-    role: Literal["organizer"] = "organizer"
+    role: Literal[AuthRole.ORGANIZER] = AuthRole.ORGANIZER
     email: str | None = None
     display_name: str | None = None
 
 
 class TalkSSOTokenRequest(BaseModel):
-    role: Literal["speaker"] = "speaker"
+    role: Literal[AuthRole.SPEAKER] = AuthRole.SPEAKER
     email: str | None = None
     display_name: str | None = None
     event_id: int | str | None = None
@@ -532,7 +532,7 @@ class SSOTokenResponse(BaseModel):
     token_type: str = "bearer"
     scope_type: SSOScopeType
     scope_id: int
-    role: str
+    role: AuthRole
     expires_in_seconds: int
     url: str
 

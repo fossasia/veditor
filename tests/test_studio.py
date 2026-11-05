@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import CurrentUser, check_talk_access, get_current_user, hash_api_key
 from app.config import settings
-from app.consts import AuthRole, JobKind, TalkStatus
+from app.consts import AuthRole, JobKind, JobStatus, TalkStatus
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -204,7 +204,7 @@ def test_talk_studio_human_session_user_access(
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
@@ -246,7 +246,7 @@ def test_talk_studio_human_session_user_access(
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="admin",
+        role=AuthRole.ADMIN,
     )
     db_session.add(admin)
     db_session.commit()
@@ -261,7 +261,7 @@ def test_talk_studio_human_session_user_access(
     other_org = models.User(
         email=f"other_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(other_org)
     db_session.commit()
@@ -782,7 +782,7 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
     job = models.Job(
         talk_id=talk.id,
         kind=JobKind.TRANSCODE,
-        status="running",
+        status=JobStatus.RUNNING,
         progress_pct=60.0,
         started_at=now - timedelta(seconds=15),
         updated_at=now,
@@ -851,7 +851,7 @@ def test_dashboard_and_studio_render_active_job_progress(
     job = models.Job(
         talk_id=talk.id,
         kind=JobKind.TRANSCODE,
-        status="running",
+        status=JobStatus.RUNNING,
         progress_pct=72.0,
         started_at=now - timedelta(seconds=30),
         updated_at=now,
@@ -910,7 +910,7 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
     job_cut = models.Job(
         talk_id=talk_cut.id,
         kind=JobKind.CUT,
-        status="running",
+        status=JobStatus.RUNNING,
         progress_pct=45.0,
         started_at=now - timedelta(seconds=10),
         updated_at=now,
@@ -1421,7 +1421,9 @@ def test_studio_dashboard_with_slug_event_id_and_sso_token(
     db_session.commit()
     db_session.refresh(event)
 
-    token = create_sso_token(scope_type="event", scope_id=event.id, role="organizer")
+    token = create_sso_token(
+        scope_type="event", scope_id=event.id, role=AuthRole.ORGANIZER
+    )
 
     # Accessing /studio with a string slug in event_id alongside sso_token
     # should NOT fail with int_parsing 422, but successfully redirect with cookie
@@ -1561,13 +1563,13 @@ def test_studio_milestones_role_visibility(
     admin = models.User(
         email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password=hash_password("password123"),
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password=hash_password("password123"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(admin)
@@ -1617,7 +1619,7 @@ def test_studio_milestones_role_visibility(
 
     # 3. Speaker SSO session does NOT see milestones stepper or recent jobs
     speaker_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type="talk", scope_id=talk.id, role=AuthRole.SPEAKER
     )
     client.cookies.set("veditor_session", speaker_token)
     res_speaker = client.get(f"/studio/talks/{talk.id}")
@@ -1631,7 +1633,7 @@ def test_studio_milestones_role_visibility(
     std_user = models.User(
         email=f"user_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password=hash_password("password123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(std_user)
@@ -1653,7 +1655,7 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     organizer = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password=hash_password("password123"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(organizer)
@@ -1711,7 +1713,7 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
 
     # 2. SSO Organizer session
     sso_org_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="organizer"
+        scope_type="talk", scope_id=talk.id, role=AuthRole.ORGANIZER
     )
     client.cookies.set("veditor_session", sso_org_token)
     res_sso = client.get(f"/studio/talks/{talk.id}")
@@ -1840,7 +1842,7 @@ def test_studio_speaker_timeline_omits_bumpers(
     db_session.refresh(talk)
 
     speaker_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type="talk", scope_id=talk.id, role=AuthRole.SPEAKER
     )
     client.cookies.set("veditor_session", speaker_token)
 
@@ -1862,7 +1864,7 @@ def test_studio_organizer_timeline_omits_bumpers(
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
@@ -1906,7 +1908,7 @@ def test_studio_upload_pending_state_hides_timeline(
     org = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
@@ -2085,7 +2087,7 @@ def test_user_menu_accessibility_attributes(
     user = models.User(
         email="a11y@test.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(user)
@@ -2169,7 +2171,7 @@ def test_talk_studio_speaker_mode_body_class(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex}@test.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(org_user)
@@ -2225,7 +2227,7 @@ def test_talk_studio_speaker_mode_body_class(
     # SSO Organizer session -> NOT speaker mode
 
     sso_org_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="organizer"
+        scope_type="talk", scope_id=talk.id, role=AuthRole.ORGANIZER
     )
     client.cookies.set("veditor_session", sso_org_token)
     res_sso_org = client.get(f"/studio/talks/{talk.id}")
@@ -2234,7 +2236,7 @@ def test_talk_studio_speaker_mode_body_class(
 
     # SSO Speaker session -> IS speaker mode
     sso_spk_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type="talk", scope_id=talk.id, role=AuthRole.SPEAKER
     )
     client.cookies.set("veditor_session", sso_spk_token)
     res_sso_spk = client.get(f"/studio/talks/{talk.id}")
@@ -2250,12 +2252,12 @@ def test_talk_studio_speaker_preview_quality_notice(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
         email="speaker@domain.com",
         hashed_password="hash",
-        role="speaker",
+        role=AuthRole.SPEAKER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2309,17 +2311,17 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
         email="speaker_dash@domain.com",
         hashed_password="hash",
-        role="speaker",
+        role=AuthRole.SPEAKER,
     )
     regular_user = models.User(
         email=f"user_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="user",
+        role=AuthRole.USER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2400,7 +2402,7 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex}@test.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(org_user)
@@ -2455,12 +2457,12 @@ def test_dashboard_speaker_email_case_insensitivity(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
         email="Speaker.Case@Example.com",
         hashed_password="hash",
-        role="speaker",
+        role=AuthRole.SPEAKER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2537,17 +2539,17 @@ def test_talk_jobs_log_path_gated_for_speakers(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
         email="speaker.dev@example.com",
         hashed_password="hash",
-        role="speaker",
+        role=AuthRole.SPEAKER,
     )
     admin_user = models.User(
         email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="admin",
+        role=AuthRole.ADMIN,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2578,7 +2580,7 @@ def test_talk_jobs_log_path_gated_for_speakers(
     job = models.Job(
         talk_id=talk.id,
         kind=JobKind.TRANSCODE,
-        status="running",
+        status=JobStatus.RUNNING,
         progress_pct=45.0,
         log_path=log_key,
         started_at=now - timedelta(seconds=20),
@@ -2625,7 +2627,7 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
     org_user = models.User(
         email=f"org_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org_user)
     db_session.commit()
@@ -2663,7 +2665,7 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
     sso_token = create_sso_token(
         scope_type="event",
         scope_id=event.id,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         email="speaker.auth@example.com",
         display_name="Assigned Speaker",
     )
@@ -2715,7 +2717,7 @@ def test_attach_room_recording_multi_talk(
     user = models.User(
         email="org@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     event = models.Event(name="Summit 2026", created_by_user=user)
     db_session.add(user)
@@ -3512,7 +3514,7 @@ def test_sso_organizer_management_controls_visible(
 
     # 1. Organizer via SSO
     org_token = create_sso_token(
-        scope_type="event", scope_id=event.id, role="organizer"
+        scope_type="event", scope_id=event.id, role=AuthRole.ORGANIZER
     )
     client.cookies.set("veditor_session", org_token)
 
@@ -3532,7 +3534,7 @@ def test_sso_organizer_management_controls_visible(
     spk_token = create_sso_token(
         scope_type="event",
         scope_id=event.id,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         email="speaker.sso@example.com",
     )
     client.cookies.set("veditor_session", spk_token)
@@ -3557,7 +3559,7 @@ def test_attach_room_recording_with_video_url(
     user = models.User(
         email="org_url@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     event = models.Event(name="URL Ingest Summit", created_by_user=user)
     db_session.add(user)
@@ -3626,7 +3628,7 @@ def test_attach_room_recording_with_video_url_multipart(
     user = models.User(
         email="org_url_mp@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     event = models.Event(name="URL Ingest Summit MP", created_by_user=user)
     db_session.add(user)
@@ -3674,7 +3676,7 @@ def test_attach_room_recording_url_and_source_validations(
     user = models.User(
         email="org_val@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     event = models.Event(name="Validation Summit", created_by_user=user)
     db_session.add(user)
@@ -3753,7 +3755,7 @@ def test_talk_studio_organizer_request_prompt(
     user = models.User(
         email=f"std_user_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="user",
+        role=AuthRole.USER,
         organizer_requested=False,
     )
     db_session.add(user)
@@ -3802,7 +3804,7 @@ def test_talk_studio_organizer_request_prompt(
     org = models.User(
         email=f"org_user_{uuid.uuid4().hex[:8]}@example.com",
         hashed_password="hash",
-        role="organizer",
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
@@ -3837,7 +3839,7 @@ def test_talk_studio_organizer_request_prompt(
     # 4. SSO user does not see organizer request prompt
 
     sso_token = create_sso_token(
-        scope_type="event", scope_id=event_org.id, role="organizer"
+        scope_type="event", scope_id=event_org.id, role=AuthRole.ORGANIZER
     )
     client.cookies.set("veditor_session", sso_token)
     res_sso = client.get(f"/studio/talks/{talk_org.id}")
@@ -3854,7 +3856,7 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
     user = models.User(
         email="promoted_speaker@example.com",
         hashed_password="hash",
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     event = models.Event(name="Role Persist Event")
@@ -3885,7 +3887,7 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
     # Reload directly from database to verify persistence
     persisted = db_session.scalar(select(models.User).where(models.User.id == user.id))
     assert persisted is not None
-    assert persisted.role == "speaker"
+    assert persisted.role == AuthRole.SPEAKER
 
 
 def test_organizer_dashboard_includes_assigned_speaker_talks(
@@ -3896,10 +3898,10 @@ def test_organizer_dashboard_includes_assigned_speaker_talks(
     now = datetime.now(UTC)
 
     org_a = models.User(
-        email="org_a@example.com", hashed_password="hash", role="organizer"
+        email="org_a@example.com", hashed_password="hash", role=AuthRole.ORGANIZER
     )
     org_b = models.User(
-        email="org_b@example.com", hashed_password="hash", role="organizer"
+        email="org_b@example.com", hashed_password="hash", role=AuthRole.ORGANIZER
     )
     db_session.add(org_a)
     db_session.add(org_b)
@@ -3941,7 +3943,7 @@ def test_studio_handoff_utc_format_and_cooldown_attr(
     handoff_time = datetime(2026, 10, 14, 18, 0, tzinfo=tz_ist)
 
     user = models.User(
-        email="org_utc@example.com", hashed_password="hash", role="organizer"
+        email="org_utc@example.com", hashed_password="hash", role=AuthRole.ORGANIZER
     )
     db_session.add(user)
     db_session.commit()
@@ -3998,7 +4000,7 @@ def test_sso_speaker_view_derived_from_email_match(
     sso_token = create_sso_token(
         scope_type="event",
         scope_id=event.id,
-        role="speaker",
+        role=AuthRole.SPEAKER,
         email="assigned_sso_speaker@example.com",
     )
     resp = client.get(
@@ -4012,7 +4014,7 @@ def test_sso_speaker_view_derived_from_email_match(
     human_speaker = models.User(
         email="assigned_sso_speaker@example.com",
         hashed_password="pw",
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(human_speaker)
