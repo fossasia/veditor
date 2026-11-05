@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.consts import TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.ingest import download_media_url, resolve_direct_media_url
 from app.models import Event, Job, Talk
 from app.pipeline.detect import DetectResult
@@ -48,7 +48,7 @@ def test_job_ingest_success(
         room="Room A",
         start=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
         end=datetime(2026, 8, 29, 10, 30, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         cut_start=0.0,
         cut_end=1800.0,
     )
@@ -70,15 +70,15 @@ def test_job_ingest_success(
     assert reloaded is not None
     assert reloaded.status == TalkStatus.DETECTING
     job = db_session.scalars(select(Job)).one()
-    assert job.status == "done"
-    assert job.kind == "ingest"
+    assert job.status == JobStatus.DONE
+    assert job.kind == JobKind.INGEST
     assert mock_storage.put.call_count == 1
     mock_enqueue.assert_called_once_with(
         job_detect,
         talk.id,
         f"{talk.id}/raw/raw.mp4",
         None,
-        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
     )
     # Staged file is unlinked
     assert not staged_file.exists()
@@ -97,7 +97,7 @@ def test_dispatch_assembly_generated_intro_enqueues_job_intro(
         room="Room A",
         start=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
         end=datetime(2026, 8, 29, 10, 30, tzinfo=UTC),
-        status="assembling",
+        status=TalkStatus.ASSEMBLING,
         include_intro=True,
         intro_source="generated",
         include_outro=False,
@@ -115,7 +115,7 @@ def test_dispatch_assembly_generated_intro_enqueues_job_intro(
         talk.id,
         f"{talk.id}/cut/special.mp4",
         f"{talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -132,7 +132,7 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
         room="Room A",
         start=datetime(2026, 8, 29, 10, 0, tzinfo=UTC),
         end=datetime(2026, 8, 29, 10, 30, tzinfo=UTC),
-        status="assembling",
+        status=TalkStatus.ASSEMBLING,
         include_intro=True,
         intro_source="generated",
         include_outro=True,
@@ -140,7 +140,7 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
     )
     db_session.add(talk)
     db_session.commit()
-    db_session.add(Job(talk_id=talk.id, kind="intro", status="done"))
+    db_session.add(Job(talk_id=talk.id, kind=JobKind.INTRO, status=JobStatus.DONE))
     db_session.commit()
 
     with (
@@ -153,7 +153,7 @@ def test_dispatch_assembly_intro_done_outro_generated_enqueues_job_outro(
         talk.id,
         f"{talk.id}/cut/special.mp4",
         f"{talk.id}/outro/outro.mp4",
-        job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
     )
 
 
@@ -241,7 +241,7 @@ def test_job_ingest_room_url_success(
         room="Room URL",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = Talk(
         event_id=event.id,
@@ -249,7 +249,7 @@ def test_job_ingest_room_url_success(
         room="Room URL",
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([talk1, talk2])
     db_session.commit()
@@ -300,7 +300,7 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
         room="Room URL",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -325,7 +325,7 @@ def test_job_ingest_room_url_download_failure_handles_cleanup(
     assert reloaded is not None
     assert reloaded.status == TalkStatus.BROKEN
     job = db_session.scalars(select(Job)).one()
-    assert job.status == "failed"
+    assert job.status == JobStatus.FAILED
 
 
 def test_resolve_direct_media_url() -> None:

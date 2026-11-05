@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.storage import StorageBackend
+from ..storage import StorageBackend
 
 
 def publish(local_path: Path | str, talk_id: int, backend: StorageBackend) -> str:

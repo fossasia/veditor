@@ -22,7 +22,7 @@ from av.audio.stream import AudioStream
 from av.packet import Packet
 from av.video.stream import VideoStream
 
-from app.pipeline.loudness import (
+from .loudness import (
     DEFAULT_LRA,
     DEFAULT_TRUE_PEAK,
     _mux_packet_with_monotonic_dts,

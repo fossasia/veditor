@@ -10,11 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.requests import Request
 
-from app import models
-from app.auth import CurrentUser
-from app.config import settings
-from app.db import get_db, new_session
-from app.security import (
+from .. import models
+from ..auth import CurrentUser
+from ..config import settings
+from ..consts import AuthRole
+from ..db import get_db, new_session
+from ..security import (
     decode_session_token,
     decode_sso_token,
     verify_session_token_not_revoked,
@@ -125,8 +126,8 @@ def auth_context_processor(request: Request) -> dict[str, Any]:
 
     is_speaker = (
         not user
-        or getattr(user, "role", None) not in ["organizer", "admin"]
-        or getattr(user, "role", None) == "speaker"
+        or getattr(user, "role", None) not in [AuthRole.ORGANIZER, AuthRole.ADMIN]
+        or getattr(user, "role", None) == AuthRole.SPEAKER
     )
     return {
         "user": user,

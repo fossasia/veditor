@@ -13,9 +13,9 @@ from urllib.request import Request
 
 import av
 
-from app.config import settings
-from app.schemas import RecordingIngestRequest
-from app.storage import StorageBackend
+from .config import settings
+from .schemas import RecordingIngestRequest
+from .storage import StorageBackend
 
 logger = logging.getLogger(__name__)
 

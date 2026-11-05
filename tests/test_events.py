@@ -469,7 +469,7 @@ def test_write_endpoints_forbidden_for_non_owning_organizer(
         db_session,
         event.id,
         title="Test Talk",
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         room="Room 1",
     )
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(

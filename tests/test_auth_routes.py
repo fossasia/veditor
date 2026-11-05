@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.requests import Request
 
 from app import models
+from app.consts import AuthRole
 from app.db import Base, engine
 from app.main import app
 from app.security import (
@@ -44,7 +45,7 @@ def test_get_login_already_authenticated(
     user = models.User(
         email="auth_user@test.com",
         hashed_password=hash_password("password123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(user)
@@ -62,7 +63,7 @@ def test_post_login_success(client: TestClient, db_session: Session) -> None:
     user = models.User(
         email="login_success@test.com",
         hashed_password=hash_password("Secret12345!"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
         is_verified=True,
     )
@@ -85,7 +86,7 @@ def test_post_login_case_insensitive_email(
     user = models.User(
         email="case_test@test.com",
         hashed_password=hash_password("Secret12345!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -105,7 +106,7 @@ def test_post_login_invalid_password(client: TestClient, db_session: Session) ->
     user = models.User(
         email="wrong_pass@test.com",
         hashed_password=hash_password("correct-password"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(user)
@@ -124,7 +125,7 @@ def test_post_login_inactive_user(client: TestClient, db_session: Session) -> No
     user = models.User(
         email="inactive@test.com",
         hashed_password=hash_password("password123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=False,
     )
     db_session.add(user)
@@ -166,7 +167,7 @@ def test_get_signup_already_authenticated(
     user = models.User(
         email="signup_auth@test.com",
         hashed_password=hash_password("password123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(user)
@@ -258,7 +259,7 @@ def test_post_signup_duplicate_email(client: TestClient, db_session: Session) ->
     user = models.User(
         email="dup_user@test.com",
         hashed_password=hash_password("password123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(user)
@@ -294,7 +295,7 @@ def test_post_signup_creates_user_role(client: TestClient, db_session: Session) 
         select(models.User).where(models.User.email == "first_user@test.com")
     )
     assert user is not None
-    assert user.role == "user"
+    assert user.role == AuthRole.USER
     assert user.is_verified is False
     assert verify_password("userpassword123", user.hashed_password)
 
@@ -307,7 +308,7 @@ def test_post_signup_subsequent_user_becomes_user(
     first = models.User(
         email="existing_admin@test.com",
         hashed_password=hash_password("password123"),
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(first)
@@ -330,7 +331,7 @@ def test_post_signup_subsequent_user_becomes_user(
         select(models.User).where(models.User.email == "second_user@test.com")
     )
     assert user is not None
-    assert user.role == "user"
+    assert user.role == AuthRole.USER
     assert user.is_verified is False
 
 
@@ -352,7 +353,7 @@ def test_api_auth_token_json_success(client: TestClient, db_session: Session) ->
     user = models.User(
         email="api_user@test.com",
         hashed_password=hash_password("api_pass123"),
-        role="organizer",
+        role=AuthRole.ORGANIZER,
         is_active=True,
         is_verified=True,
     )
@@ -387,7 +388,7 @@ def test_api_auth_token_form_success(client: TestClient, db_session: Session) ->
     user = models.User(
         email="form_user@test.com",
         hashed_password=hash_password("form_pass123"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -410,7 +411,7 @@ def test_api_auth_token_invalid_credentials(
     user = models.User(
         email="token_invalid@test.com",
         hashed_password=hash_password("correct-password"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(user)
@@ -466,7 +467,7 @@ def test_templating_auth_context_processor(
     user = models.User(
         email="context_user@test.com",
         hashed_password=hash_password("password123"),
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(user)
@@ -519,5 +520,5 @@ def test_post_signup_always_defaults_to_user_role(
         select(models.User).where(models.User.email == "organizer_signup@test.com")
     )
     assert user is not None
-    assert user.role == "user"
+    assert user.role == AuthRole.USER
     assert user.is_verified is False

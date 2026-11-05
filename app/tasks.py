@@ -25,36 +25,37 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from email.message import Message
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, TypedDict
 from urllib.request import Request
 
 import av
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import email as app_email
-from app.config import PREVIEW_PRESETS, get_setting, settings
-from app.db import new_session
-from app.ingest import (
+from . import email as app_email
+from .config import PREVIEW_PRESETS, get_setting, settings
+from .consts import JobKind, JobStatus, TalkStatus
+from .db import new_session
+from .ingest import (
     InsufficientStorageError,
     download_media_url,
     get_upload_staging_dir,
     validate_media_file,
 )
-from app.models import Event, Job, Talk, User
-from app.pipeline.concat import concat
-from app.pipeline.cut import CutStrategy, cut
-from app.pipeline.detect import (
+from .models import Event, Job, Talk, User
+from .pipeline.concat import concat
+from .pipeline.cut import CutStrategy, cut
+from .pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
     container_duration_seconds,
     detect,
 )
-from app.pipeline.intro import generate_intro_clip
-from app.pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
-from app.pipeline.outro import generate_outro_clip
-from app.pipeline.preview import generate_preview
-from app.pipeline.publish import publish
-from app.pipeline.transcode import (
+from .pipeline.intro import generate_intro_clip
+from .pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
+from .pipeline.outro import generate_outro_clip
+from .pipeline.preview import generate_preview
+from .pipeline.publish import publish
+from .pipeline.transcode import (
     # PRESET_4K_MASTER,
     PRESET_480P,
     PRESET_720P,
@@ -62,24 +63,22 @@ from app.pipeline.transcode import (
     PRESET_1440P,
     transcode,
 )
-from app.pipeline.waveform import extract_waveform_peaks
-from app.queue import heavy_queue, light_queue
-from app.retention import (
+from .pipeline.waveform import extract_waveform_peaks
+from .queue import heavy_queue, light_queue
+from .retention import (
     enqueue_retention_sweep,  # noqa: F401
     register_periodic_retention_sweep,  # noqa: F401
     run_retention_sweep,  # noqa: F401
 )
-from app.security import create_password_reset_token
-from app.states import advance
-from app.storage import (
+from .security import create_password_reset_token
+from .states import advance
+from .storage import (
     StorageBackend,
     StorageKeyNotFoundError,
     cleanup_bumpers,
     cleanup_intermediates,
     get_storage_backend,
 )
-
-from .consts import TalkStatus
 
 TRANSCODE_PRESETS = {
     "480p": PRESET_480P,
@@ -92,17 +91,25 @@ TRANSCODE_PRESETS = {
 
 logger = logging.getLogger(__name__)
 
-STAGE_CONFIG: dict[str, dict[str, str | int]] = {
-    "ingest": {"queue": "light", "job_timeout": 600},
-    "detect": {"queue": "light", "job_timeout": 300},
-    "cut": {"queue": "light", "job_timeout": 900},
-    "intro": {"queue": "light", "job_timeout": 300},
-    "outro": {"queue": "light", "job_timeout": 300},
-    "concat": {"queue": "light", "job_timeout": 1800},
-    "preview": {"queue": "light", "job_timeout": 1800},
-    "loudness": {"queue": "light", "job_timeout": 900},
-    "transcode": {"queue": "heavy", "job_timeout": 14400},
-    "publish": {"queue": "light", "job_timeout": 300},
+
+class StageConfig(TypedDict):
+    """Queue and timeout settings applied when a pipeline stage is enqueued."""
+
+    queue: str
+    job_timeout: int
+
+
+STAGE_CONFIG: dict[JobKind, StageConfig] = {
+    JobKind.INGEST: {"queue": "light", "job_timeout": 600},
+    JobKind.DETECT: {"queue": "light", "job_timeout": 300},
+    JobKind.CUT: {"queue": "light", "job_timeout": 900},
+    JobKind.INTRO: {"queue": "light", "job_timeout": 300},
+    JobKind.OUTRO: {"queue": "light", "job_timeout": 300},
+    JobKind.CONCAT: {"queue": "light", "job_timeout": 1800},
+    JobKind.PREVIEW: {"queue": "light", "job_timeout": 1800},
+    JobKind.LOUDNESS: {"queue": "light", "job_timeout": 900},
+    JobKind.TRANSCODE: {"queue": "heavy", "job_timeout": 14400},
+    JobKind.PUBLISH: {"queue": "light", "job_timeout": 300},
 }
 
 
@@ -132,7 +139,7 @@ def _handle_failure(
             job = db.get(Job, job_id)
             if not job:
                 return
-            job.status = "failed"
+            job.status = JobStatus.FAILED
             job.log_path = log_key
             job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
@@ -193,8 +200,8 @@ def job_ingest(
 
             new_job = Job(
                 talk_id=talk_id,
-                kind="ingest",
-                status="running",
+                kind=JobKind.INGEST,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -223,12 +230,12 @@ def job_ingest(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
 
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -237,7 +244,7 @@ def job_ingest(
             talk_id,
             raw_key,
             recording_start,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
         )
     except Exception as exc:
         if claimed:
@@ -285,8 +292,8 @@ def job_ingest_room_url(
                 ):
                     new_job = Job(
                         talk_id=talk.id,
-                        kind="ingest",
-                        status="running",
+                        kind=JobKind.INGEST,
+                        status=JobStatus.RUNNING,
                         started_at=datetime.now(UTC),
                         updated_at=datetime.now(UTC),
                     )
@@ -326,7 +333,7 @@ def job_ingest_room_url(
         if recording_start_iso:
             try:
                 recording_start = datetime.fromisoformat(recording_start_iso)
-            except (ValueError, TypeError):  # fmt: skip
+            except ValueError, TypeError:
                 pass
 
         with new_session() as db:
@@ -336,7 +343,7 @@ def job_ingest_room_url(
             eligible_talks = [
                 t
                 for t in db.scalars(stmt.order_by(Talk.start)).all()
-                if t.id in job_ids and t.status == "detecting"
+                if t.id in job_ids and t.status == TalkStatus.DETECTING
             ]
             if not eligible_talks:
                 logger.warning(
@@ -345,7 +352,7 @@ def job_ingest_room_url(
                 for jid in job_ids.values():
                     job = db.get(Job, jid)
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
                 for tid in job_ids:
                     db_talk = db.get(Talk, tid)
@@ -375,7 +382,7 @@ def job_ingest_room_url(
                         for t in eligible_talks
                     ):
                         rec_start = parsed_dt
-                except (ValueError, TypeError):  # fmt: skip
+                except ValueError, TypeError:
                     pass
 
             if rec_start is None:
@@ -402,7 +409,7 @@ def job_ingest_room_url(
                 if untalk.id in job_ids:
                     job = db.get(Job, job_ids[untalk.id])
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
                 untalk.status = TalkStatus.WAITING_FILES
 
@@ -432,7 +439,7 @@ def job_ingest_room_url(
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
                     if job:
-                        job.status = "done"
+                        job.status = JobStatus.DONE
                         job.updated_at = datetime.now(UTC)
 
                 matched_ids.append(talk.id)
@@ -446,7 +453,7 @@ def job_ingest_room_url(
                 tid,
                 f"{tid}/raw/raw.mp4",
                 tolerance_seconds=float("inf"),
-                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
             )
             enqueued_talk_ids.add(tid)
 
@@ -460,7 +467,7 @@ def job_ingest_room_url(
                     continue
                 job = db.get(Job, jid)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.updated_at = datetime.now(UTC)
                 db_talk = db.get(Talk, tid)
                 if db_talk and db_talk.status == TalkStatus.DETECTING:
@@ -494,8 +501,8 @@ def job_detect(
                 return
             new_job = Job(
                 talk_id=talk_id,
-                kind="detect",
-                status="running",
+                kind=JobKind.DETECT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -541,7 +548,7 @@ def job_detect(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
@@ -584,7 +591,7 @@ def job_detect(
                     talk.cut_end = offset_e
 
             advance(talk, TalkStatus.PENDING_APPROVAL)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
@@ -605,8 +612,8 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 raise ValueError(f"Talk {talk_id} has no cut bounds set")
             new_job = Job(
                 talk_id=talk_id,
-                kind="cut",
-                status="running",
+                kind=JobKind.CUT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -658,12 +665,12 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.GENERATING_PREVIEWS)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -673,7 +680,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             talk_id,
             cut_key,
             preview_key,
-            job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PREVIEW]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -695,7 +702,9 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         intro_done = (
             db.scalar(
                 select(Job.id).where(
-                    Job.talk_id == talk_id, Job.kind == "intro", Job.status == "done"
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.INTRO,
+                    Job.status == JobStatus.DONE,
                 )
             )
             is not None
@@ -706,7 +715,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 talk_id,
                 cut_key,
                 f"{talk_id}/intro/intro.mp4",
-                job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
             )
             return
 
@@ -715,7 +724,9 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         outro_done = (
             db.scalar(
                 select(Job.id).where(
-                    Job.talk_id == talk_id, Job.kind == "outro", Job.status == "done"
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.OUTRO,
+                    Job.status == JobStatus.DONE,
                 )
             )
             is not None
@@ -726,7 +737,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 talk_id,
                 cut_key,
                 f"{talk_id}/outro/outro.mp4",
-                job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
             )
             return
 
@@ -741,7 +752,7 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             intro_key,
             outro_key,
             concat_key,
-            job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
         )
 
 
@@ -792,8 +803,8 @@ def job_intro(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="intro",
-                status="running",
+                kind=JobKind.INTRO,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -842,16 +853,16 @@ def job_intro(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -877,8 +888,8 @@ def job_outro(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="outro",
-                status="running",
+                kind=JobKind.OUTRO,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -916,16 +927,16 @@ def job_outro(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -949,8 +960,8 @@ def job_concat(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="concat",
-                status="running",
+                kind=JobKind.CONCAT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -993,11 +1004,11 @@ def job_concat(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -1007,7 +1018,7 @@ def job_concat(
             talk_id,
             concat_key,
             loud_key,
-            job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1025,8 +1036,8 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="preview",
-                status="running",
+                kind=JobKind.PREVIEW,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1086,17 +1097,17 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.PREVIEW)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
             dispatch_talk_webhook("talk.preview_ready", talk, db)
     except Exception as exc:
@@ -1153,8 +1164,8 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                 return
             new_job = Job(
                 talk_id=talk_id,
-                kind="loudness",
-                status="running",
+                kind=JobKind.LOUDNESS,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1222,12 +1233,12 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.TRANSCODING)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -1237,7 +1248,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             talk_id,
             loud_key,
             final_key,
-            job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1262,8 +1273,8 @@ def job_transcode(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="transcode",
-                status="running",
+                kind=JobKind.TRANSCODE,
+                status=JobStatus.RUNNING,
                 progress_pct=None,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1312,7 +1323,7 @@ def job_transcode(
                 try:
                     with new_session() as progress_db:
                         j = progress_db.get(Job, job_id)
-                        if j and j.status == "running":
+                        if j and j.status == JobStatus.RUNNING:
                             j.progress_pct = round(pct * 100.0, 2)
                             j.updated_at = datetime.now(UTC)
                             progress_db.commit()
@@ -1351,12 +1362,12 @@ def job_transcode(
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.UPLOADING)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.progress_pct = 100.0
             job.updated_at = datetime.now(UTC)
             custom_paths = (talk.custom_intro_path, talk.custom_outro_path)
@@ -1368,7 +1379,7 @@ def job_transcode(
             job_publish,
             talk_id,
             final_key,
-            job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PUBLISH]["job_timeout"],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1385,8 +1396,8 @@ def job_publish(talk_id: int, final_key: str) -> None:
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="publish",
-                status="running",
+                kind=JobKind.PUBLISH,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
@@ -1417,12 +1428,12 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             advance(talk, TalkStatus.DONE)
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
@@ -1446,7 +1457,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
             filename = Path(final_key).name
             video_url = f"{base}/studio/media/{talk.id}/final/{filename}"
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
             dispatch_talk_webhook(
                 "talk.published",

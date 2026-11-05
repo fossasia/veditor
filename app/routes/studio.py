@@ -1,6 +1,7 @@
 import logging
 import urllib.parse
 from datetime import UTC, date, datetime
+from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -11,26 +12,24 @@ from fastapi import (
     Form,
     HTTPException,
     Request,
-    status,
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
 from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app import models, schemas
-from app.auth import CurrentUser, hash_api_key
-from app.config import get_setting, settings
-from app.db import get_db
-from app.queue import light_queue
-from app.routes.auth import _get_authenticated_user_from_cookie
-from app.routes.talks import _cancel_talk_jobs, attach_room_recording, get_room_days
-from app.security import SSOTokenPayload, decode_sso_token
-from app.storage import StorageBackend, get_storage_backend
-from app.tasks import job_waveform
-from app.ui.templating import templates
-
+from .. import models, schemas
+from ..auth import CurrentUser, hash_api_key
+from ..config import get_setting, settings
 from ..consts import AuthRole, SSOScopeType, TalkStatus
+from ..db import get_db
+from ..queue import light_queue
+from ..security import SSOTokenPayload, decode_sso_token
+from ..storage import StorageBackend, get_storage_backend
+from ..tasks import job_waveform
+from ..ui.templating import templates
+from .auth import _get_authenticated_user_from_cookie
+from .talks import _cancel_talk_jobs, attach_room_recording, get_room_days
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +59,7 @@ def get_ui_client(
     api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
     if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
         )
     hashed_key = hash_api_key(api_key)
@@ -69,7 +68,7 @@ def get_ui_client(
     )
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key. Please verify your credentials.",
         )
     return client
@@ -114,7 +113,7 @@ def _authorize_studio_talk(
             talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
             if not talk:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=HTTPStatus.NOT_FOUND,
                     detail=not_found_detail,
                 )
             authorized = (
@@ -134,7 +133,7 @@ def _authorize_studio_talk(
             )
             if not authorized:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=HTTPStatus.NOT_FOUND,
                     detail=not_found_detail,
                 )
             if hasattr(request, "state"):
@@ -160,7 +159,7 @@ def _authorize_studio_talk(
         )
         if not talk:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=not_found_detail,
             )
         authorized = (
@@ -185,7 +184,7 @@ def _authorize_studio_talk(
                     authorized = True
         if not authorized:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=not_found_detail,
             )
         if (
@@ -203,7 +202,7 @@ def _authorize_studio_talk(
     api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
     if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
         )
     hashed_key = hash_api_key(api_key)
@@ -212,7 +211,7 @@ def _authorize_studio_talk(
     )
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key",
         )
     talk = db.scalar(
@@ -222,7 +221,7 @@ def _authorize_studio_talk(
     )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail=not_found_detail,
         )
     return talk
@@ -331,13 +330,13 @@ def dashboard(
         )
         if not raw_sso:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
             )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
             )
         is_secure = (request.url.scheme == "https") or (
@@ -349,7 +348,7 @@ def dashboard(
             dest_url = f"/studio?event_id={sso_payload.scope_id}"
         cookie_max_age = _get_sso_cookie_max_age(sso_payload)
 
-        resp = RedirectResponse(url=dest_url, status_code=status.HTTP_303_SEE_OTHER)
+        resp = RedirectResponse(url=dest_url, status_code=HTTPStatus.SEE_OTHER)
         resp.set_cookie(
             key="veditor_session",
             value=raw_sso,
@@ -429,7 +428,7 @@ def _render_talks_page(
 
     if request.headers.get("X-API-Key") and client is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key. Please verify your credentials.",
         )
 
@@ -443,7 +442,7 @@ def _render_talks_page(
             login_next += f"?{query}"
         resp = RedirectResponse(
             url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
-            status_code=status.HTTP_302_FOUND,
+            status_code=HTTPStatus.FOUND,
         )
         if request.cookies.get("veditor_api_key"):
             resp.delete_cookie("veditor_api_key")
@@ -453,7 +452,7 @@ def _render_talks_page(
         if sso_user.scope_type == SSOScopeType.TALK:
             return RedirectResponse(
                 url=f"/studio/talks/{sso_user.scope_id}",
-                status_code=status.HTTP_303_SEE_OTHER,
+                status_code=HTTPStatus.SEE_OTHER,
             )
         event_id = sso_user.scope_id
         user_events = list(
@@ -796,13 +795,13 @@ def studio(
         )
         if not raw_sso:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
             )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
             )
         if (
@@ -810,7 +809,7 @@ def studio(
             and sso_payload.scope_id != talk_id
         ):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=HTTPStatus.FORBIDDEN,
                 detail="SSO token is not authorized for this talk",
             )
         if sso_payload.scope_type == SSOScopeType.EVENT:
@@ -819,7 +818,7 @@ def studio(
                 raise HTTPException(status_code=404, detail="Talk not found")
             if talk_obj.event_id != sso_payload.scope_id:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
+                    status_code=HTTPStatus.FORBIDDEN,
                     detail="SSO token is not authorized for this event",
                 )
             if sso_payload.role == AuthRole.SPEAKER and not (
@@ -828,7 +827,7 @@ def studio(
                 and talk_obj.speaker_email.lower() == sso_payload.email.lower()
             ):
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
+                    status_code=HTTPStatus.FORBIDDEN,
                     detail="SSO token is not authorized for this talk",
                 )
 
@@ -838,7 +837,7 @@ def studio(
         cookie_max_age = _get_sso_cookie_max_age(sso_payload)
 
         resp = RedirectResponse(
-            url=f"/studio/talks/{talk_id}", status_code=status.HTTP_303_SEE_OTHER
+            url=f"/studio/talks/{talk_id}", status_code=HTTPStatus.SEE_OTHER
         )
         resp.set_cookie(
             key="veditor_session",
@@ -857,20 +856,20 @@ def studio(
 
     if "api_key" in request.query_params:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Query parameter 'api_key' is not supported. Please provide X-API-Key header or veditor_api_key cookie.",
         )
 
     if request.headers.get("X-API-Key") and client is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key. Please verify your credentials.",
         )
 
     if not user and not sso_user and client is None:
         resp = RedirectResponse(
             url=f"/login?next=/studio/talks/{talk_id}",
-            status_code=status.HTTP_302_FOUND,
+            status_code=HTTPStatus.FOUND,
         )
         if request.cookies.get("veditor_api_key"):
             resp.delete_cookie("veditor_api_key")
@@ -998,7 +997,7 @@ def list_studio_events(
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not authorized to access event management",
         )
 
@@ -1006,7 +1005,7 @@ def list_studio_events(
     if not user:
         return RedirectResponse(
             url="/login?next=/studio/events",
-            status_code=status.HTTP_302_FOUND,
+            status_code=HTTPStatus.FOUND,
         )
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
@@ -1015,7 +1014,7 @@ def list_studio_events(
         )
         resp = RedirectResponse(
             url="/studio",
-            status_code=status.HTTP_302_FOUND,
+            status_code=HTTPStatus.FOUND,
         )
         resp.set_cookie(
             key="flash_error",
@@ -1097,7 +1096,7 @@ def _render_studio_events_page(
     user: models.User,
     db: Session,
     error: str | None = None,
-    status_code: int = status.HTTP_200_OK,
+    status_code: int = HTTPStatus.OK,
 ) -> HTMLResponse:
     events = list(
         db.scalars(
@@ -1139,17 +1138,17 @@ def create_studio_event(
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not authorized to access event management",
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/login", status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
@@ -1160,7 +1159,7 @@ def create_studio_event(
             user,
             db,
             error="Event name is required.",
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     try:
@@ -1182,7 +1181,7 @@ def create_studio_event(
             user,
             db,
             error=str(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     event = models.Event(
@@ -1199,7 +1198,7 @@ def create_studio_event(
 
     return RedirectResponse(
         url="/studio/events",
-        status_code=status.HTTP_303_SEE_OTHER,
+        status_code=HTTPStatus.SEE_OTHER,
     )
 
 
@@ -1217,36 +1216,34 @@ def edit_studio_event(
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not authorized to access event management",
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/login", status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
     event = db.scalar(select(models.Event).where(models.Event.id == event_id))
     if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Event not found")
 
     if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="User is not authorized to edit this event",
         )
 
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Event name cannot be empty",
         )
 
@@ -1265,12 +1262,12 @@ def edit_studio_event(
         event.timezone = _parse_timezone(timezone)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=str(exc),
         ) from exc
 
     db.commit()
-    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/studio/events", status_code=HTTPStatus.SEE_OTHER)
 
 
 @router.post("/events/{event_id}/delete", response_class=HTMLResponse)
@@ -1283,17 +1280,17 @@ def delete_studio_event(
     cookie_token = request.cookies.get("veditor_session")
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not authorized to access event management",
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/login", status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
@@ -1301,13 +1298,11 @@ def delete_studio_event(
         select(models.Event).where(models.Event.id == event_id).with_for_update()
     )
     if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Event not found")
 
     if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="User is not authorized to delete this event",
         )
 
@@ -1322,7 +1317,7 @@ def delete_studio_event(
 
     db.delete(event)
     db.commit()
-    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/studio/events", status_code=HTTPStatus.SEE_OTHER)
 
 
 router.add_api_route(
@@ -1330,7 +1325,7 @@ router.add_api_route(
     attach_room_recording,
     methods=["POST"],
     response_model=schemas.RoomRecordingAttachResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
     include_in_schema=False,
 )
 

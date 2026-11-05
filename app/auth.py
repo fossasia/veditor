@@ -2,19 +2,20 @@ import hashlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import Annotated, Any, Literal
 
-from fastapi import Cookie, Depends, HTTPException, Request, Security, status
+from fastapi import Cookie, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import models
-from app.consts import AuthRole, SSOScopeType
-from app.db import SessionLocal, get_db
-from app.security import (
+from . import models
+from .consts import AuthRole, SSOScopeType
+from .db import SessionLocal, get_db
+from .security import (
     decode_access_token,
     decode_session_token,
     decode_sso_token,
@@ -98,7 +99,7 @@ def lock_active_admins(session: Session) -> list[int]:
     """Locks active administrator rows in ascending ID order and returns their IDs."""
     rows = session.scalars(
         select(models.User.id)
-        .where(models.User.role == "admin", models.User.is_active.is_(True))
+        .where(models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True))
         .order_by(models.User.id.asc())
         .with_for_update()
     ).all()
@@ -112,7 +113,7 @@ def get_client(
     """Dependency that extracts the X-API-Key and resolves it to a Client."""
     if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Missing API Key",
         )
 
@@ -123,7 +124,7 @@ def get_client(
 
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key",
         )
 
@@ -169,7 +170,7 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
         return
     if event_id not in client.event_ids:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Client is not authorized to access this event",
         )
 
@@ -177,7 +178,7 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
 def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
     if not isinstance(raw_key, str) or not raw_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -187,7 +188,7 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
     )
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid API Key",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -265,7 +266,7 @@ def get_current_user(
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired SSO token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
@@ -322,19 +323,19 @@ def get_current_user(
                     )
                 ):
                     raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        status_code=HTTPStatus.UNAUTHORIZED,
                         detail="User account not found or inactive",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
                 return CurrentUser(
                     user_id=user.id,
                     email=user.email,
-                    role=AuthRole(user.role),
+                    role=user.role,
                     source="cookie",
                     event_ids=[],
                 )
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired session token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
@@ -376,13 +377,13 @@ def get_current_user(
                     token = parts[1]
                 else:
                     raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        status_code=HTTPStatus.UNAUTHORIZED,
                         detail="Invalid authorization header format",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
         if not token:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=HTTPStatus.UNAUTHORIZED,
                 detail="Invalid or expired access token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
@@ -399,14 +400,14 @@ def get_current_user(
                 )
             ):
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    status_code=HTTPStatus.UNAUTHORIZED,
                     detail="User account not found or inactive",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             return CurrentUser(
                 user_id=user.id,
                 email=user.email,
-                role=AuthRole(user.role),
+                role=user.role,
                 source="jwt",
                 event_ids=[],
             )
@@ -428,14 +429,14 @@ def get_current_user(
             )
 
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid or expired access token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     # 5. No credentials present
     raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
+        status_code=HTTPStatus.UNAUTHORIZED,
         detail="Not authenticated",
         headers={"WWW-Authenticate": "Bearer"},
     )
@@ -453,7 +454,7 @@ def require_role(min_role: AuthRole) -> Callable[[CurrentUser], CurrentUser]:
     ) -> CurrentUser:
         if user.role.rank < min_role.rank:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=HTTPStatus.FORBIDDEN,
                 detail=f"Operation requires minimum role '{min_role}'",
             )
         return user
@@ -470,7 +471,7 @@ def require_admin(
     """
     if not user.is_human_admin or user.user_id is None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires a human administrator",
         )
     return user
@@ -493,13 +494,13 @@ def check_event_access(
     if user.source == "api_key":
         if not user.has_event_access(event_id):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=HTTPStatus.FORBIDDEN,
                 detail="Client is not authorized to access this event",
             )
         event = db.scalar(select(models.Event).where(models.Event.id == event_id))
         if not event:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail="Event not found",
             )
         return event
@@ -507,7 +508,7 @@ def check_event_access(
     event = db.scalar(select(models.Event).where(models.Event.id == event_id))
     if not event:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Event not found",
         )
 
@@ -515,12 +516,12 @@ def check_event_access(
         if user.scope_type == "event" and user.scope_id == event_id:
             return event
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO session is not authorized to access this event",
         )
 
     # Human administrator: unconditional access
-    if user.role == "admin":
+    if user.role == AuthRole.ADMIN:
         return event
 
     # Event creator: ownership match
@@ -528,7 +529,7 @@ def check_event_access(
         return event
 
     raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
+        status_code=HTTPStatus.FORBIDDEN,
         detail="User is not authorized to access this event",
     )
 
@@ -557,7 +558,7 @@ def check_talk_access(
     )
     if not target_talk:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Talk not found",
         )
 
@@ -565,14 +566,14 @@ def check_talk_access(
         if user.scope_type == "talk":
             if user.scope_id != target_talk.id:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
+                    status_code=HTTPStatus.FORBIDDEN,
                     detail="SSO session is not authorized for this talk",
                 )
             return target_talk
         if user.scope_type == "event":
             if user.scope_id != target_talk.event_id:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
+                    status_code=HTTPStatus.FORBIDDEN,
                     detail="SSO session is not authorized for this event",
                 )
             if (
@@ -591,24 +592,24 @@ def check_talk_access(
                     db.commit()
             elif user.role == AuthRole.SPEAKER:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
+                    status_code=HTTPStatus.FORBIDDEN,
                     detail="SSO speaker session is not authorized for this talk",
                 )
             return target_talk
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Unauthorized SSO scope",
         )
 
     if user.source == "api_key":
         if not user.has_event_access(target_talk.event_id):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=HTTPStatus.FORBIDDEN,
                 detail="Client is not authorized to access this talk",
             )
         return target_talk
 
-    if user.role == "admin":
+    if user.role == AuthRole.ADMIN:
         return target_talk
 
     if (
@@ -634,7 +635,7 @@ def check_talk_access(
         return target_talk
 
     raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
+        status_code=HTTPStatus.FORBIDDEN,
         detail="User is not authorized to access this talk",
     )
 
@@ -667,13 +668,13 @@ def require_event_access(
                     resolved_id = int(raw)
                 except (ValueError, TypeError) as exc:
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
+                        status_code=HTTPStatus.BAD_REQUEST,
                         detail=f"Invalid event ID: {raw}",
                     ) from exc
 
         if resolved_id is None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Event ID could not be resolved from request",
             )
 
@@ -710,13 +711,13 @@ def require_talk_access(
                     resolved_id = int(raw)
                 except (ValueError, TypeError) as exc:
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
+                        status_code=HTTPStatus.BAD_REQUEST,
                         detail=f"Invalid talk ID: {raw}",
                     ) from exc
 
         if resolved_id is None:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Talk ID could not be resolved from request",
             )
 

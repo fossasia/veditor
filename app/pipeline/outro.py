@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.pipeline.intro import (
+from .intro import (
     _get_audio_samples,
     _get_font,
     _render_video_and_audio,

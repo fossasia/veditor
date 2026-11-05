@@ -12,7 +12,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
-from app.config import settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 

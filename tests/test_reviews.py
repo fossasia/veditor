@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.auth import CurrentUser, get_current_user, hash_api_key
-from app.consts import AuthRole, TalkStatus
+from app.consts import AuthRole, JobKind, JobStatus, TalkStatus
 from app.db import SessionLocal
 from app.main import app
 from app.review_handlers import (
@@ -69,7 +69,7 @@ def _create_talk(
         title=title,
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=60.0,
         raw_duration_seconds=120.0,
@@ -514,7 +514,7 @@ def test_append_only_audit_trail_relationship() -> None:
         title="Audit Trail Talk",
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     r1 = models.Review(
         talk_id=talk.id,
@@ -580,7 +580,7 @@ def test_concurrent_reviews_atomic_transition_and_single_review() -> None:
         room="Room Concurrent",
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=60.0,
     )
@@ -1048,11 +1048,11 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
 
     job = db_session.scalar(
         select(models.Job).where(
-            models.Job.talk_id == preview_talk.id, models.Job.kind == "assembly"
+            models.Job.talk_id == preview_talk.id, models.Job.kind == JobKind.ASSEMBLY
         )
     )
     assert job is not None
-    assert job.status == "failed"
+    assert job.status == JobStatus.FAILED
     assert job.log_path == f"{preview_talk.id}/logs/assembly.log"
     assert fake_storage.exists(f"{preview_talk.id}/logs/assembly.log")
     assert (

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.main import app
 
 client = TestClient(app)
@@ -39,7 +40,7 @@ def _create_talk(
         title=title,
         start=now,
         end=now,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -48,9 +49,9 @@ def _create_talk(
 
 
 def _create_job(
-    db_session: Session, talk_id: int, kind: str = "transcode"
+    db_session: Session, talk_id: int, kind: JobKind = JobKind.TRANSCODE
 ) -> models.Job:
-    job = models.Job(talk_id=talk_id, kind=kind, status="pending", log_path=None)
+    job = models.Job(talk_id=talk_id, kind=kind, status=JobStatus.QUEUED, log_path=None)
     db_session.add(job)
     db_session.commit()
     db_session.refresh(job)

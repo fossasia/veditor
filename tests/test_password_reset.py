@@ -13,6 +13,7 @@ from sqlalchemy import delete
 
 from app import models
 from app.config import settings
+from app.consts import AuthRole
 from app.db import SessionLocal
 from app.email import send_password_reset_email
 from app.main import app
@@ -97,7 +98,7 @@ def test_password_reset_token_tampered() -> None:
 
 def test_password_reset_token_rejects_wrong_type() -> None:
     access_token = create_access_token(
-        user_id=42, email="user@example.com", role="user"
+        user_id=42, email="user@example.com", role=AuthRole.USER
     )
     assert decode_password_reset_token(access_token) is None
 
@@ -171,7 +172,7 @@ def test_job_send_password_reset_email() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Password123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -272,7 +273,7 @@ def test_forgot_password_page_redirects_authenticated_user() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Pass123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -307,7 +308,7 @@ def test_forgot_password_anti_enumeration() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Pass123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -319,7 +320,7 @@ def test_forgot_password_anti_enumeration() -> None:
     inactive_user = models.User(
         email=inactive_email,
         hashed_password=hash_password("Pass123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=False,
         is_verified=True,
     )
@@ -390,7 +391,7 @@ def test_forgot_password_retry_consistency_on_enqueue_failure() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("Pass123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -463,7 +464,7 @@ def test_reset_password_scanner_safe_get() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=initial_pwh,
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -510,7 +511,7 @@ def test_reset_password_submit_success_and_single_use() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("OriginalPassword123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -564,7 +565,7 @@ def test_reset_password_validation_errors() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("OldPassword123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -616,7 +617,7 @@ def test_reset_password_verifies_unverified_account() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("OldPassword123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=False,
     )
@@ -654,7 +655,7 @@ def test_reset_password_rejects_deactivated_account() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("OldPassword123!"),
-        role="user",
+        role=AuthRole.USER,
         is_active=True,
         is_verified=True,
     )
@@ -693,7 +694,7 @@ def test_password_reset_revokes_existing_sessions() -> None:
     user = models.User(
         email=unique_email,
         hashed_password=hash_password("OriginalPassword123!"),
-        role="admin",
+        role=AuthRole.ADMIN,
         is_active=True,
         is_verified=True,
     )

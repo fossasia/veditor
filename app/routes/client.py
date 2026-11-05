@@ -1,13 +1,14 @@
 import secrets
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.auth import get_client
-from app.db import get_db
-from app.schemas import WebhookInfoResponse, WebhookRegisterResponse
+from .. import models, schemas
+from ..auth import get_client
+from ..db import get_db
+from ..schemas import WebhookInfoResponse, WebhookRegisterResponse
 
 router = APIRouter(
     tags=["client"],
@@ -17,12 +18,12 @@ router = APIRouter(
 @router.post(
     "/client/webhook",
     response_model=schemas.WebhookRegisterResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 @router.post(
     "/clients/webhook",
     response_model=schemas.WebhookRegisterResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
     include_in_schema=False,
 )
 def register_webhook(
@@ -56,12 +57,12 @@ def register_webhook(
 @router.get(
     "/client/webhook",
     response_model=schemas.WebhookInfoResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 @router.get(
     "/clients/webhook",
     response_model=schemas.WebhookInfoResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
     include_in_schema=False,
 )
 def get_webhook(
@@ -76,11 +77,11 @@ def get_webhook(
 
 @router.delete(
     "/client/webhook",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=HTTPStatus.NO_CONTENT,
 )
 @router.delete(
     "/clients/webhook",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=HTTPStatus.NO_CONTENT,
     include_in_schema=False,
 )
 def delete_webhook(

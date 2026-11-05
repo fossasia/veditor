@@ -6,6 +6,7 @@ import traceback
 import uuid
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import ROUND_CEILING, Decimal
+from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated, Any, TypeIs
 
@@ -20,7 +21,6 @@ from fastapi import (
     Request,
     Response,
     UploadFile,
-    status,
 )
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
@@ -31,8 +31,8 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.auth import (
+from .. import models, schemas
+from ..auth import (
     CurrentUser,
     check_event_access,
     check_talk_access,
@@ -40,9 +40,10 @@ from app.auth import (
     get_current_user,
     require_role,
 )
-from app.config import get_setting, settings
-from app.db import get_db
-from app.ingest import (
+from ..config import get_setting, settings
+from ..consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
+from ..db import get_db
+from ..ingest import (
     IngestPathRejectedError,
     InsufficientStorageError,
     get_bumper_staging_dir,
@@ -51,20 +52,20 @@ from app.ingest import (
     stage_recording,
     validate_media_file,
 )
-from app.models import Talk
-from app.pipeline.detect import container_duration_seconds
-from app.queue import heavy_queue, light_queue
-from app.schemas import (
+from ..models import Talk
+from ..pipeline.detect import container_duration_seconds
+from ..queue import heavy_queue, light_queue
+from ..schemas import (
     JobRead,
     RoomRecordingAttachResponse,
     SSOTokenResponse,
     TalkRead,
     TalkWithJobsRead,
 )
-from app.security import create_sso_token
-from app.states import advance
-from app.storage import StorageBackend, cleanup_intermediates, get_storage_backend
-from app.tasks import (
+from ..security import create_sso_token
+from ..states import advance
+from ..storage import StorageBackend, cleanup_intermediates, get_storage_backend
+from ..tasks import (
     STAGE_CONFIG,
     dispatch_assembly,
     job_cut,
@@ -73,9 +74,7 @@ from app.tasks import (
     job_ingest_room_url,
     job_send_speaker_handoff_email,
 )
-from app.webhook import dispatch_talk_webhook
-
-from ..consts import AuthRole, SSOScopeType, TalkStatus
+from ..webhook import dispatch_talk_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ def _ensure_event_room(db: Session, event_id: int, raw_name: str | None) -> str 
     return new_room.name
 
 
-@router.post("", response_model=schemas.TalkRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.TalkRead, status_code=HTTPStatus.OK)
 def create_or_update_talk(
     payload: schemas.TalkCreate,
     response: Response,
@@ -149,7 +148,7 @@ def create_or_update_talk(
     """
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not permitted to create talks",
         )
     check_event_access(payload.event_id, user, db)
@@ -170,7 +169,7 @@ def create_or_update_talk(
             talk.speaker_email = payload.speaker_email
         db.commit()
         db.refresh(talk)
-        response.status_code = status.HTTP_200_OK
+        response.status_code = HTTPStatus.OK
         return talk
 
     talk = models.Talk(
@@ -186,7 +185,7 @@ def create_or_update_talk(
     try:
         db.commit()
         db.refresh(talk)
-        response.status_code = status.HTTP_201_CREATED
+        response.status_code = HTTPStatus.CREATED
         return talk
     except IntegrityError:
         db.rollback()
@@ -205,7 +204,7 @@ def create_or_update_talk(
             talk.speaker_email = payload.speaker_email
         db.commit()
         db.refresh(talk)
-        response.status_code = status.HTTP_200_OK
+        response.status_code = HTTPStatus.OK
         return talk
 
 
@@ -227,7 +226,7 @@ def get_room_days(
     """Retrieve distinct scheduled days and session counts for a room."""
     if not room or not room.strip():
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Room name is required",
         )
     room = room.strip()
@@ -245,18 +244,18 @@ def get_room_days(
             pass
         elif user.source in ("api_key", "sso"):
             query = query.where(models.Event.id.in_(user.event_ids))
-        elif user.role != "admin":
+        elif user.role != AuthRole.ADMIN:
             query = query.where(models.Event.created_by_user_id == user.user_id)
 
         matching_events = list(db.scalars(query))
         if not matching_events:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=f"No accessible event found with room '{room}'",
             )
         if len(matching_events) > 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail=f"Multiple events found with room '{room}'. Please specify event_id.",
             )
         event_id = matching_events[0].id
@@ -264,7 +263,7 @@ def get_room_days(
     event = db.get(models.Event, event_id)
     if event is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail=f"Event {event_id} not found",
         )
     tz = event.event_tz
@@ -345,9 +344,7 @@ def get_talk(
             talk_filters.append(models.Talk.event_id.in_(user.event_ids))
         talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_talk_access(talk, user, db)
 
     candidate_keys = [
@@ -387,9 +384,7 @@ def get_talk_jobs(
             talk_filters.append(models.Talk.event_id.in_(user.event_ids))
         talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_talk_access(talk, user, db)
     jobs = list(
         db.scalars(
@@ -414,9 +409,9 @@ def get_talk_jobs(
 @router.post(
     "/{talk_id}/recordings",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=HTTPStatus.ACCEPTED,
     responses={
-        status.HTTP_507_INSUFFICIENT_STORAGE: {
+        HTTPStatus.INSUFFICIENT_STORAGE: {
             "description": "Insufficient storage to ingest recording"
         }
     },
@@ -437,14 +432,12 @@ def ingest_recording(
     """
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if talk.status != TalkStatus.WAITING_FILES:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
         )
 
@@ -452,7 +445,7 @@ def ingest_recording(
         raw_key = stage_recording(talk.id, payload, storage)
     except IngestPathRejectedError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except InsufficientStorageError as exc:
@@ -463,7 +456,7 @@ def ingest_recording(
             exc.available_bytes,
         )
         raise HTTPException(
-            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            status_code=HTTPStatus.INSUFFICIENT_STORAGE,
             detail=str(exc),
         ) from exc
 
@@ -477,7 +470,7 @@ def ingest_recording(
         raw_key,
         payload.recording_start,
         is_room_recording=payload.recording_start is not None,
-        job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
     )
 
     return schemas.TalkRead.model_validate(talk)
@@ -486,7 +479,7 @@ def ingest_recording(
 @router.post(
     "/{talk_id}/approve",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def approve_talk(
     talk_id: int,
@@ -506,14 +499,12 @@ def approve_talk(
         select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if talk.status != TalkStatus.PENDING_APPROVAL:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot approve/reject talk in status '{talk.status}'",
         )
 
@@ -551,7 +542,7 @@ RAW_PREVIEW_ALLOWED_STATES = frozenset(
 
 @router.get(
     "/{talk_id}/raw-preview",
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def raw_preview(
     talk_id: int,
@@ -567,21 +558,19 @@ def raw_preview(
     """
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_talk_access(talk, user, db)
 
     if talk.status not in RAW_PREVIEW_ALLOWED_STATES:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Raw preview not available in current state",
         )
 
     raw_keys = storage.list_keys(f"{talk.id}/raw/")
     if not raw_keys:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No raw recording found"
+            status_code=HTTPStatus.NOT_FOUND, detail="No raw recording found"
         )
 
     return {"url": storage.url(raw_keys[0])}
@@ -590,7 +579,7 @@ def raw_preview(
 @router.post(
     "/{talk_id}/cut",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=HTTPStatus.ACCEPTED,
 )
 def submit_cut_bounds(
     talk_id: int,
@@ -609,9 +598,7 @@ def submit_cut_bounds(
         select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     if user.source == "sso" or user.role == AuthRole.SPEAKER:
         check_talk_access(talk, user, db)
     else:
@@ -620,14 +607,14 @@ def submit_cut_bounds(
             and not user.is_machine
         ):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=HTTPStatus.FORBIDDEN,
                 detail="Operation requires minimum role 'organizer'",
             )
         check_event_access(talk.event_id, user, db)
 
     if talk.status not in (TalkStatus.PENDING_BOUNDS, TalkStatus.NEEDS_WORK):
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot submit cut bounds for talk in status '{talk.status}'",
         )
 
@@ -635,7 +622,7 @@ def submit_cut_bounds(
 
     if talk.raw_duration_seconds is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTPStatus.UNPROCESSABLE_CONTENT,
             detail="Talk has no detected raw duration; cannot validate cut bounds",
         )
 
@@ -644,7 +631,7 @@ def submit_cut_bounds(
         or cut_end_s > talk.raw_duration_seconds
     ):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=HTTPStatus.UNPROCESSABLE_CONTENT,
             detail=(
                 f"Cut bounds [{cut_start_s}s, {cut_end_s}s] exceed "
                 f"raw file duration {talk.raw_duration_seconds:.3f}s"
@@ -654,7 +641,7 @@ def submit_cut_bounds(
     raw_keys = storage.list_keys(f"{talk.id}/raw/")
     if not raw_keys:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="No raw recording found for talk",
         )
     raw_key = raw_keys[0]
@@ -678,7 +665,7 @@ def submit_cut_bounds(
         job_cut,
         talk.id,
         raw_key,
-        job_timeout=STAGE_CONFIG["cut"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CUT]["job_timeout"],
     )
 
     return schemas.TalkRead.model_validate(talk)
@@ -686,7 +673,7 @@ def submit_cut_bounds(
 
 @router.post(
     "/{talk_id}/bumpers/upload",
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def upload_bumper_file(
     talk_id: int,
@@ -698,14 +685,12 @@ def upload_bumper_file(
     """Upload a custom bumper and return an opaque key understood by assembly."""
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if kind not in ("intro", "outro"):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Bumper kind must be 'intro' or 'outro'",
         )
 
@@ -730,7 +715,7 @@ def upload_bumper_file(
                 total_bytes += len(chunk)
                 if total_bytes > max_size:
                     raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        status_code=HTTPStatus.CONTENT_TOO_LARGE,
                         detail=f"Bumper file exceeds maximum allowed size of {max_size} bytes",
                     )
                 f_out.write(chunk)
@@ -769,14 +754,14 @@ def _apply_intro_outro_config(
                 # Guaranteed non-empty by IntroOutroRequest.validate_custom_paths;
                 # this guard keeps `path` a `str` for stage_custom_clip.
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Custom {kind} clip path is required",
                 )
             try:
                 stage_custom_clip(talk.id, path, kind, storage)
             except IngestPathRejectedError as exc:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"{kind.title()} clip rejected: {exc}",
                 ) from exc
 
@@ -799,7 +784,7 @@ def _apply_intro_outro_config(
 @router.post(
     "/{talk_id}/handoff",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def handoff_talk(
     talk_id: int,
@@ -816,14 +801,12 @@ def handoff_talk(
         select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if talk.status not in (TalkStatus.PENDING_INTRO_OUTRO, TalkStatus.PENDING_BOUNDS):
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot handoff talk in status '{talk.status}'; talk must be in 'pending_intro_outro' or 'pending_bounds'",
         )
 
@@ -844,12 +827,12 @@ def handoff_talk(
     if talk.status == TalkStatus.PENDING_BOUNDS:
         if is_eventyay:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Handoff email cannot be sent for talks synced from Eventyay (managed via SSO)",
             )
         if not talk.speaker_email:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="speaker_email is required to resend handoff email",
             )
 
@@ -866,7 +849,7 @@ def handoff_talk(
         and now - handed_off_at < timedelta(seconds=60)
     ):
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            status_code=HTTPStatus.TOO_MANY_REQUESTS,
             detail="A handoff email was sent recently; please wait before resending",
         )
 
@@ -895,7 +878,7 @@ def handoff_talk(
 @router.post(
     "/{talk_id}/assemble",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=HTTPStatus.ACCEPTED,
 )
 def configure_assembly(
     talk_id: int,
@@ -918,14 +901,12 @@ def configure_assembly(
         select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if talk.status != TalkStatus.PENDING_INTRO_OUTRO:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot configure intro/outro for talk in status '{talk.status}'; talk must be in 'pending_intro_outro'",
         )
 
@@ -937,7 +918,7 @@ def configure_assembly(
         cut_key = default_cut_key
     else:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="No cut recording found for talk",
         )
 
@@ -963,8 +944,8 @@ def configure_assembly(
             job_log_path = None
         job = models.Job(
             talk_id=talk.id,
-            kind="assembly",
-            status="failed",
+            kind=JobKind.ASSEMBLY,
+            status=JobStatus.FAILED,
             log_path=job_log_path,
         )
         db.add(job)
@@ -1062,7 +1043,7 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
 @router.post(
     "/{talk_id}/abort",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def abort_talk(
     talk_id: int,
@@ -1077,9 +1058,7 @@ def abort_talk(
     """
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     _cancel_talk_jobs(talk.id, storage)
@@ -1126,14 +1105,12 @@ def update_talk(
     """
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not permitted to modify talk metadata",
         )
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
     update_data = payload.model_dump(exclude_unset=True)
 
@@ -1144,7 +1121,7 @@ def update_talk(
         title = (update_data["title"] or "").strip()
         if not title:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Talk title cannot be empty",
             )
         talk.title = title
@@ -1154,12 +1131,12 @@ def update_talk(
 
     if "start" in update_data and update_data["start"] is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Talk start time cannot be empty",
         )
     if "end" in update_data and update_data["end"] is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Talk end time cannot be empty",
         )
 
@@ -1167,7 +1144,7 @@ def update_talk(
     new_end = _normalize_dt(update_data.get("end", talk.end))
     if new_start and new_end and new_end <= new_start:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Talk end time must be after start time",
         )
     if "start" in update_data and new_start is not None:
@@ -1182,14 +1159,14 @@ def update_talk(
     except IntegrityError:
         db.rollback()
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail="A talk with this title and start time already exists for this event",
         )
     db.refresh(talk)
     return talk
 
 
-@router.delete("/{talk_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{talk_id}", status_code=HTTPStatus.OK)
 def delete_talk(
     talk_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
@@ -1202,14 +1179,12 @@ def delete_talk(
     """
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not permitted to delete talks",
         )
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     _cancel_talk_jobs(talk_id, storage)
@@ -1237,7 +1212,7 @@ def bulk_delete_talks(
 
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not permitted to bulk delete talks",
         )
 
@@ -1286,7 +1261,7 @@ def bulk_delete_talks(
 @router.post(
     "/{talk_id}/upload",
     response_model=schemas.TalkRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=HTTPStatus.ACCEPTED,
 )
 async def upload_recording(
     talk_id: int,
@@ -1303,14 +1278,12 @@ async def upload_recording(
         select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
     )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
     check_event_access(talk.event_id, user, db)
 
     if talk.status != TalkStatus.WAITING_FILES:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail=f"Cannot ingest recording for talk in status '{talk.status}'",
         )
 
@@ -1328,7 +1301,7 @@ async def upload_recording(
             talk.id,
             str(staged_path),
             raw_key,
-            job_timeout=STAGE_CONFIG["ingest"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.INGEST]["job_timeout"],
         )
     except Exception:
         # storage-boundary-exempt: upload staging cleanup
@@ -1413,7 +1386,7 @@ async def import_schedule(
     """
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions are not permitted to import schedules",
         )
     data = None
@@ -1423,7 +1396,7 @@ async def import_schedule(
             try:
                 if int(content_len) > MAX_SCHEDULE_IMPORT_SIZE:
                     raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        status_code=HTTPStatus.CONTENT_TOO_LARGE,
                         detail="Schedule file exceeds maximum allowed size (10MB)",
                     )
             except ValueError:
@@ -1433,14 +1406,14 @@ async def import_schedule(
             content.extend(chunk)
             if len(content) > MAX_SCHEDULE_IMPORT_SIZE:
                 raise HTTPException(
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    status_code=HTTPStatus.CONTENT_TOO_LARGE,
                     detail="Schedule file exceeds maximum allowed size (10MB)",
                 )
         try:
             data = json.loads(content.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Invalid JSON schedule file",
             ) from exc
     else:
@@ -1449,7 +1422,7 @@ async def import_schedule(
             try:
                 if int(content_len) > MAX_SCHEDULE_IMPORT_SIZE:
                     raise HTTPException(
-                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        status_code=HTTPStatus.CONTENT_TOO_LARGE,
                         detail="Schedule body exceeds maximum allowed size (10MB)",
                     )
             except ValueError:
@@ -1459,25 +1432,25 @@ async def import_schedule(
             content.extend(chunk)
             if len(content) > MAX_SCHEDULE_IMPORT_SIZE:
                 raise HTTPException(
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    status_code=HTTPStatus.CONTENT_TOO_LARGE,
                     detail="Schedule body exceeds maximum allowed size (10MB)",
                 )
         if not content:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Empty schedule data"
+                status_code=HTTPStatus.BAD_REQUEST, detail="Empty schedule data"
             )
         try:
             body = json.loads(content.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Invalid JSON body",
             ) from exc
         data = body
 
     if not data and not isinstance(data, list):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Empty schedule data"
+            status_code=HTTPStatus.BAD_REQUEST, detail="Empty schedule data"
         )
 
     event_name = "Conference Event"
@@ -1528,7 +1501,7 @@ async def import_schedule(
 
     if not talks_to_create:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="No sessions found to import",
         )
 
@@ -1561,12 +1534,12 @@ async def import_schedule(
                 t_dur_sec = float(t_info["duration_seconds"])
             except ValueError, TypeError:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Invalid duration_seconds for talk '{title}'",
                 )
             if not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Invalid duration_seconds for talk '{title}': must be positive and finite",
                 )
         elif "duration_minutes" in t_info and t_info["duration_minutes"] is not None:
@@ -1574,26 +1547,26 @@ async def import_schedule(
                 t_dur_sec = float(t_info["duration_minutes"]) * 60.0
             except ValueError, TypeError:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Invalid duration_minutes for talk '{title}'",
                 )
             if not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Invalid duration_minutes for talk '{title}': must be positive and finite",
                 )
         elif "duration" in t_info and t_info["duration"] is not None:
             t_dur_sec = _parse_duration_seconds(t_info["duration"])
             if t_dur_sec is None or not math.isfinite(t_dur_sec) or t_dur_sec <= 0:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"Invalid duration for talk '{title}': must be positive and finite",
                 )
 
         if t_start and t_end:
             if t_end <= t_start:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"End time must be after start time for talk '{title}'",
                 )
             start_dt = t_start
@@ -1630,7 +1603,7 @@ async def import_schedule(
 
     if not validated_talks:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="No sessions found to import",
         )
 
@@ -1770,7 +1743,7 @@ async def import_schedule(
             )
         elif len(user.event_ids) > 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Ambiguous event target: machine client has access to multiple events. Please provide an explicit event identifier.",
             )
 
@@ -1881,7 +1854,7 @@ async def import_schedule(
 @router.post(
     "/{talk_identifier}/sso-token",
     response_model=schemas.SSOTokenResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def create_talk_sso_token(
     talk_identifier: str,
@@ -1931,12 +1904,12 @@ def create_talk_sso_token(
         talk = db.scalar(select(models.Talk).where(*talk_filters))
     if not talk:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Talk not found",
         )
     if not client.is_platform and talk.event_id not in (client.event_ids or []):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Client is not authorized to mint an SSO token for this talk",
         )
 
@@ -1977,7 +1950,7 @@ def create_talk_sso_token(
 @router.post(
     "/room/attach-recording",
     response_model=schemas.RoomRecordingAttachResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 async def attach_room_recording(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
@@ -1999,7 +1972,7 @@ async def attach_room_recording(
     """
     if not room.strip():
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Room name is required",
         )
     room = room.strip()
@@ -2024,12 +1997,12 @@ async def attach_room_recording(
         matching_events = list(db.scalars(stmt))
         if not matching_events:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=f"No accessible event found with room '{room}'",
             )
         if len(matching_events) > 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail=f"Multiple events found with room '{room}'. Please specify event_id.",
             )
         event_id = matching_events[0].id
@@ -2038,7 +2011,7 @@ async def attach_room_recording(
     event = db.get(models.Event, event_id)
     if event is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail=f"Event {event_id} not found",
         )
     tz = event.event_tz
@@ -2052,7 +2025,7 @@ async def attach_room_recording(
     )
     if not all_room_talks:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail=f"No talks found in room '{room}' for event {event_id}",
         )
 
@@ -2075,17 +2048,17 @@ async def attach_room_recording(
             ]
             if not day_talks:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=HTTPStatus.NOT_FOUND,
                     detail=f"No talks found in room '{room}' on {target_date.isoformat()}",
                 )
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=HTTPStatus.CONFLICT,
                 detail=f"No talks in room '{room}' on {target_date.isoformat()} are currently waiting for files (sessions may already be in review or published)",
             )
     else:
         if len(distinct_days) > 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail=f"Room '{room}' spans {len(distinct_days)} days ({distinct_days[0].isoformat()} to {distinct_days[-1].isoformat()}). Please specify a target day to attach recording.",
             )
         eligible_talks = [
@@ -2100,7 +2073,7 @@ async def attach_room_recording(
         ]
         if not eligible_talks:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=HTTPStatus.CONFLICT,
                 detail=f"No talks in room '{room}' are currently waiting for files (sessions may already be in review or published)",
             )
 
@@ -2112,12 +2085,12 @@ async def attach_room_recording(
     sources_count = sum([has_file, has_url, has_path])
     if sources_count == 0:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Either video_url, a video file upload, or relative_key/source_path must be provided",
         )
     if sources_count > 1:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Provide only one recording source (video_url, video file upload, or relative_key/source_path)",
         )
 
@@ -2125,7 +2098,7 @@ async def attach_room_recording(
         clean_url = str(video_url).strip()
         if not clean_url.startswith(("http://", "https://")):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="video_url must start with http:// or https://",
             )
 
@@ -2158,7 +2131,7 @@ async def attach_room_recording(
                 talk.status = prev_statuses.get(talk.id, TalkStatus.WAITING_FILES)
             db.commit()
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
                 detail="Background ingest queue is temporarily unavailable",
             ) from exc
 
@@ -2205,14 +2178,14 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Uploaded file is empty",
             )
     elif relative_key or source_path:
         target_path_str = source_path or relative_key
         if not target_path_str or "\x00" in target_path_str:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Invalid path string",
             )
         roots = [Path(r).resolve() for r in settings.ingest_roots]
@@ -2221,7 +2194,7 @@ async def attach_room_recording(
         if source_path:
             if not target_path.is_absolute():
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail="source_path must be absolute",
                 )
             try:
@@ -2235,7 +2208,7 @@ async def attach_room_recording(
         else:
             if target_path.is_absolute():
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail="relative_key must be relative",
                 )
             for root in roots:
@@ -2249,13 +2222,13 @@ async def attach_room_recording(
 
         if not resolved_path or not resolved_path.is_file():
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail="Ingest file not found or path rejected outside ingest roots",
             )
         staged_path = resolved_path
     else:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Either a video file upload or relative_key/source_path must be provided",
         )
 
@@ -2279,7 +2252,7 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:
@@ -2287,7 +2260,7 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=f"Failed to inspect media file: {exc}",
         ) from exc
 
@@ -2296,7 +2269,7 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Could not determine video duration from file",
         )
 
@@ -2313,7 +2286,7 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            status_code=HTTPStatus.INSUFFICIENT_STORAGE,
             detail=f"Insufficient storage: required {required_bytes} bytes, but only {available_bytes} bytes available",
         )
 
@@ -2333,7 +2306,7 @@ async def attach_room_recording(
                 for t in eligible_talks
             ):
                 rec_start = parsed_dt
-        except (ValueError, TypeError):  # fmt: skip
+        except ValueError, TypeError:
             pass
 
     if rec_start is None:
@@ -2358,7 +2331,7 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=f"No scheduled talks in room '{room}' match recording window ({rec_start} to {rec_end})",
         )
 
@@ -2454,7 +2427,7 @@ async def attach_room_recording(
                 rec_start,
                 tolerance_seconds=float("inf"),
                 is_room_recording=True,
-                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                job_timeout=STAGE_CONFIG[JobKind.DETECT]["job_timeout"],
             )
         except (OSError, RedisError, RuntimeError) as exc:
             for failed_tid in talk_ids[index:]:
@@ -2464,7 +2437,7 @@ async def attach_room_recording(
             db.commit()
             logger.exception("Failed to enqueue detection jobs")
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
                 detail="Detection queue is unavailable",
             ) from exc
 
