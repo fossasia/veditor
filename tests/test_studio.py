@@ -3,6 +3,7 @@ import re
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
+from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -2957,9 +2958,9 @@ def test_attach_room_recording_from_ingest_roots(
     with patch("app.routes.talks.light_queue"):
         res = client.post(
             "/talks/room/attach-recording",
-            json={
+            data={
                 "room": "Hall B",
-                "event_id": event.id,
+                "event_id": str(event.id),
                 "relative_key": clip.name,
             },
             headers={"X-API-Key": api_key},
@@ -3590,12 +3591,12 @@ def test_attach_room_recording_with_video_url(
     db_session.commit()
 
     with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
-        # 1. Test JSON payload
+        # 1. Test video_url ingest
         res = client.post(
             "/talks/room/attach-recording",
-            json={
+            data={
                 "room": "Auditorium Stream",
-                "event_id": event.id,
+                "event_id": str(event.id),
                 "video_url": "https://example.com/recordings/livestream123.mp4",
             },
             headers={"X-API-Key": api_key},
@@ -3700,9 +3701,9 @@ def test_attach_room_recording_url_and_source_validations(
     # 1. Invalid URL scheme
     res = client.post(
         "/talks/room/attach-recording",
-        json={
+        data={
             "room": "Val Room",
-            "event_id": event.id,
+            "event_id": str(event.id),
             "video_url": "ftp://bad-scheme.com/video.mp4",
         },
         headers={"X-API-Key": api_key},
@@ -3713,9 +3714,9 @@ def test_attach_room_recording_url_and_source_validations(
     # 2. No source provided
     res = client.post(
         "/talks/room/attach-recording",
-        json={
+        data={
             "room": "Val Room",
-            "event_id": event.id,
+            "event_id": str(event.id),
         },
         headers={"X-API-Key": api_key},
     )
@@ -4128,32 +4129,30 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         assert t2_d1.status == TalkStatus.DETECTING
         assert t3_d2.status == TalkStatus.WAITING_FILES
 
-    # 4. Attaching with invalid JSON target_date returns 400
-    res_invalid_json_date = client.post(
+    # 4. Attaching with invalid target_date is rejected by request validation
+    res_invalid_date = client.post(
         "/talks/room/attach-recording",
-        json={
+        data={
             "room": "Auditorium A",
-            "event_id": event.id,
+            "event_id": str(event.id),
             "video_url": "https://example.com/day1.mp4",
             "target_date": "not-a-valid-date",
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={"X-API-Key": api_key},
     )
-    assert res_invalid_json_date.status_code == 400
-    assert "Invalid target_date format" in res_invalid_json_date.json()["detail"]
+    assert res_invalid_date.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
-    res_non_string_json_date = client.post(
+    res_non_string_date = client.post(
         "/talks/room/attach-recording",
-        json={
+        data={
             "room": "Auditorium A",
-            "event_id": event.id,
+            "event_id": str(event.id),
             "video_url": "https://example.com/day1.mp4",
-            "target_date": 12345,
+            "target_date": "12345",
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={"X-API-Key": api_key},
     )
-    assert res_non_string_json_date.status_code == 400
-    assert "Invalid target_date format" in res_non_string_json_date.json()["detail"]
+    assert res_non_string_date.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
 def test_room_days_day_numbering_relative_to_event_start(
