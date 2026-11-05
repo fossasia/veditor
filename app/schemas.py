@@ -15,8 +15,8 @@ from pydantic import (
     model_validator,
 )
 
-from app.consts import AuthRole, SSOScopeType
-from app.retention import validate_retention_overrides
+from .consts import AuthRole, SSOScopeType, TalkStatus
+from .retention import validate_retention_overrides
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
@@ -216,7 +216,7 @@ class TalkBase(BaseModel):
     room: str | None = None
     start: datetime
     end: datetime
-    status: str = "waiting_for_files"
+    status: str = TalkStatus.WAITING_FILES
     speaker_email: str | None = None
     external_id: str | None = None
 

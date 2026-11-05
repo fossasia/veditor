@@ -18,7 +18,7 @@ from app.config import (
     get_setting,
     settings,
 )
-from app.consts import TalkStatus
+from app.consts import JobKind, TalkStatus
 from app.db import Base
 from app.pipeline.detect import DetectResult
 from app.routes.admin import _get_all_settings_data, _validate_system_setting
@@ -280,9 +280,9 @@ def test_pipeline_job_detect_dynamic_tolerance() -> None:
         title="Dynamic Settings Talk",
         start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-        status="detecting",
+        status=TalkStatus.DETECTING,
     )
-    job = models.Job(id=101, talk_id=999, kind="detect", status="running")
+    job = models.Job(id=101, talk_id=999, kind=JobKind.DETECT, status="running")
 
     mock_detect = MagicMock(
         return_value=DetectResult(
@@ -330,9 +330,9 @@ def test_pipeline_job_loudness_dynamic_lufs() -> None:
         title="Dynamic Loudness Talk",
         start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-        status="assembling",
+        status=TalkStatus.ASSEMBLING,
     )
-    job = models.Job(id=102, talk_id=999, kind="loudness", status="running")
+    job = models.Job(id=102, talk_id=999, kind=JobKind.LOUDNESS, status="running")
 
     mock_normalize = MagicMock()
     mock_storage = MagicMock()
@@ -373,9 +373,9 @@ def test_pipeline_job_preview_dynamic_preset() -> None:
         title="Dynamic Preview Talk",
         start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-        status="generating_previews",
+        status=TalkStatus.GENERATING_PREVIEWS,
     )
-    job = models.Job(id=103, talk_id=999, kind="preview", status="running")
+    job = models.Job(id=103, talk_id=999, kind=JobKind.PREVIEW, status="running")
 
     mock_preview = MagicMock()
     mock_storage = MagicMock()
@@ -429,9 +429,9 @@ def test_pipeline_job_transcode_dynamic_preset() -> None:
         title="Dynamic Transcode Talk",
         start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
     )
-    job = models.Job(id=104, talk_id=999, kind="transcode", status="running")
+    job = models.Job(id=104, talk_id=999, kind=JobKind.TRANSCODE, status="running")
 
     mock_transcode = MagicMock()
     mock_storage = MagicMock()

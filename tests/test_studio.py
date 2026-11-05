@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import CurrentUser, check_talk_access, get_current_user, hash_api_key
 from app.config import settings
-from app.consts import AuthRole, TalkStatus
+from app.consts import AuthRole, JobKind, TalkStatus
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -121,7 +121,7 @@ def test_dashboard_page(client: TestClient, db_session: Session) -> None:
         room="Auditorium",
         start=now,
         end=now + timedelta(minutes=45),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     api_key = f"key_{uuid.uuid4().hex}"
@@ -150,7 +150,7 @@ def test_talk_studio_page(client: TestClient, db_session: Session) -> None:
         room="Room 101",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -222,7 +222,7 @@ def test_talk_studio_human_session_user_access(
         room="Main Hall",
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -314,7 +314,7 @@ def test_media_serving(
         room="Hall 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -394,7 +394,7 @@ def test_talk_waveform_endpoint(
         room="Auditorium",
         start=datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 1, 11, 0, tzinfo=UTC),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         event_id=event.id,
     )
     db_session.add(talk)
@@ -485,7 +485,7 @@ def test_talk_patch_metadata(client: TestClient, db_session: Session) -> None:
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -521,7 +521,7 @@ def test_talk_delete_single(client: TestClient, db_session: Session) -> None:
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -558,7 +558,7 @@ def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -566,7 +566,7 @@ def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
         room="Room B",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk1)
     db_session.add(talk2)
@@ -606,7 +606,7 @@ def test_talk_upload_recording(
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -682,7 +682,7 @@ def test_talk_upload_recording_with_ingest_roots(
         room="Room B",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -773,7 +773,7 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
         room="Hall 3",
         start=now,
         end=now + timedelta(minutes=30),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
     )
     db_session.add(talk)
     db_session.commit()
@@ -781,7 +781,7 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
+        kind=JobKind.TRANSCODE,
         status="running",
         progress_pct=60.0,
         started_at=now - timedelta(seconds=15),
@@ -837,7 +837,7 @@ def test_dashboard_and_studio_render_active_job_progress(
         room="Auditorium C",
         start=now,
         end=now + timedelta(minutes=45),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
     )
     db_session.add(talk)
     db_session.commit()
@@ -850,7 +850,7 @@ def test_dashboard_and_studio_render_active_job_progress(
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
+        kind=JobKind.TRANSCODE,
         status="running",
         progress_pct=72.0,
         started_at=now - timedelta(seconds=30),
@@ -901,7 +901,7 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
         room="Room 101",
         start=now,
         end=now + timedelta(minutes=30),
-        status="cutting",
+        status=TalkStatus.CUTTING,
     )
     db_session.add(talk_cut)
     db_session.commit()
@@ -909,7 +909,7 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
 
     job_cut = models.Job(
         talk_id=talk_cut.id,
-        kind="cut",
+        kind=JobKind.CUT,
         status="running",
         progress_pct=45.0,
         started_at=now - timedelta(seconds=10),
@@ -945,7 +945,7 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
         room="Room 102",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk_preview)
     db_session.commit()
@@ -1034,7 +1034,7 @@ def test_ui_reject_talk_cleans_up_intermediates(
         room="Hall A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1085,7 +1085,7 @@ def test_ui_reject_talk_storage_delete_resilient(
         room="Hall A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1129,7 +1129,7 @@ def test_update_talk_validations(client: TestClient, db_session: Session) -> Non
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1325,7 +1325,7 @@ def test_delete_talk_propagates_storage_error(
         room="Hall 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1388,7 +1388,7 @@ def test_studio_mode_body_class(client: TestClient, db_session: Session) -> None
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1452,7 +1452,7 @@ def test_studio_waiting_for_files_no_duplicate_upload(
     talk = models.Talk(
         event_id=event.id,
         title="Upload Waiting Talk",
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1484,7 +1484,7 @@ def test_studio_pending_approval_clean_gate1(
     talk = models.Talk(
         event_id=event.id,
         title="Gate 1 Talk",
-        status="pending_approval",
+        status=TalkStatus.PENDING_APPROVAL,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1517,7 +1517,7 @@ def test_studio_review_notes_present_for_preview(
     talk = models.Talk(
         event_id=event.id,
         title="Preview Notes Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1587,7 +1587,7 @@ def test_studio_milestones_role_visibility(
     talk = models.Talk(
         event_id=event.id,
         title="Milestone Visibility Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1671,7 +1671,7 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     talk = models.Talk(
         event_id=event.id,
         title="Bumper Studio Talk",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
         start=now,
         end=now + timedelta(minutes=30),
         include_intro=True,
@@ -1738,7 +1738,7 @@ def test_studio_minimizable_sidebar_controls(
     talk = models.Talk(
         event_id=event.id,
         title="Sidebar Toggle Talk",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1774,7 +1774,7 @@ def test_studio_done_talk_download_actions(
     talk = models.Talk(
         event_id=event.id,
         title="Published Keynote Talk",
-        status="done",
+        status=TalkStatus.DONE,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1833,7 +1833,7 @@ def test_studio_speaker_timeline_omits_bumpers(
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1880,7 +1880,7 @@ def test_studio_organizer_timeline_omits_bumpers(
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1925,7 +1925,7 @@ def test_studio_upload_pending_state_hides_timeline(
         room="Hall 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     # 2. Talk in preview state (video available)
     ready_talk = models.Talk(
@@ -1934,7 +1934,7 @@ def test_studio_upload_pending_state_hides_timeline(
         room="Hall 2",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(pending_talk)
     db_session.add(ready_talk)
@@ -1984,7 +1984,7 @@ def test_studio_upload_pending_state_hides_timeline(
         room="Hall 3",
         start=now,
         end=now + timedelta(minutes=30),
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
     db_session.add(bounds_talk)
     db_session.commit()
@@ -2023,7 +2023,7 @@ def test_talk_studio_offset_aware_start_normalizes_to_utc(
         room="Hall A",
         start=start_ist,
         end=end_ist,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -2058,7 +2058,7 @@ def test_talk_studio_duration_with_seconds_remainder(
         room="Hall B",
         start=now,
         end=now + timedelta(seconds=90),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -2121,7 +2121,7 @@ def test_talk_studio_media_source_selector_and_download(
         room="Hall C",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -2191,7 +2191,7 @@ def test_talk_studio_speaker_mode_body_class(
         room="Hall D",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -2278,7 +2278,7 @@ def test_talk_studio_speaker_preview_quality_notice(
         room="Hall P",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         speaker_email="speaker@domain.com",
     )
     db_session.add(talk)
@@ -2341,7 +2341,7 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
         room="Hall D",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="speaker_dash@domain.com",
     )
     db_session.add(talk)
@@ -2422,7 +2422,7 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
         room="Main Hall",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=20.0,
     )
@@ -2485,7 +2485,7 @@ def test_dashboard_speaker_email_case_insensitivity(
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="SPEAKER.CASE@EXAMPLE.COM",
     )
     talk2 = models.Talk(
@@ -2494,7 +2494,7 @@ def test_dashboard_speaker_email_case_insensitivity(
         room="Room 2",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="speaker.case@example.com",
     )
     talk_other = models.Talk(
@@ -2503,7 +2503,7 @@ def test_dashboard_speaker_email_case_insensitivity(
         room="Room 3",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="someone.else@example.com",
     )
     db_session.add(talk1)
@@ -2568,7 +2568,7 @@ def test_talk_jobs_log_path_gated_for_speakers(
         room="Hall Security",
         start=now,
         end=now + timedelta(minutes=30),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
         speaker_email="SPEAKER.DEV@EXAMPLE.COM",
     )
     db_session.add(talk)
@@ -2577,7 +2577,7 @@ def test_talk_jobs_log_path_gated_for_speakers(
     log_key = f"{talk.id}/logs/job_sensitive.log"
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
+        kind=JobKind.TRANSCODE,
         status="running",
         progress_pct=45.0,
         log_path=log_key,
@@ -2644,7 +2644,7 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
         room="Hall 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="speaker.auth@example.com",
     )
     other_talk = models.Talk(
@@ -2653,7 +2653,7 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
         room="Hall 2",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         speaker_email="someone.else@example.com",
     )
     db_session.add(my_talk)
@@ -2729,7 +2729,7 @@ def test_attach_room_recording_multi_talk(
         room="Main Auditorium",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -2737,7 +2737,7 @@ def test_attach_room_recording_multi_talk(
         room="Main Auditorium",
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk3 = models.Talk(
         event_id=event.id,
@@ -2745,7 +2745,7 @@ def test_attach_room_recording_multi_talk(
         room="Main Auditorium",
         start=now + timedelta(minutes=60),
         end=now + timedelta(minutes=90),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_other = models.Talk(
         event_id=event.id,
@@ -2753,7 +2753,7 @@ def test_attach_room_recording_multi_talk(
         room="Room B",
         start=now,
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     for t in [talk1, talk2, talk3, talk_other]:
         db_session.add(t)
@@ -2833,7 +2833,7 @@ def test_attach_room_recording_with_recording_start_filter(
         room="Track 1",
         start=day_start,
         end=day_start + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_afternoon = models.Talk(
         event_id=event.id,
@@ -2841,7 +2841,7 @@ def test_attach_room_recording_with_recording_start_filter(
         room="Track 1",
         start=day_start + timedelta(hours=5),
         end=day_start + timedelta(hours=5, minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk_morning)
     db_session.add(talk_afternoon)
@@ -2898,7 +2898,7 @@ def test_attach_room_recording_no_waiting_talks_conflict(
         room="Track A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="done",
+        status=TalkStatus.DONE,
     )
     db_session.add(talk)
     db_session.commit()
@@ -2950,7 +2950,7 @@ def test_attach_room_recording_from_ingest_roots(
         room="Hall B",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3006,7 +3006,7 @@ def test_attach_room_recording_studio_alias(
         room="Hall C",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3076,7 +3076,7 @@ def test_attach_room_recording_sso_discovery_without_event_id(
         room="Hall SSO",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3125,7 +3125,7 @@ def test_attach_room_recording_staging_failure_cleans_up(
         room="Rollback Room",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t2 = models.Talk(
         event_id=event.id,
@@ -3133,7 +3133,7 @@ def test_attach_room_recording_staging_failure_cleans_up(
         room="Rollback Room",
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.add(t2)
@@ -3192,7 +3192,7 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
         room="Hall Platform",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3244,7 +3244,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
         room="Restore Room",
         start=now,
         end=now + timedelta(minutes=30),
-        status="detecting",
+        status=TalkStatus.DETECTING,
     )
     t2 = models.Talk(
         event_id=event.id,
@@ -3252,7 +3252,7 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
         room="Restore Room",
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.add(t2)
@@ -3323,7 +3323,7 @@ def test_attach_room_recording_talk_starts_before_recording(
         room="Auditorium C",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3382,7 +3382,7 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
         room="Room Window",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_day2 = models.Talk(
         event_id=event.id,
@@ -3390,7 +3390,7 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
         room="Room Window",
         start=now + timedelta(days=1),
         end=now + timedelta(days=1, minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk_day1)
     db_session.add(talk_day2)
@@ -3448,7 +3448,7 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
         room="Hall Fail",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3501,7 +3501,7 @@ def test_sso_organizer_management_controls_visible(
         event_id=event.id,
         title="Keynote Session",
         speaker_email="speaker.sso@example.com",
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         room="Auditorium A",
         start=now_utc,
         end=now_utc + timedelta(minutes=30),
@@ -3571,7 +3571,7 @@ def test_attach_room_recording_with_video_url(
         room="Auditorium Stream",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -3579,7 +3579,7 @@ def test_attach_room_recording_with_video_url(
         room="Auditorium Stream",
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk1)
     db_session.add(talk2)
@@ -3640,7 +3640,7 @@ def test_attach_room_recording_with_video_url_multipart(
         room="Auditorium Stream MP",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3688,7 +3688,7 @@ def test_attach_room_recording_url_and_source_validations(
         room="Val Room",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3772,7 +3772,7 @@ def test_talk_studio_organizer_request_prompt(
         room="Room B",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3821,7 +3821,7 @@ def test_talk_studio_organizer_request_prompt(
         room="Main",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk_org)
     db_session.commit()
@@ -3953,7 +3953,7 @@ def test_studio_handoff_utc_format_and_cooldown_attr(
     talk = models.Talk(
         event_id=event.id,
         title="Timezone Talk",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         speaker_email="speaker@example.com",
         handed_off_at=handoff_time,
         start=now,
@@ -3986,7 +3986,7 @@ def test_sso_speaker_view_derived_from_email_match(
     talk = models.Talk(
         event_id=event.id,
         title="SSO Speaker Talk",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         speaker_email="assigned_sso_speaker@example.com",
         start=now,
         end=now,
@@ -4047,7 +4047,7 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         room="Auditorium A",
         start=day1_start,
         end=day1_start + timedelta(hours=1),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t2_d1 = models.Talk(
         event_id=event.id,
@@ -4055,7 +4055,7 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         room="Auditorium A",
         start=day1_start + timedelta(hours=2),
         end=day1_start + timedelta(hours=3),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t3_d2 = models.Talk(
         event_id=event.id,
@@ -4063,7 +4063,7 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         room="Auditorium A",
         start=day2_start,
         end=day2_start + timedelta(hours=1),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     for t in [t1_d1, t2_d1, t3_d2]:
         db_session.add(t)
@@ -4174,7 +4174,7 @@ def test_room_days_day_numbering_relative_to_event_start(
         room="Hall B",
         start=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t_day3 = models.Talk(
         event_id=event.id,
@@ -4182,7 +4182,7 @@ def test_room_days_day_numbering_relative_to_event_start(
         room="Hall B",
         start=datetime(2026, 10, 26, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 26, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([t_day2, t_day3])
     db_session.commit()
@@ -4221,7 +4221,7 @@ def test_room_days_without_event_start_date(
         room="Hall C",
         start=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.commit()
@@ -4262,7 +4262,7 @@ def test_room_days_and_attachment_with_event_timezone(
         room="Room Tokyo",
         start=datetime(2026, 10, 25, 22, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 23, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t_tokyo)
     db_session.commit()

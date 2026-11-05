@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
+from app.consts import TalkStatus
 from app.main import app
 from app.security import create_session_token
 
@@ -297,7 +298,7 @@ def test_talk_sso_token_via_external_id_with_platform_client(
         room="Hall 1",
         start=now,
         end=now + timedelta(hours=1),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -333,7 +334,7 @@ def test_get_talk_by_external_id(
         room="Room 42",
         start=now,
         end=now + timedelta(minutes=45),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -408,7 +409,7 @@ def test_talk_composite_external_id_scoping_per_event(db_session: Session) -> No
         title="Keynote A",
         event_id=e1.id,
         external_id="SHARED-TALK",
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         start=now,
         end=now + timedelta(hours=1),
     )
@@ -416,7 +417,7 @@ def test_talk_composite_external_id_scoping_per_event(db_session: Session) -> No
         title="Keynote B",
         event_id=e2.id,
         external_id="SHARED-TALK",
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
         start=now,
         end=now + timedelta(hours=1),
     )

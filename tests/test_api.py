@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key
 from app.config import settings
-from app.consts import TalkStatus
+from app.consts import JobKind, TalkStatus
 from app.db import get_db
 from app.ingest import InsufficientStorageError
 from app.main import app
@@ -550,7 +550,7 @@ def test_abort_talk_success(db_session: Session) -> None:
         cut_end=1800.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
-    db_session.add(models.Job(talk_id=talk.id, kind="cut", status="running"))
+    db_session.add(models.Job(talk_id=talk.id, kind=JobKind.CUT, status="running"))
     db_session.add(models.Review(talk_id=talk.id, decision="cut"))
     db_session.commit()
 
@@ -786,7 +786,7 @@ def test_lifecycle_full_ingest_to_done(
         assert reloaded.status == TalkStatus.PENDING_APPROVAL
         assert reloaded.raw_duration_seconds == 3600.0
         assert any(
-            j.kind == "detect" and j.status == "done"
+            j.kind == JobKind.DETECT and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
 
@@ -834,7 +834,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.GENERATING_PREVIEWS
         assert any(
-            j.kind == "cut" and j.status == "done"
+            j.kind == JobKind.CUT and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -846,7 +846,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.PREVIEW
         assert any(
-            j.kind == "preview" and j.status == "done"
+            j.kind == JobKind.PREVIEW and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
 
@@ -867,7 +867,7 @@ def test_lifecycle_full_ingest_to_done(
         mock_light_queue.reset_mock()
         job_intro(talk.id, cut_key, f"{talk.id}/intro/intro.mp4")
         assert any(
-            j.kind == "intro" and j.status == "done"
+            j.kind == JobKind.INTRO and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -884,7 +884,7 @@ def test_lifecycle_full_ingest_to_done(
             concat_key=f"{talk.id}/assemble/assemble.mp4",
         )
         assert any(
-            j.kind == "concat" and j.status == "done"
+            j.kind == JobKind.CONCAT and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -902,7 +902,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.TRANSCODING
         assert any(
-            j.kind == "loudness" and j.status == "done"
+            j.kind == JobKind.LOUDNESS and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_heavy_queue.enqueue.assert_called_once()
@@ -920,7 +920,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.UPLOADING
         assert any(
-            j.kind == "transcode" and j.status == "done"
+            j.kind == JobKind.TRANSCODE and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -933,7 +933,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.DONE
         assert any(
-            j.kind == "publish" and j.status == "done"
+            j.kind == JobKind.PUBLISH and j.status == "done"
             for j in _talk_jobs(db_session, talk.id)
         )
 
@@ -971,7 +971,7 @@ def test_cross_tenant_event_scoping_isolation(db_session: Session) -> None:
     event2 = _create_event(db_session, "Tenant B Event")
 
     talk = _create_talk(db_session, event1.id, title="Tenant A Talk")
-    job = models.Job(talk_id=talk.id, kind="detect", status="done")
+    job = models.Job(talk_id=talk.id, kind=JobKind.DETECT, status="done")
     db_session.add(job)
     db_session.commit()
 
@@ -1475,7 +1475,7 @@ def test_job_progress_tracking_transcode_polling(db_session: Session) -> None:
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
+        kind=JobKind.TRANSCODE,
         status="running",
         progress_pct=25.0,
         started_at=now - timedelta(seconds=10),

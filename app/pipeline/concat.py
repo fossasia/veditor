@@ -17,7 +17,7 @@ from typing import Any
 import av
 import numpy as np
 
-from app.storage import LocalDiskBackend, StorageBackend
+from ..storage import LocalDiskBackend, StorageBackend
 
 logger = logging.getLogger(__name__)
 

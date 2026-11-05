@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import hash_api_key
-from app.consts import TalkStatus
+from app.consts import JobKind, TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
@@ -428,13 +428,13 @@ def test_delete_studio_event_teardown_and_failure_resilience(
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    job = models.Job(talk_id=talk.id, kind="transcode", status="queued")
+    job = models.Job(talk_id=talk.id, kind=JobKind.TRANSCODE, status="queued")
     review = models.Review(talk_id=talk.id, user_id=org.id, decision="approve")
     db_session.add_all([job, review])
     db_session.commit()
@@ -516,7 +516,7 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
         room="Room 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -524,16 +524,16 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
         room="Room 2",
         start=now + timedelta(hours=1),
         end=now + timedelta(hours=1, minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add_all([talk1, talk2])
     db_session.commit()
     db_session.refresh(talk1)
     db_session.refresh(talk2)
 
-    job1 = models.Job(talk_id=talk1.id, kind="transcode", status="queued")
+    job1 = models.Job(talk_id=talk1.id, kind=JobKind.TRANSCODE, status="queued")
     review1 = models.Review(talk_id=talk1.id, user_id=org.id, decision="approve")
-    job2 = models.Job(talk_id=talk2.id, kind="transcode", status="queued")
+    job2 = models.Job(talk_id=talk2.id, kind=JobKind.TRANSCODE, status="queued")
     review2 = models.Review(talk_id=talk2.id, user_id=org.id, decision="approve")
     db_session.add_all([job1, review1, job2, review2])
     db_session.commit()
@@ -646,7 +646,7 @@ def test_dashboard_talks_scoped_to_organizers_events(
         room="Hall 1",
         start=now,
         end=now + timedelta(minutes=45),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event2.id,
@@ -654,7 +654,7 @@ def test_dashboard_talks_scoped_to_organizers_events(
         room="Hall 2",
         start=now,
         end=now + timedelta(minutes=45),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([talk1, talk2])
     db_session.commit()
@@ -937,7 +937,7 @@ def _seed_room_talks(
             room=room,
             start=now + timedelta(hours=offset),
             end=now + timedelta(hours=offset, minutes=30),
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
 
     talks = {
@@ -1061,7 +1061,7 @@ def test_event_page_shows_event_title_header(
             room="Main Stage",
             start=datetime.now(tz=UTC),
             end=datetime.now(tz=UTC) + timedelta(minutes=30),
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
     )
     db_session.commit()
@@ -1140,7 +1140,7 @@ def test_event_slug_resolves_within_callers_own_events(
             room="Main Stage",
             start=datetime.now(tz=UTC),
             end=datetime.now(tz=UTC) + timedelta(minutes=30),
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
     )
     event.source = "eventyay"
@@ -1345,7 +1345,7 @@ def _seed_delimiter_rooms(db_session: Session, event: models.Event) -> None:
                 room=room,
                 start=datetime.now(tz=UTC),
                 end=datetime.now(tz=UTC) + timedelta(minutes=30),
-                status="waiting_for_files",
+                status=TalkStatus.WAITING_FILES,
             )
         )
     db_session.commit()
@@ -1445,7 +1445,7 @@ def test_event_page_room_list_is_scoped_to_event(
             room="Annex Hall",
             start=datetime.now(tz=UTC),
             end=datetime.now(tz=UTC) + timedelta(minutes=30),
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
     )
     db_session.commit()

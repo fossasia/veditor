@@ -32,29 +32,30 @@ import av
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 
-from app import email as app_email
-from app.config import PREVIEW_PRESETS, get_setting, settings
-from app.db import new_session
-from app.ingest import (
+from . import email as app_email
+from .config import PREVIEW_PRESETS, get_setting, settings
+from .consts import JobKind, TalkStatus
+from .db import new_session
+from .ingest import (
     InsufficientStorageError,
     download_media_url,
     get_upload_staging_dir,
     validate_media_file,
 )
-from app.models import Event, Job, Talk, User
-from app.pipeline.concat import concat
-from app.pipeline.cut import CutStrategy, cut
-from app.pipeline.detect import (
+from .models import Event, Job, Talk, User
+from .pipeline.concat import concat
+from .pipeline.cut import CutStrategy, cut
+from .pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
     container_duration_seconds,
     detect,
 )
-from app.pipeline.intro import generate_intro_clip
-from app.pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
-from app.pipeline.outro import generate_outro_clip
-from app.pipeline.preview import generate_preview
-from app.pipeline.publish import publish
-from app.pipeline.transcode import (
+from .pipeline.intro import generate_intro_clip
+from .pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
+from .pipeline.outro import generate_outro_clip
+from .pipeline.preview import generate_preview
+from .pipeline.publish import publish
+from .pipeline.transcode import (
     # PRESET_4K_MASTER,
     PRESET_480P,
     PRESET_720P,
@@ -62,24 +63,22 @@ from app.pipeline.transcode import (
     PRESET_1440P,
     transcode,
 )
-from app.pipeline.waveform import extract_waveform_peaks
-from app.queue import heavy_queue, light_queue
-from app.retention import (
+from .pipeline.waveform import extract_waveform_peaks
+from .queue import heavy_queue, light_queue
+from .retention import (
     enqueue_retention_sweep,  # noqa: F401
     register_periodic_retention_sweep,  # noqa: F401
     run_retention_sweep,  # noqa: F401
 )
-from app.security import create_password_reset_token
-from app.states import advance
-from app.storage import (
+from .security import create_password_reset_token
+from .states import advance
+from .storage import (
     StorageBackend,
     StorageKeyNotFoundError,
     cleanup_bumpers,
     cleanup_intermediates,
     get_storage_backend,
 )
-
-from .consts import TalkStatus
 
 TRANSCODE_PRESETS = {
     "480p": PRESET_480P,
@@ -193,7 +192,7 @@ def job_ingest(
 
             new_job = Job(
                 talk_id=talk_id,
-                kind="ingest",
+                kind=JobKind.INGEST,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -285,7 +284,7 @@ def job_ingest_room_url(
                 ):
                     new_job = Job(
                         talk_id=talk.id,
-                        kind="ingest",
+                        kind=JobKind.INGEST,
                         status="running",
                         started_at=datetime.now(UTC),
                         updated_at=datetime.now(UTC),
@@ -326,7 +325,7 @@ def job_ingest_room_url(
         if recording_start_iso:
             try:
                 recording_start = datetime.fromisoformat(recording_start_iso)
-            except (ValueError, TypeError):  # fmt: skip
+            except ValueError, TypeError:
                 pass
 
         with new_session() as db:
@@ -336,7 +335,7 @@ def job_ingest_room_url(
             eligible_talks = [
                 t
                 for t in db.scalars(stmt.order_by(Talk.start)).all()
-                if t.id in job_ids and t.status == "detecting"
+                if t.id in job_ids and t.status == TalkStatus.DETECTING
             ]
             if not eligible_talks:
                 logger.warning(
@@ -375,7 +374,7 @@ def job_ingest_room_url(
                         for t in eligible_talks
                     ):
                         rec_start = parsed_dt
-                except (ValueError, TypeError):  # fmt: skip
+                except ValueError, TypeError:
                     pass
 
             if rec_start is None:
@@ -494,7 +493,7 @@ def job_detect(
                 return
             new_job = Job(
                 talk_id=talk_id,
-                kind="detect",
+                kind=JobKind.DETECT,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -605,7 +604,7 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 raise ValueError(f"Talk {talk_id} has no cut bounds set")
             new_job = Job(
                 talk_id=talk_id,
-                kind="cut",
+                kind=JobKind.CUT,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -695,7 +694,9 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         intro_done = (
             db.scalar(
                 select(Job.id).where(
-                    Job.talk_id == talk_id, Job.kind == "intro", Job.status == "done"
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.INTRO,
+                    Job.status == "done",
                 )
             )
             is not None
@@ -715,7 +716,9 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
         outro_done = (
             db.scalar(
                 select(Job.id).where(
-                    Job.talk_id == talk_id, Job.kind == "outro", Job.status == "done"
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.OUTRO,
+                    Job.status == "done",
                 )
             )
             is not None
@@ -792,7 +795,7 @@ def job_intro(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="intro",
+                kind=JobKind.INTRO,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -851,7 +854,7 @@ def job_intro(
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -877,7 +880,7 @@ def job_outro(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="outro",
+                kind=JobKind.OUTRO,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -925,7 +928,7 @@ def job_outro(
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -949,7 +952,7 @@ def job_concat(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="concat",
+                kind=JobKind.CONCAT,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1025,7 +1028,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="preview",
+                kind=JobKind.PREVIEW,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1096,7 +1099,7 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             db.commit()
             db.refresh(talk)
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
             dispatch_talk_webhook("talk.preview_ready", talk, db)
     except Exception as exc:
@@ -1153,7 +1156,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                 return
             new_job = Job(
                 talk_id=talk_id,
-                kind="loudness",
+                kind=JobKind.LOUDNESS,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1262,7 +1265,7 @@ def job_transcode(
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="transcode",
+                kind=JobKind.TRANSCODE,
                 status="running",
                 progress_pct=None,
                 started_at=datetime.now(UTC),
@@ -1385,7 +1388,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
                 raise ValueError(f"Talk {talk_id} not found")
             new_job = Job(
                 talk_id=talk_id,
-                kind="publish",
+                kind=JobKind.PUBLISH,
                 status="running",
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -1446,7 +1449,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
             filename = Path(final_key).name
             video_url = f"{base}/studio/media/{talk.id}/final/{filename}"
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
             dispatch_talk_webhook(
                 "talk.published",

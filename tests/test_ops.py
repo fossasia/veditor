@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import hash_api_key
+from app.consts import TalkStatus
 from app.main import app
 
 client = TestClient(app)
@@ -39,7 +40,7 @@ def _create_talk(
         title=title,
         start=now,
         end=now,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()

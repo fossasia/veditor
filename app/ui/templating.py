@@ -10,11 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.requests import Request
 
-from app import models
-from app.auth import CurrentUser
-from app.config import settings
-from app.db import get_db, new_session
-from app.security import (
+from .. import models
+from ..auth import CurrentUser
+from ..config import settings
+from ..db import get_db, new_session
+from ..security import (
     decode_session_token,
     decode_sso_token,
     verify_session_token_not_revoked,

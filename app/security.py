@@ -14,10 +14,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import ALLOWED_JWT_ALGORITHMS, settings
-from app.consts import AuthRole, SSOScopeType
-from app.db import new_session
-from app.models import User
+from .config import ALLOWED_JWT_ALGORITHMS, settings
+from .consts import AuthRole, SSOScopeType
+from .db import new_session
+from .models import User
 
 
 @dataclass(frozen=True, slots=True)

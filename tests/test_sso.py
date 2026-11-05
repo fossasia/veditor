@@ -57,7 +57,7 @@ def add_talk(
     event_id: int,
     title: str,
     room: str,
-    status: str = "waiting_for_files",
+    status: str = TalkStatus.WAITING_FILES,
     cut_start: float | None = None,
     cut_end: float | None = None,
     raw_duration_seconds: float | None = None,
@@ -447,7 +447,7 @@ def test_sso_speaker_submits_review_success(db_session: Session) -> None:
         event_id=1,
         title="Opening Keynote",
         room="Main",
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=60.0,
     )
@@ -479,7 +479,7 @@ def test_sso_speaker_cannot_review_other_talk(db_session: Session) -> None:
         event_id=1,
         title="Second Keynote",
         room="Main",
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
 
     response = client.post(
@@ -500,7 +500,7 @@ def test_sso_speaker_submits_cut_bounds_success(db_session: Session) -> None:
         event_id=1,
         title="Keynote",
         room="Main",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         raw_duration_seconds=3600.0,
     )
 
@@ -537,7 +537,7 @@ def test_sso_speaker_cannot_submit_cut_bounds_other_talk(db_session: Session) ->
         event_id=1,
         title="Other Talk",
         room="Main",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         raw_duration_seconds=3600.0,
     )
 
@@ -559,7 +559,7 @@ def test_sso_speaker_raw_preview_success(db_session: Session) -> None:
         event_id=1,
         title="Keynote",
         room="Main",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
 
     mock_storage = MagicMock()
@@ -585,7 +585,7 @@ def test_sso_speaker_raw_preview_other_talk_forbidden(db_session: Session) -> No
         event_id=1,
         title="Other Talk",
         room="Main",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
 
     response = client.get(
@@ -607,7 +607,7 @@ def test_studio_dashboard_sso_session_binds_event_id_to_template_context(
         event_id=42,
         title="Keynote",
         room="Room 1",
-        status="done",
+        status=TalkStatus.DONE,
     )
 
     response = client.get("/studio", cookies={"veditor_session": event_token})
@@ -692,7 +692,7 @@ def test_studio_dashboard_hides_action_buttons_for_sso(db_session: Session) -> N
         event_id=1,
         title="Keynote",
         room="Main Stage",
-        status="done",
+        status=TalkStatus.DONE,
     )
 
     # 1. Organizer arriving via SSO

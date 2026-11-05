@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.consts import JobKind
 from app.db import Base
 from app.models import Client, Event, Job, Review, Talk, User
 
@@ -49,7 +50,7 @@ def test_create_event_and_talk_relationships(db_session: Session) -> None:
     assert talk.custom_outro_path is None
     assert talk.updated_at is not None
 
-    job = Job(talk_id=talk.id, kind="cut", status="running")
+    job = Job(talk_id=talk.id, kind=JobKind.CUT, status="running")
     db_session.add(job)
 
     review = Review(talk_id=talk.id, decision="approved", note="Looks good")

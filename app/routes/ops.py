@@ -1,13 +1,14 @@
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.auth import get_client, verify_event_access
-from app.db import get_db
-from app.models import Job, Talk
+from .. import models, schemas
+from ..auth import get_client, verify_event_access
+from ..db import get_db
+from ..models import Job, Talk
 
 router = APIRouter(
     prefix="/ops",
@@ -43,9 +44,7 @@ def get_talk(
     """Talk detail including its associated jobs."""
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Talk not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
 
     verify_event_access(talk.event_id, client)
 
@@ -61,16 +60,14 @@ def get_job(
     """Job status and log_path."""
     job = db.scalar(select(models.Job).where(models.Job.id == job_id))
     if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Job not found")
 
     # verify access to the job's talk's event
     # we need to join with talk or fetch the talk
     talk = job.talk
     if not talk:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Job talk not found"
+            status_code=HTTPStatus.NOT_FOUND, detail="Job talk not found"
         )
 
     verify_event_access(talk.event_id, client)

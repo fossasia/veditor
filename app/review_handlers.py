@@ -3,18 +3,19 @@
 import logging
 import traceback
 from collections.abc import Callable
+from http import HTTPStatus
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app import tasks as app_tasks
-from app.consts import TalkStatus
-from app.states import advance
-from app.storage import StorageBackend, cleanup_intermediates
-from app.webhook import dispatch_talk_webhook
+from . import models, schemas
+from . import tasks as app_tasks
+from .consts import JobKind, TalkStatus
+from .states import advance
+from .storage import StorageBackend, cleanup_intermediates
+from .webhook import dispatch_talk_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _record_review_and_advance(
         if payload.decision == schemas.ReviewDecision.approve:
             if talk.cut_start is None or talk.cut_end is None:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail="Cannot approve a talk without cut bounds.",
                 )
             db.add(
@@ -61,7 +62,7 @@ def _record_review_and_advance(
         db.rollback()
         raise
 
-    if target_state == "pending_bounds":
+    if target_state == TalkStatus.PENDING_BOUNDS:
         try:
             dispatch_talk_webhook("talk.bounds_pending", talk, db)
         except (SQLAlchemyError, RedisError) as webhook_err:
@@ -105,7 +106,7 @@ def handle_approve(
         db.add(
             models.Job(
                 talk_id=talk.id,
-                kind="assembly",
+                kind=JobKind.ASSEMBLY,
                 status="failed",
                 log_path=log_key,
             )

@@ -60,3 +60,17 @@ class TalkStatus(StrEnum):
     DONE = "done"
     REJECTED = "rejected"
     BROKEN = "broken"
+
+
+class JobKind(StrEnum):
+    INGEST = "ingest"
+    DETECT = "detect"
+    CUT = "cut"
+    INTRO = "intro"
+    OUTRO = "outro"
+    CONCAT = "concat"
+    ASSEMBLY = "assembly"
+    PREVIEW = "preview"
+    LOUDNESS = "loudness"
+    TRANSCODE = "transcode"
+    PUBLISH = "publish"

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key, require_event_access
 from app.cli import create_admin
+from app.consts import TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_access_token, create_session_token, hash_password
@@ -153,7 +154,7 @@ def test_complete_user_lifecycle_and_pipeline_auth(
         room="Auditorium A",
         start=now,
         end=now + timedelta(hours=1),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk1)
     db_session.commit()

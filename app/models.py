@@ -24,10 +24,9 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.db import Base
-from app.retention import validate_retention_overrides
-
-from .consts import TalkStatus
+from .consts import JobKind, TalkStatus
+from .db import Base
+from .retention import validate_retention_overrides
 
 
 class RetentionOverrides(MutableDict):
@@ -335,7 +334,16 @@ class Job(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     talk_id: Mapped[int] = mapped_column(ForeignKey("talks.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    kind: Mapped[JobKind] = mapped_column(
+        SAEnum(
+            JobKind,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+    )
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     log_path: Mapped[str | None] = mapped_column(Text)
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
-from app.config import settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +293,7 @@ def cleanup_bumpers(
                 talk_id,
                 exc,
             )
-    from app.ingest import get_bumper_staging_dir
+    from .ingest import get_bumper_staging_dir
 
     staging_dir = get_bumper_staging_dir().resolve()
     for path_str in custom_paths:

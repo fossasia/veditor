@@ -333,12 +333,12 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
         return getattr(settings, normalized_key, default)
 
     try:
-        from app.models import SystemSetting
+        from .models import SystemSetting
 
         if db is not None:
             row = db.get(SystemSetting, normalized_key)
         else:
-            from app.db import new_session
+            from .db import new_session
 
             with new_session() as session:
                 row = session.get(SystemSetting, normalized_key)

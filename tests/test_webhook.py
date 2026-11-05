@@ -462,7 +462,7 @@ def test_submit_cut_bounds_does_not_prematurely_trigger_webhook(
         event.id,
         title="Keynote Talk",
         external_id="TALK_10_EXT",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         raw_duration_seconds=3600.0,
     )
 
@@ -506,7 +506,7 @@ def test_approve_talk_does_not_dispatch_webhook(db_session: Session) -> None:
         event.id,
         title="Keynote Talk",
         external_id="TALK_10_EXT",
-        status="pending_approval",
+        status=TalkStatus.PENDING_APPROVAL,
     )
 
     fake_storage = FakeStorageBackend()
@@ -542,7 +542,7 @@ def test_intro_outro_handoff_triggers_bounds_pending_webhook(
         event.id,
         title="Keynote Talk",
         external_id="TALK_10_EXT",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
     )
 
     fake_storage = FakeStorageBackend()
@@ -579,7 +579,7 @@ def test_approve_talk_silent_when_no_webhook_url(db_session: Session) -> None:
         db_session,
         event.id,
         title="Another Talk",
-        status="pending_approval",
+        status=TalkStatus.PENDING_APPROVAL,
     )
 
     fake_storage = FakeStorageBackend()
@@ -609,7 +609,7 @@ def test_reject_talk_does_not_trigger_webhook(db_session: Session) -> None:
         db_session,
         event.id,
         title="Rejected Talk",
-        status="pending_approval",
+        status=TalkStatus.PENDING_APPROVAL,
     )
 
     fake_storage = FakeStorageBackend()
@@ -643,7 +643,7 @@ def test_review_needs_work_triggers_bounds_pending_webhook(db_session: Session) 
         event.id,
         title="Talk Needs Work",
         external_id="TALK_15_EXT",
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
 
     with patch("app.webhook.light_queue.enqueue") as mock_enqueue:
@@ -680,7 +680,7 @@ def test_job_preview_dispatches_preview_ready_webhook(
         event.id,
         title="Preview Ready Talk",
         external_id="TALK_20_EXT",
-        status="generating_previews",
+        status=TalkStatus.GENERATING_PREVIEWS,
     )
 
     fake_storage = FakeStorageBackend()
@@ -734,7 +734,7 @@ def test_job_publish_dispatches_talk_published_webhook(
         event.id,
         title="Published Keynote",
         external_id="TALK_ABC123",
-        status="uploading",
+        status=TalkStatus.UPLOADING,
         cut_start=10.0,
         cut_end=1834.5,
     )
@@ -788,7 +788,7 @@ def test_job_publish_uses_custom_base_url(
         event.id,
         title="Published Keynote",
         external_id="TALK_ABC123",
-        status="uploading",
+        status=TalkStatus.UPLOADING,
         raw_duration_seconds=500.0,
     )
 
@@ -885,7 +885,7 @@ def test_multi_client_isolation_on_webhook_dispatch(db_session: Session) -> None
         db_session,
         event.id,
         title="Multi Client Talk",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
 
     calls_made: list[tuple[Any, tuple[Any, ...]]] = []

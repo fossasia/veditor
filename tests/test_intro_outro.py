@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import get_client
 from app.config import Settings, settings
-from app.consts import TalkStatus
+from app.consts import JobKind, TalkStatus
 from app.ingest import get_bumper_staging_dir
 from app.main import app
 from app.storage import get_storage_backend
@@ -643,8 +643,8 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
     )
     db_session.add_all(
         [
-            models.Job(talk_id=talk.id, kind="intro", status="done"),
-            models.Job(talk_id=talk.id, kind="outro", status="done"),
+            models.Job(talk_id=talk.id, kind=JobKind.INTRO, status="done"),
+            models.Job(talk_id=talk.id, kind=JobKind.OUTRO, status="done"),
         ]
     )
     db_session.commit()
@@ -700,7 +700,7 @@ def test_job_concat_success_enqueues_job_loudness(
     assert reloaded.status == TalkStatus.ASSEMBLING
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "concat"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.CONCAT
         )
     ).one()
     assert job.status == "done"
@@ -740,7 +740,7 @@ def test_job_loudness_success_advances_to_transcoding(
     assert reloaded.status == TalkStatus.TRANSCODING
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "loudness"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.LOUDNESS
         )
     ).one()
     assert job.status == "done"
@@ -839,7 +839,7 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
     db_session.expire_all()
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "intro"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.INTRO
         )
     ).one()
     assert job.status == "done"
@@ -868,7 +868,7 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
     db_session.expire_all()
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "outro"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.OUTRO
         )
     ).one()
     assert job.status == "done"
@@ -905,7 +905,7 @@ def test_configure_assembly_dispatch_failure_advances_to_broken(
     failed_job = db_session.scalar(
         select(models.Job).where(
             models.Job.talk_id == stored_talk.id,
-            models.Job.kind == "assembly",
+            models.Job.kind == JobKind.ASSEMBLY,
             models.Job.status == "failed",
         )
     )

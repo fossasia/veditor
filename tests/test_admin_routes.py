@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import CurrentUser, get_current_user, hash_api_key
-from app.consts import AuthRole
+from app.consts import AuthRole, TalkStatus
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.security import (
@@ -694,7 +694,7 @@ def test_admin_events_list_and_aggregation(
             room="Main Hall",
             start=now,
             end=now + timedelta(minutes=45),
-            status="done",
+            status=TalkStatus.DONE,
         ),
         models.Talk(
             event_id=event1.id,
@@ -702,7 +702,7 @@ def test_admin_events_list_and_aggregation(
             room="Room A",
             start=now + timedelta(hours=1),
             end=now + timedelta(hours=1, minutes=45),
-            status="done",
+            status=TalkStatus.DONE,
         ),
         models.Talk(
             event_id=event1.id,
@@ -710,7 +710,7 @@ def test_admin_events_list_and_aggregation(
             room="Room B",
             start=now + timedelta(hours=2),
             end=now + timedelta(hours=2, minutes=45),
-            status="cutting",
+            status=TalkStatus.CUTTING,
         ),
         models.Talk(
             event_id=event1.id,
@@ -718,7 +718,7 @@ def test_admin_events_list_and_aggregation(
             room="Room C",
             start=now + timedelta(hours=3),
             end=now + timedelta(hours=3, minutes=45),
-            status="pending_approval",
+            status=TalkStatus.PENDING_APPROVAL,
         ),
         models.Talk(
             event_id=event1.id,
@@ -726,7 +726,7 @@ def test_admin_events_list_and_aggregation(
             room="Room D",
             start=now + timedelta(hours=4),
             end=now + timedelta(hours=4, minutes=45),
-            status="broken",
+            status=TalkStatus.BROKEN,
         ),
     ]
     db_session.add_all(talks)
@@ -802,7 +802,7 @@ def test_admin_event_detail_success(
         room="Theater 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="done",
+        status=TalkStatus.DONE,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -810,7 +810,7 @@ def test_admin_event_detail_success(
         room="Theater 2",
         start=now + timedelta(hours=1),
         end=now + timedelta(hours=1, minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add_all([talk1, talk2])
     db_session.commit()
@@ -864,7 +864,7 @@ def test_admin_studio_editor_bypass(
         room="Auditorium",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()

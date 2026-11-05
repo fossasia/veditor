@@ -6,11 +6,11 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import models, retention
-from app.auth import hash_api_key, lock_active_admins
-from app.db import new_session
-from app.schemas import WebhookRegisterRequest
-from app.security import hash_password, is_valid_email
+from . import models, retention
+from .auth import hash_api_key, lock_active_admins
+from .db import new_session
+from .schemas import WebhookRegisterRequest
+from .security import hash_password, is_valid_email
 
 
 def create_client(

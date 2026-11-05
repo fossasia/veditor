@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import hash_api_key
+from app.consts import TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.security import create_session_token, create_sso_token
@@ -57,7 +58,7 @@ def test_unauthenticated_studio_talk_detail_redirects(
         room="Main",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -82,7 +83,7 @@ def test_unauthenticated_dashboard_no_talk_data_leakage(
         room="Classified Vault Room 404",
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -189,7 +190,7 @@ def test_sso_cookie_session_studio_dashboard_returns_200(
         title="Scoped SSO Talk",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -218,7 +219,7 @@ def test_sso_token_studio_talk_detail_returns_200(
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -268,7 +269,7 @@ def test_invalid_api_key_studio_talk_detail_returns_401(
         room="Room B",
         start=now,
         end=now + timedelta(minutes=20),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -296,7 +297,7 @@ def test_invalid_session_cookie_studio_talk_detail_redirects_to_login(
         title="Cookie Redirect Talk",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -323,14 +324,14 @@ def test_api_key_studio_dashboard_renders_scoped_talks(
         title="Authorized Talk Title",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event2.id,
         title="Unauthorized Talk Title",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([talk1, talk2])
 
@@ -416,7 +417,7 @@ def test_admin_viewing_other_organizer_talk_renders_view_only_mode(
         room="Room A",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -480,7 +481,7 @@ def test_admin_viewing_own_talk_renders_editable_mode(
         room="Room B",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -545,7 +546,7 @@ def test_organizer_viewing_own_talk_renders_editable_mode(
         room="Room C",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()

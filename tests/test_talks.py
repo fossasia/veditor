@@ -154,7 +154,7 @@ def test_post_talks_upsert_update_success(db_session: Session) -> None:
         db_session,
         event.id,
         title="Keynote Address",
-        status="cutting",
+        status=TalkStatus.CUTTING,
     )
     existing_talk.end = initial_end
     db_session.commit()
@@ -207,7 +207,7 @@ def test_post_talks_concurrent_race_handled(db_session: Session) -> None:
         room="Original Room",
         start=start_time,
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
 
     try:
@@ -301,7 +301,7 @@ def test_get_talk_authorized_with_previews(
 ) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Preview Ready Talk", status="preview"
+        db_session, event.id, title="Preview Ready Talk", status=TalkStatus.PREVIEW
     )
     _create_api_client(db_session, event_ids=[event.id])
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
@@ -360,7 +360,9 @@ def test_post_recording_talk_not_found(db_session: Session) -> None:
 
 def test_post_recording_invalid_state_conflict(db_session: Session) -> None:
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, title="Processing Talk", status="cutting")
+    talk = _create_talk(
+        db_session, event.id, title="Processing Talk", status=TalkStatus.CUTTING
+    )
     _create_api_client(db_session, event_ids=[event.id])
 
     response = client.post(
@@ -470,7 +472,7 @@ def test_post_recording_success_enqueues_detect(
 def test_post_recording_duplicate_ingest_rejected_with_409(db_session: Session) -> None:
     """Duplicate POST /recordings when talk is already in detecting state returns 409 Conflict."""
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, status="detecting")
+    talk = _create_talk(db_session, event.id, status=TalkStatus.DETECTING)
     _create_api_client(db_session, event_ids=[event.id])
 
     response = client.post(
@@ -496,7 +498,7 @@ def test_post_approve_unauthorized() -> None:
 def test_post_approve_forbidden_event_returns_404(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Other Talk", status="pending_approval"
+        db_session, event.id, title="Other Talk", status=TalkStatus.PENDING_APPROVAL
     )
     _create_api_client(db_session, event_ids=[event.id + 100])
 
@@ -508,7 +510,7 @@ def test_post_approve_forbidden_event_returns_404(db_session: Session) -> None:
 def test_post_approve_invalid_state_conflict(db_session: Session) -> None:
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk in Waiting", status="waiting_for_files"
+        db_session, event.id, title="Talk in Waiting", status=TalkStatus.WAITING_FILES
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -524,7 +526,10 @@ def test_post_approve_no_raw_recording_fails(db_session: Session) -> None:
     """Approve no longer checks for raw recording existence; it just transitions to pending_bounds."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk to Approve", status="pending_approval"
+        db_session,
+        event.id,
+        title="Talk to Approve",
+        status=TalkStatus.PENDING_APPROVAL,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -538,7 +543,10 @@ def test_post_approve_success_enqueues_cut(db_session: Session) -> None:
     """Approve now transitions to pending_intro_outro; handoff transitions to pending_bounds; job_cut is enqueued later from /cut."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk to Approve", status="pending_approval"
+        db_session,
+        event.id,
+        title="Talk to Approve",
+        status=TalkStatus.PENDING_APPROVAL,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -564,7 +572,10 @@ def test_post_approve_with_custom_raw_key(db_session: Session) -> None:
     Since ApproveRequest has no raw_key field, sending it just uses the default approve decision."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk to Approve", status="pending_approval"
+        db_session,
+        event.id,
+        title="Talk to Approve",
+        status=TalkStatus.PENDING_APPROVAL,
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -584,7 +595,7 @@ def test_post_approve_with_mismatched_talk_raw_key_rejected(
     """Old raw_key validation is gone. Sending decision=reject now terminates the talk and cleans up intermediates."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk to Reject", status="pending_approval"
+        db_session, event.id, title="Talk to Reject", status=TalkStatus.PENDING_APPROVAL
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -613,7 +624,7 @@ def test_post_approve_reject_storage_delete_resilient(db_session: Session) -> No
     """Storage deletion failure on reject does not block transition into rejected."""
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Talk to Reject", status="pending_approval"
+        db_session, event.id, title="Talk to Reject", status=TalkStatus.PENDING_APPROVAL
     )
     _create_api_client(db_session, event_ids=[event.id])
 
@@ -640,7 +651,7 @@ def _create_pending_bounds_talk(db: Session, event_id: int) -> models.Talk:
         db,
         event_id,
         title="Talk for Cut",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
         raw_duration_seconds=7200.0,  # 2-hour recording
     )
 
@@ -1112,7 +1123,7 @@ def test_handoff_with_speaker_email_enqueues_email(
         db_session,
         event.id,
         title="Keynote",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
     )
     talk.speaker_email = None
     db_session.commit()
@@ -1149,7 +1160,7 @@ def test_handoff_resend_cooldown_and_missing_speaker(
         db_session,
         event.id,
         title="Session",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
     talk.speaker_email = None
     db_session.commit()
@@ -1200,7 +1211,7 @@ def test_handoff_eventyay_synced_talk_does_not_send_mail(
         db_session,
         event.id,
         title="Eventyay Synced Keynote",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
     )
     talk.speaker_email = "speaker@example.com"
     db_session.commit()
@@ -1239,7 +1250,7 @@ def test_handoff_sso_session_does_not_send_mail(
         db_session,
         event.id,
         title="SSO Keynote",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
     )
     talk.speaker_email = "speaker@example.com"
     db_session.commit()
@@ -1279,7 +1290,7 @@ def test_handoff_eventyay_talk_resend_email_rejected(
         db_session,
         event.id,
         title="Eventyay Session",
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
     talk.speaker_email = "speaker@example.com"
     db_session.commit()
@@ -1342,7 +1353,7 @@ def test_handoff_platform_user_on_regular_event_sends_email(
         db_session,
         event.id,
         title="Regular Talk",
-        status="pending_intro_outro",
+        status=TalkStatus.PENDING_INTRO_OUTRO,
     )
     talk.speaker_email = "speaker@example.com"
     db_session.commit()
