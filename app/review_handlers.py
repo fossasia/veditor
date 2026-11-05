@@ -5,6 +5,8 @@ import traceback
 from collections.abc import Callable
 
 from fastapi import HTTPException, status
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -62,7 +64,7 @@ def _record_review_and_advance(
     if target_state == "pending_bounds":
         try:
             dispatch_talk_webhook("talk.bounds_pending", talk, db)
-        except Exception as webhook_err:  # noqa: BLE001
+        except (SQLAlchemyError, RedisError) as webhook_err:
             logger.warning(
                 "Failed to dispatch talk.bounds_pending webhook for talk %s: %s",
                 talk.id,
@@ -95,7 +97,7 @@ def handle_approve(
             log_key = f"{talk.id}/logs/assembly.log"
             try:
                 storage.put(log_key, traceback.format_exc().encode("utf-8"))
-            except Exception as log_err:  # noqa: BLE001
+            except (OSError, ValueError, TypeError) as log_err:
                 logger.warning(
                     "Failed to persist dispatch failure log to storage: %s", log_err
                 )

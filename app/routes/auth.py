@@ -6,9 +6,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.formparsers import MultiPartException
 
 from app import models, schemas
 from app.config import settings
@@ -340,7 +343,7 @@ def signup_submit(
             verification_token,
             safe_next,
         )
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         logger.error("Failed to enqueue verification email for %s: %s", user.email, exc)
         enqueue_error = True
 
@@ -396,7 +399,13 @@ async def api_auth_token(
             form = await request.form()
             email_or_username = form.get("email") or form.get("username")
             password = form.get("password")
-        except Exception as exc:  # noqa: BLE001
+        except (
+            MultiPartException,
+            StarletteHTTPException,
+            ValueError,
+            TypeError,
+            RuntimeError,
+        ) as exc:
             logger.debug("Failed parsing form request body: %s", exc)
         if not email_or_username and not password:
             try:
@@ -694,7 +703,7 @@ def verify_email_resend_submit(
                 },
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             )
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
         return templates.TemplateResponse(
             request,
@@ -723,7 +732,7 @@ def verify_email_resend_submit(
                 token,
                 safe_next,
             )
-        except Exception as exc:  # noqa: BLE001
+        except RedisError as exc:
             logger.error(
                 "Failed to enqueue resend verification email for %s: %s",
                 user.email,
@@ -731,7 +740,7 @@ def verify_email_resend_submit(
             )
             try:
                 redis_conn.delete(rate_key)
-            except Exception as del_exc:  # noqa: BLE001
+            except RedisError as del_exc:
                 logger.debug(
                     "Failed to clear resend rate limit for %s: %s",
                     clean_email,
@@ -869,7 +878,7 @@ def forgot_password_submit(
                 },
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             )
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
         return templates.TemplateResponse(
             request,
@@ -887,7 +896,7 @@ def forgot_password_submit(
             job_send_password_reset_email,
             clean_email,
         )
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         logger.error(
             "Failed to enqueue password reset email for %s: %s",
             clean_email,
@@ -895,7 +904,7 @@ def forgot_password_submit(
         )
         try:
             redis_conn.delete(rate_key)
-        except Exception as del_exc:  # noqa: BLE001
+        except RedisError as del_exc:
             logger.debug(
                 "Failed to clear password reset rate limit for %s: %s",
                 clean_email,
@@ -1109,7 +1118,7 @@ def reset_password_submit(
             int(datetime.now(UTC).timestamp()),
             ex=max(3600, expire_seconds),
         )
-    except Exception as redis_exc:  # noqa: BLE001
+    except RedisError as redis_exc:
         logger.debug("Failed to set session revocation marker: %s", redis_exc)
 
     response = RedirectResponse(

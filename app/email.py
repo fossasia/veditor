@@ -98,7 +98,7 @@ def send_speaker_handoff_email(
                 server.send_message(msg)
         logger.info("Speaker handoff email sent successfully to %s", clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
+    except (smtplib.SMTPException, OSError) as exc:
         logger.error("Failed to send speaker handoff email to %s: %s", clean_email, exc)
         return False
 
@@ -196,7 +196,7 @@ def send_verification_email(
                 server.send_message(msg)
         logger.info("Verification email sent successfully to %s", clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
+    except (smtplib.SMTPException, OSError) as exc:
         logger.error("Failed to send verification email to %s: %s", clean_email, exc)
         return False
 
@@ -297,6 +297,6 @@ def send_password_reset_email(
                 server.send_message(msg)
         logger.info("Password reset email sent successfully to %s", clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
+    except (smtplib.SMTPException, OSError) as exc:
         logger.error("Failed to send password reset email to %s: %s", clean_email, exc)
         return False

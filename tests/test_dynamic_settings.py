@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine, delete
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
@@ -251,7 +252,7 @@ def test_get_setting_fallback_default() -> None:
 def test_get_setting_db_failure_logged(caplog: pytest.LogCaptureFixture) -> None:
 
     mock_db = MagicMock()
-    mock_db.get.side_effect = RuntimeError("DB connection dropped")
+    mock_db.get.side_effect = SQLAlchemyError("DB connection dropped")
 
     with caplog.at_level("WARNING"):
         val = get_setting("detect_duration_tolerance_seconds", db=mock_db)

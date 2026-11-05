@@ -441,7 +441,7 @@ def test_delete_studio_event_teardown_and_failure_resilience(
 
     # 1. When storage fails, RuntimeError is propagated and event is NOT deleted
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Storage disk unreachable")
+    mock_storage.delete.side_effect = OSError("Storage disk unreachable")
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     authenticate_client(client, org)
@@ -541,7 +541,7 @@ def test_delete_studio_event_multi_talk_failure_resilience_and_retry(
     def mock_delete(key: str) -> None:
         if key == str(talk1.id):
             return
-        raise RuntimeError("Storage failure on talk 2")
+        raise OSError("Storage failure on talk 2")
 
     mock_storage = MagicMock()
     mock_storage.delete.side_effect = mock_delete

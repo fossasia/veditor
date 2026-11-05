@@ -14,8 +14,10 @@ from fastapi import (
     status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
+from redis.exceptions import RedisError
 from rq import Worker
 from sqlalchemy import case, delete, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
@@ -125,14 +127,14 @@ def admin_dashboard(
     try:
         db.execute(text("SELECT 1"))
         db_status = "Healthy"
-    except Exception:  # noqa: BLE001, S110
+    except SQLAlchemyError:
         pass
 
     redis_status = "Down"
     try:
         if redis_conn.ping():
             redis_status = "Healthy"
-    except Exception:  # noqa: BLE001, S110
+    except RedisError:
         pass
 
     light_workers = 0
@@ -145,7 +147,7 @@ def admin_dashboard(
                 light_workers += 1
             if "heavy" in queue_names:
                 heavy_workers += 1
-    except Exception:  # noqa: BLE001, S110
+    except RedisError:
         pass
 
     storage_status = "Available"

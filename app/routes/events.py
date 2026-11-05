@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import logging
@@ -874,7 +875,7 @@ def test_event_webhook(
             status_code=None,
             message=f"Connection failed: {exc.reason}",
         )
-    except Exception as exc:  # noqa: BLE001
+    except (http.client.HTTPException, OSError, ValueError) as exc:
         return schemas.WebhookTestResponse(
             success=False,
             status_code=None,

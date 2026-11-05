@@ -397,7 +397,7 @@ def test_handle_reject_storage_delete_error_resilient(
 
     mock_storage = MagicMock()
     mock_storage.delete.side_effect = [
-        RuntimeError("Storage connection failed"),
+        OSError("Storage connection failed"),
         None,
         None,
         None,
