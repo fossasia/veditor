@@ -24,6 +24,7 @@ from fastapi import (
 )
 from redis.exceptions import RedisError
 from rq.command import send_stop_job_command
+from rq.exceptions import InvalidJobOperation, NoSuchJobError
 from rq.job import Job
 from rq.registry import StartedJobRegistry
 from sqlalchemy import delete, func, select
@@ -955,7 +956,7 @@ def configure_assembly(
         job_log_path: str | None = log_key
         try:
             storage.put(log_key, log_content.encode("utf-8"))
-        except Exception as log_err:  # noqa: BLE001
+        except (OSError, ValueError, TypeError) as log_err:
             logger.warning(
                 "Failed to persist dispatch failure log to storage: %s", log_err
             )
@@ -999,8 +1000,10 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                     if _matches_talk(rq_job):
                         rq_job.cancel()
                         rq_job.delete()
-                except Exception as exc:  # noqa: BLE001
+                except (InvalidJobOperation, RedisError) as exc:
                     errors.append(f"Failed cancelling queued job {job_id}: {exc}")
+                except NoSuchJobError:
+                    pass
 
             # 2. Stop running/started/deferred/scheduled jobs
             registries = [
@@ -1019,9 +1022,11 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                                 send_stop_job_command(q.connection, job_id)
                                 rq_job.cancel()
                                 rq_job.delete()
-                        except Exception as exc:  # noqa: BLE001
+                        except (InvalidJobOperation, RedisError) as exc:
                             errors.append(f"Failed stopping job {job_id}: {exc}")
-                except Exception as exc:  # noqa: BLE001
+                        except NoSuchJobError:
+                            pass
+                except RedisError as exc:
                     errors.append(f"Failed accessing queue registry: {exc}")
 
             try:
@@ -1033,17 +1038,19 @@ def _cancel_talk_jobs(talk_id: int, storage: StorageBackend | None = None) -> No
                             send_stop_job_command(q.connection, job_id)
                             rq_job.cancel()
                             rq_job.delete()
-                    except Exception as exc:  # noqa: BLE001
+                    except (InvalidJobOperation, RedisError) as exc:
                         errors.append(f"Failed stopping started job {job_id}: {exc}")
-            except Exception as exc:  # noqa: BLE001
+                    except NoSuchJobError:
+                        pass
+            except RedisError as exc:
                 errors.append(f"Failed accessing StartedJobRegistry: {exc}")
-    except Exception as exc:  # noqa: BLE001
+    except RedisError as exc:
         errors.append(f"Error cancelling RQ jobs for talk {talk_id}: {exc}")
 
     if storage:
         try:
             storage.delete(str(talk_id))
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             errors.append(f"Error deleting storage for talk {talk_id}: {exc}")
 
     if errors:
@@ -1973,11 +1980,10 @@ def create_talk_sso_token(
     status_code=status.HTTP_200_OK,
 )
 async def attach_room_recording(
-    request: Request,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    room: Annotated[str | None, Form()] = None,
+    room: Annotated[str, Form()],
     event_id: Annotated[int | None, Form()] = None,
     file: Annotated[UploadFile | None, File()] = None,
     video_url: Annotated[str | None, Form()] = None,
@@ -1991,42 +1997,7 @@ async def attach_room_recording(
     If target_date is specified, only sessions on that date are attached.
     For rooms spanning multiple scheduled days, target_date is required.
     """
-    # Support JSON requests as well as multipart/form-data
-    content_type = request.headers.get("content-type", "")
-    if content_type.startswith("application/json"):
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                room = body.get("room", room)
-                event_id = body.get("event_id", event_id)
-                video_url = body.get("video_url", video_url)
-                relative_key = body.get("relative_key", relative_key)
-                source_path = body.get("source_path", source_path)
-                rec_start_str = body.get("recording_start")
-                if rec_start_str and not recording_start:
-                    try:
-                        recording_start = datetime.fromisoformat(rec_start_str)
-                    except ValueError:
-                        pass
-                if "target_date" in body:
-                    target_date_val = body.get("target_date")
-                    if target_date_val is not None and not target_date:
-                        if not isinstance(target_date_val, str):
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            )
-                        try:
-                            target_date = date.fromisoformat(target_date_val)
-                        except ValueError as exc:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            ) from exc
-        except (ValueError, TypeError, UnicodeDecodeError):  # fmt: skip
-            pass
-
-    if not room or not room.strip():
+    if not room.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Room name is required",
@@ -2439,7 +2410,7 @@ async def attach_room_recording(
         for b_key in replaced_backups.values():
             try:
                 storage.delete(b_key)
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, ValueError) as exc:
                 logger.debug("Failed removing backup %s: %s", b_key, exc)
     except Exception:
         db.rollback()
@@ -2451,21 +2422,21 @@ async def attach_room_recording(
                         storage.link_or_copy, key, storage.get(b_key)
                     )
                     storage.delete(b_key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError, TypeError) as exc:
                     logger.debug(
                         "Failed restoring %s from backup %s: %s", key, b_key, exc
                     )
             else:
                 try:
                     storage.delete(key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError) as exc:
                     logger.debug("Failed cleaning up staged key %s: %s", key, exc)
 
         for raw_k, b_key in replaced_backups.items():
             if raw_k not in staged_keys:
                 try:
                     storage.delete(b_key)
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, ValueError) as exc:
                     logger.debug("Failed deleting dangling backup %s: %s", b_key, exc)
         raise
     finally:

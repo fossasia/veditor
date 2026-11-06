@@ -244,7 +244,7 @@ def test_cleanup_intermediates_idempotent_when_stages_not_generated(
 
 def test_cleanup_intermediates_resilient_to_storage_delete_errors() -> None:
     mock_backend = mock.MagicMock(spec=StorageBackend)
-    mock_backend.delete.side_effect = RuntimeError("Storage connection failed")
+    mock_backend.delete.side_effect = OSError("Storage connection failed")
 
     # Should not raise exception
     cleanup_intermediates(mock_backend, 42)

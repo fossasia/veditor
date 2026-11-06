@@ -618,7 +618,7 @@ def test_post_approve_reject_storage_delete_resilient(db_session: Session) -> No
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Storage connection failed")
+    mock_storage.delete.side_effect = OSError("Storage connection failed")
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     response = client.post(

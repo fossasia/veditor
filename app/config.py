@@ -7,6 +7,7 @@ from typing import Any, Literal
 import sqlalchemy
 from pydantic import PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +348,7 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
             and isinstance(row.value, str)
         ):
             return _cast_setting_value(normalized_key, row.value, default)
-    except Exception as exc:  # noqa: BLE001
+    except (SQLAlchemyError, ValueError, TypeError) as exc:
         logger.warning(
             "Database lookup failed for setting '%s': %s", normalized_key, exc
         )

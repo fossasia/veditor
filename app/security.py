@@ -12,6 +12,7 @@ from typing import Literal, Protocol
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import ALLOWED_JWT_ALGORITHMS, settings
 from app.consts import AuthRole, SSOScopeType
@@ -198,7 +199,7 @@ def verify_session_token_not_revoked(
                     db_user = db.get(User, user_id)
                     if db_user:
                         session_revoked_at = db_user.session_revoked_at
-            except Exception:  # noqa: BLE001, S110
+            except SQLAlchemyError:
                 pass
 
     # Ensure fingerprint-free tokens are rejected when their revocation status
@@ -225,7 +226,7 @@ def verify_session_token_not_revoked(
 
         if token_ts <= revoked_ts:
             return False
-    except Exception:  # noqa: BLE001
+    except (TypeError, ValueError, OverflowError) as _exc:
         return False
 
     return True
