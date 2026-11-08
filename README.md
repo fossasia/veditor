@@ -58,7 +58,7 @@ Earlier versions did not declare a named volume for PostgreSQL, storing database
 
 ### Option 2: Full Native Setup (Recommended for Dev)
 
-If you prefer to run the entire stack locally without Docker (for faster reloading and easier debugging), you must install the application, `ffmpeg`, Postgres, and Redis directly on your host machine.
+If you prefer to run the entire stack locally without Docker (for faster reloading and easier debugging), you must install the application, Postgres, and Redis directly on your host machine.
 
 ### Linux
 
@@ -67,7 +67,7 @@ It is recommended to use a relatively new Linux distribution equivalent to Ubunt
 1. Install PostgreSQL and Redis using your OS package manager. For example, on Ubuntu / Debian:
 
 ```
-sudo apt install postgresql redis-server ffmpeg
+sudo apt install postgresql redis-server
 ```
 
 (For other distributions, adapt the command to match your package manager and package names.)
@@ -191,7 +191,7 @@ pytest -m destructive
 
 1. Install System Dependencies (macOS via Homebrew)
    ```bash
-   brew install ffmpeg postgresql redis
+   brew install postgresql redis
    ```
 
 2. Start background services:

@@ -6,7 +6,7 @@ import av
 import numpy as np
 import pytest
 
-from app.pipeline.loudness import normalize, rescale_pts
+from app.pipeline.loudness import normalize, rescale_pts, synthesize_silent_audio
 
 from ..conftest import (
     assert_playable,
@@ -133,6 +133,67 @@ def test_normalize_no_audio_stream_raises(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match='No audio stream found'):
         normalize(source_clip, output_clip)
+
+
+def _measure_audio_duration_s(path: Path | str) -> float:
+    """Measure the audio stream duration in seconds from decoded packet timestamps."""
+    with av.open(str(path)) as container:
+        assert container.streams.audio, 'No audio stream found for measurement'
+        stream = container.streams.audio[0]
+        last_end = 0.0
+        for packet in container.demux(stream):
+            if packet.dts is None:
+                continue
+            assert stream.time_base is not None
+            end_s = float((packet.dts + (packet.duration or 0)) * stream.time_base)
+            last_end = max(last_end, end_s)
+        return last_end
+
+
+def test_synthesize_silent_audio(tmp_path: Path) -> None:
+    """Verify a video-only file gains a playable, near-silent stereo audio track."""
+    source_clip = generate_clip(
+        2.0, has_video=True, has_audio=False, output_dir=tmp_path
+    )
+    output_clip = tmp_path / 'silent.mp4'
+
+    synthesize_silent_audio(source_clip, output_clip)
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+
+    info_out = open_and_inspect(output_clip)
+    assert info_out.has_video is True
+    assert info_out.has_audio is True
+    info_source = open_and_inspect(source_clip)
+    assert info_source.duration is not None
+    assert info_out.duration is not None
+    assert abs(info_out.duration - info_source.duration) <= 0.8
+    # Video stream must be preserved losslessly
+    assert _count_video_packets(output_clip) == _count_video_packets(source_clip)
+
+    # The silent track must span the video duration (regression guard for
+    # stream-time_base vs container-time_base unit mixing)
+    audio_duration = _measure_audio_duration_s(output_clip)
+    assert audio_duration >= info_source.duration - 0.8
+
+    rms_db = _measure_audio_rms_db(output_clip)
+    assert math.isfinite(rms_db)
+    assert rms_db < -60.0
+
+
+def test_synthesize_silent_audio_missing_input(tmp_path: Path) -> None:
+    """Verify FileNotFoundError when the input file does not exist."""
+    with pytest.raises(FileNotFoundError):
+        synthesize_silent_audio(tmp_path / 'nonexistent.mp4', tmp_path / 'out.mp4')
+
+
+def test_synthesize_silent_audio_same_path_rejected(tmp_path: Path) -> None:
+    """Verify ValueError when input and output paths are identical."""
+    source_clip = generate_clip(2.0, output_dir=tmp_path)
+
+    with pytest.raises(ValueError, match='Input and output paths must be different'):
+        synthesize_silent_audio(source_clip, source_clip)
 
 
 def test_normalize_invalid_arguments(tmp_path: Path) -> None:
