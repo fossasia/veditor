@@ -24,26 +24,26 @@ def test_stage_config_contains_all_stages() -> None:
 
 def test_stage_config_queue_assignments() -> None:
     for cfg in STAGE_CONFIG.values():
-        assert "queue" in cfg
-        assert "job_timeout" in cfg
-        assert isinstance(cfg["job_timeout"], int)
-        assert cfg["job_timeout"] > 0
+        assert 'queue' in cfg
+        assert 'job_timeout' in cfg
+        assert isinstance(cfg['job_timeout'], int)
+        assert cfg['job_timeout'] > 0
 
-    assert STAGE_CONFIG[JobKind.INGEST]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.DETECT]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.CUT]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.INTRO]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.OUTRO]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.CONCAT]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.PREVIEW]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.LOUDNESS]["queue"] == "light"
-    assert STAGE_CONFIG[JobKind.TRANSCODE]["queue"] == "heavy"
-    assert STAGE_CONFIG[JobKind.PUBLISH]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.INGEST]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.DETECT]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.CUT]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.INTRO]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.OUTRO]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.CONCAT]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.PREVIEW]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.LOUDNESS]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.TRANSCODE]['queue'] == 'heavy'
+    assert STAGE_CONFIG[JobKind.PUBLISH]['queue'] == 'light'
 
 
 def _job_timeout(stage: JobKind) -> int:
     """Narrow a stage's job_timeout to int so it can be compared numerically."""
-    timeout = STAGE_CONFIG[stage]["job_timeout"]
+    timeout = STAGE_CONFIG[stage]['job_timeout']
     assert isinstance(timeout, int)
     return timeout
 
@@ -71,36 +71,36 @@ def test_stage_config_exact_timeouts() -> None:
         JobKind.PUBLISH: 300,
     }
     for stage, expected_timeout in expected_timeouts.items():
-        assert STAGE_CONFIG[stage]["job_timeout"] == expected_timeout
+        assert STAGE_CONFIG[stage]['job_timeout'] == expected_timeout
 
 
 def test_docker_compose_worker_concurrency() -> None:
-    compose_path = Path(__file__).parent.parent / "docker-compose.yml"
+    compose_path = Path(__file__).parent.parent / 'docker-compose.yml'
     assert compose_path.is_file()
 
-    with open(compose_path, "r", encoding="utf-8") as f:
+    with open(compose_path, 'r', encoding='utf-8') as f:
         compose = yaml.safe_load(f)
 
-    services = compose.get("services", {})
-    assert "worker-light" in services
-    assert "worker-heavy" in services
+    services = compose.get('services', {})
+    assert 'worker-light' in services
+    assert 'worker-heavy' in services
 
-    light_cmd = services["worker-light"]["command"]
-    heavy_cmd = services["worker-heavy"]["command"]
+    light_cmd = services['worker-light']['command']
+    heavy_cmd = services['worker-heavy']['command']
 
-    assert "--concurrency" in light_cmd
-    assert "--concurrency" in heavy_cmd
+    assert '--concurrency' in light_cmd
+    assert '--concurrency' in heavy_cmd
 
 
 def test_docker_compose_postgres_volume_mount() -> None:
-    compose_path = Path(__file__).parent.parent / "docker-compose.yml"
+    compose_path = Path(__file__).parent.parent / 'docker-compose.yml'
     assert compose_path.is_file()
 
-    with open(compose_path, "r", encoding="utf-8") as f:
+    with open(compose_path, 'r', encoding='utf-8') as f:
         compose = yaml.safe_load(f)
 
-    services = compose.get("services", {})
-    assert "postgres" in services
+    services = compose.get('services', {})
+    assert 'postgres' in services
 
-    postgres_volumes = services["postgres"].get("volumes", [])
-    assert "postgres_data:/var/lib/postgresql" in postgres_volumes
+    postgres_volumes = services['postgres'].get('volumes', [])
+    assert 'postgres_data:/var/lib/postgresql' in postgres_volumes

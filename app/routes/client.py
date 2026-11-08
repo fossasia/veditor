@@ -10,18 +10,19 @@ from ..auth import get_client
 from ..db import get_db
 from ..schemas import WebhookInfoResponse, WebhookRegisterResponse
 
+
 router = APIRouter(
-    tags=["client"],
+    tags=['client'],
 )
 
 
 @router.post(
-    "/client/webhook",
+    '/client/webhook',
     response_model=schemas.WebhookRegisterResponse,
     status_code=HTTPStatus.OK,
 )
 @router.post(
-    "/clients/webhook",
+    '/clients/webhook',
     response_model=schemas.WebhookRegisterResponse,
     status_code=HTTPStatus.OK,
     include_in_schema=False,
@@ -48,19 +49,19 @@ def register_webhook(
     db.refresh(client)
 
     return schemas.WebhookRegisterResponse(
-        status="registered",
+        status='registered',
         url=url,
         secret=secret,
     )
 
 
 @router.get(
-    "/client/webhook",
+    '/client/webhook',
     response_model=schemas.WebhookInfoResponse,
     status_code=HTTPStatus.OK,
 )
 @router.get(
-    "/clients/webhook",
+    '/clients/webhook',
     response_model=schemas.WebhookInfoResponse,
     status_code=HTTPStatus.OK,
     include_in_schema=False,
@@ -76,11 +77,11 @@ def get_webhook(
 
 
 @router.delete(
-    "/client/webhook",
+    '/client/webhook',
     status_code=HTTPStatus.NO_CONTENT,
 )
 @router.delete(
-    "/clients/webhook",
+    '/clients/webhook',
     status_code=HTTPStatus.NO_CONTENT,
     include_in_schema=False,
 )

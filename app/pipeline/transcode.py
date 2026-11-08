@@ -28,6 +28,7 @@ from .loudness import (
     _mux_packet_with_monotonic_dts,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,67 +37,67 @@ class TranscodePreset:
     """Configuration structure defining target encode parameters."""
 
     name: str
-    video_codec: str = "libx264"
+    video_codec: str = 'libx264'
     crf: int | None = 22
     video_bitrate: int | None = None
-    preset_speed: str = "medium"
-    audio_codec: str = "aac"
+    preset_speed: str = 'medium'
+    audio_codec: str = 'aac'
     audio_bitrate: int = 192_000
-    container_format: str = "mp4"
-    pix_fmt: str = "yuv420p"
+    container_format: str = 'mp4'
+    pix_fmt: str = 'yuv420p'
     max_width: int | None = None
     max_height: int | None = None
     threads: int | None = None
 
 
 PRESET_480P = TranscodePreset(
-    name="480p",
-    video_codec="libx264",
+    name='480p',
+    video_codec='libx264',
     crf=22,
-    preset_speed="veryfast",
-    audio_codec="aac",
+    preset_speed='veryfast',
+    audio_codec='aac',
     audio_bitrate=128_000,
-    container_format="mp4",
-    pix_fmt="yuv420p",
+    container_format='mp4',
+    pix_fmt='yuv420p',
     max_width=854,
     max_height=480,
 )
 
 PRESET_720P = TranscodePreset(
-    name="720p",
-    video_codec="libx264",
+    name='720p',
+    video_codec='libx264',
     crf=23,
-    preset_speed="medium",
-    audio_codec="aac",
+    preset_speed='medium',
+    audio_codec='aac',
     audio_bitrate=128_000,
-    container_format="mp4",
-    pix_fmt="yuv420p",
+    container_format='mp4',
+    pix_fmt='yuv420p',
     max_width=1280,
     max_height=720,
 )
 
 PRESET_1080P_DEFAULT = TranscodePreset(
-    name="1080p_default",
-    video_codec="libx264",
+    name='1080p_default',
+    video_codec='libx264',
     crf=22,
-    preset_speed="veryfast",
-    audio_codec="aac",
+    preset_speed='veryfast',
+    audio_codec='aac',
     audio_bitrate=192_000,
-    container_format="mp4",
-    pix_fmt="yuv420p",
+    container_format='mp4',
+    pix_fmt='yuv420p',
     max_width=1920,
     max_height=1080,
 )
 
 PRESET_1440P = TranscodePreset(
-    name="1440p",
-    video_codec="libx264",
+    name='1440p',
+    video_codec='libx264',
     crf=21,
-    preset_speed="medium",
-    audio_codec="aac",
+    preset_speed='medium',
+    audio_codec='aac',
     audio_bitrate=256_000,
-    container_format="mp4",
-    pix_fmt="yuv420p",
+    container_format='mp4',
+    pix_fmt='yuv420p',
     max_width=2560,
     max_height=1440,
 )
@@ -152,43 +153,43 @@ def transcode(
     out_path = Path(output_path)
 
     if not in_path.is_file():
-        raise FileNotFoundError(f"Input file not found: {in_path}")
+        raise FileNotFoundError(f'Input file not found: {in_path}')
 
     if start_seconds < 0:
-        raise ValueError(f"start_seconds must be non-negative: {start_seconds}")
+        raise ValueError(f'start_seconds must be non-negative: {start_seconds}')
     if end_seconds is not None and end_seconds <= start_seconds:
         raise ValueError(
-            f"end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})"
+            f'end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})'
         )
 
     if target_lufs is not None and (
         not math.isfinite(target_lufs) or target_lufs > 0 or target_lufs < -70.0
     ):
         raise ValueError(
-            f"target_lufs must be between -70.0 and 0.0, got: {target_lufs}"
+            f'target_lufs must be between -70.0 and 0.0, got: {target_lufs}'
         )
 
     active_preset = preset or PRESET_1080P_DEFAULT
 
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be greater than zero: {threads}")
+        raise ValueError(f'threads must be greater than zero: {threads}')
     if active_preset.threads is not None and active_preset.threads <= 0:
-        raise ValueError(f"threads must be greater than zero: {active_preset.threads}")
+        raise ValueError(f'threads must be greater than zero: {active_preset.threads}')
 
     intro_p = Path(intro_path) if intro_path is not None else None
     if intro_p is not None and not intro_p.is_file():
-        raise FileNotFoundError(f"Intro file not found: {intro_p}")
+        raise FileNotFoundError(f'Intro file not found: {intro_p}')
 
     outro_p = Path(outro_path) if outro_path is not None else None
     if outro_p is not None and not outro_p.is_file():
-        raise FileNotFoundError(f"Outro file not found: {outro_p}")
+        raise FileNotFoundError(f'Outro file not found: {outro_p}')
 
     segments: list[tuple[str, Path, float, float | None]] = []
     if intro_p is not None:
-        segments.append(("intro", intro_p, 0.0, None))
-    segments.append(("main", in_path, start_seconds, end_seconds))
+        segments.append(('intro', intro_p, 0.0, None))
+    segments.append(('main', in_path, start_seconds, end_seconds))
     if outro_p is not None:
-        segments.append(("outro", outro_p, 0.0, None))
+        segments.append(('outro', outro_p, 0.0, None))
 
     # storage-boundary-exempt: creating parent directory for pipeline output
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,10 +199,10 @@ def transcode(
         audio_streams = list(probe_container.streams.audio)
 
         if not video_streams and not audio_streams:
-            raise ValueError(f"No audio or video streams found in {input_path}")
+            raise ValueError(f'No audio or video streams found in {input_path}')
 
         if target_lufs is not None and not audio_streams:
-            raise ValueError(f"No audio stream found in {input_path}")
+            raise ValueError(f'No audio stream found in {input_path}')
 
         in_v = video_streams[0] if video_streams else None
         in_a = audio_streams[0] if audio_streams else None
@@ -217,9 +218,9 @@ def transcode(
         if in_a and in_a.codec_context.layout:
             layout_name = in_a.codec_context.layout.name
         elif channels == 1:
-            layout_name = "mono"
+            layout_name = 'mono'
         else:
-            layout_name = "stereo"
+            layout_name = 'stereo'
 
         if in_v:
             width = in_v.codec_context.width
@@ -262,12 +263,12 @@ def transcode(
     total_duration_s = sum(segment_durations)
 
     container_options: dict[str, str] = {}
-    if active_preset.container_format == "mp4":
-        container_options["movflags"] = "faststart"
+    if active_preset.container_format == 'mp4':
+        container_options['movflags'] = 'faststart'
 
     with av.open(
         str(out_path),
-        mode="w",
+        mode='w',
         format=active_preset.container_format,
         options=container_options if container_options else None,
     ) as out_container:
@@ -279,12 +280,12 @@ def transcode(
         if video_streams:
             video_options: dict[str, str] = {}
             if active_preset.crf is not None:
-                video_options["crf"] = str(active_preset.crf)
+                video_options['crf'] = str(active_preset.crf)
             if active_preset.preset_speed:
-                video_options["preset"] = active_preset.preset_speed
+                video_options['preset'] = active_preset.preset_speed
             active_threads = threads if threads is not None else active_preset.threads
             if active_threads is not None:
-                video_options["threads"] = str(active_threads)
+                video_options['threads'] = str(active_threads)
 
             out_video = cast(
                 VideoStream,
@@ -301,7 +302,7 @@ def transcode(
                 out_video.bit_rate = active_preset.video_bitrate
 
         # 2. Configure Audio Stream if present
-        audio_layout = "stereo" if target_lufs is not None else layout_name
+        audio_layout = 'stereo' if target_lufs is not None else layout_name
         if audio_streams:
             out_audio = cast(
                 AudioStream,
@@ -318,19 +319,19 @@ def transcode(
             audio_graph = av.filter.Graph()
             buf_node = audio_graph.add_abuffer(
                 sample_rate=sample_rate,
-                format="fltp",
-                layout="stereo",
+                format='fltp',
+                layout='stereo',
                 time_base=Fraction(1, sample_rate),
             )
             loudnorm_node = audio_graph.add(
-                "loudnorm",
-                f"I={target_lufs}:TP={DEFAULT_TRUE_PEAK}:LRA={DEFAULT_LRA}",
+                'loudnorm',
+                f'I={target_lufs}:TP={DEFAULT_TRUE_PEAK}:LRA={DEFAULT_LRA}',
             )
             aformat_node = audio_graph.add(
-                "aformat",
-                f"sample_rates={sample_rate}:channel_layouts=stereo:sample_fmts=fltp",
+                'aformat',
+                f'sample_rates={sample_rate}:channel_layouts=stereo:sample_fmts=fltp',
             )
-            sink_node = audio_graph.add("abuffersink")
+            sink_node = audio_graph.add('abuffersink')
             buf_node.link_to(loudnorm_node)
             loudnorm_node.link_to(aformat_node)
             aformat_node.link_to(sink_node)
@@ -417,8 +418,8 @@ def transcode(
                     if in_rate and abs(float(in_rate) - float(fps)) > 0.05:
                         fps_graph = av.filter.Graph()
                         buffer = fps_graph.add_buffer(template=seg_v_stream)
-                        fps_filter = fps_graph.add("fps", f"fps={float(fps)}")
-                        sink = fps_graph.add("buffersink")
+                        fps_filter = fps_graph.add('fps', f'fps={float(fps)}')
+                        sink = fps_graph.add('buffersink')
                         buffer.link_to(fps_filter)
                         fps_filter.link_to(sink)
                         fps_graph.configure()
@@ -426,7 +427,7 @@ def transcode(
                 seg_resampler = None
                 if seg_a_stream is not None and out_audio is not None:
                     seg_resampler = av.AudioResampler(
-                        format="fltp",
+                        format='fltp',
                         layout=audio_layout,
                         rate=sample_rate,
                     )
@@ -474,13 +475,13 @@ def transcode(
                                 on_progress(reported_pct)
                                 last_reported_pct = reported_pct
 
-                    if packet.stream.type == "video" and out_video is not None:
-                        vpacket = cast("Packet[VideoStream]", packet)
+                    if packet.stream.type == 'video' and out_video is not None:
+                        vpacket = cast('Packet[VideoStream]', packet)
                         try:
                             decoded_frames = vpacket.decode()
                         except (av.error.InvalidDataError, av.FFmpegError) as exc:
                             logger.warning(
-                                "Skipping unparseable video packet in transcode: %s",
+                                'Skipping unparseable video packet in transcode: %s',
                                 exc,
                             )
                             continue
@@ -518,13 +519,13 @@ def transcode(
                             else:
                                 emit_video_frame(frame)
 
-                    elif packet.stream.type == "audio" and out_audio is not None:
-                        apacket = cast("Packet[AudioStream]", packet)
+                    elif packet.stream.type == 'audio' and out_audio is not None:
+                        apacket = cast('Packet[AudioStream]', packet)
                         try:
                             decoded_audio_frames = apacket.decode()
                         except (av.error.InvalidDataError, av.FFmpegError) as exc:
                             logger.warning(
-                                "Skipping unparseable audio packet in transcode: %s",
+                                'Skipping unparseable audio packet in transcode: %s',
                                 exc,
                             )
                             continue
@@ -583,14 +584,14 @@ def transcode(
             ):
                 seg_duration_s = (video_frame_count - seg_v_start) / float(fps)
                 needed_samples = round(seg_duration_s * sample_rate)
-                num_channels = 2 if audio_layout == "stereo" else 1
+                num_channels = 2 if audio_layout == 'stereo' else 1
                 samples_left = needed_samples
                 chunk_size = 1024
                 while samples_left > 0:
                     cur_chunk = min(chunk_size, samples_left)
                     silence_arr = np.zeros((num_channels, cur_chunk), dtype=np.float32)
                     silence_frame = av.AudioFrame.from_ndarray(
-                        silence_arr, format="fltp", layout=audio_layout
+                        silence_arr, format='fltp', layout=audio_layout
                     )
                     silence_frame.sample_rate = sample_rate
                     feed_audio_frame(silence_frame)
@@ -607,7 +608,7 @@ def transcode(
                 if needed_frames > 0:
                     black_frame = av.VideoFrame.from_ndarray(
                         np.zeros((out_height, out_width, 3), dtype=np.uint8),
-                        format="rgb24",
+                        format='rgb24',
                     ).reformat(format=active_preset.pix_fmt)
                     for _ in range(needed_frames):
                         emit_video_frame(black_frame)

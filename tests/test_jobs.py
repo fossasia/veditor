@@ -11,10 +11,11 @@ from app.consts import JobKind, JobStatus, TalkStatus
 from app.main import app
 from app.schemas import JobRead
 
+
 client = TestClient(app)
 
 
-def _create_event(db: Session, name: str = "Jobs Test Event") -> models.Event:
+def _create_event(db: Session, name: str = 'Jobs Test Event') -> models.Event:
     event = models.Event(name=name)
     db.add(event)
     db.commit()
@@ -23,7 +24,7 @@ def _create_event(db: Session, name: str = "Jobs Test Event") -> models.Event:
 
 
 def _create_talk(
-    db: Session, event_id: int, title: str = "Jobs Test Talk"
+    db: Session, event_id: int, title: str = 'Jobs Test Talk'
 ) -> models.Talk:
     now = datetime.now(UTC)
     talk = models.Talk(
@@ -56,7 +57,7 @@ def _create_job(
 
 def test_get_job_unauthorized() -> None:
     """Requesting without API key returns 401 Unauthorized."""
-    response = client.get("/jobs/1")
+    response = client.get('/jobs/1')
     assert response.status_code == 401
 
 
@@ -65,9 +66,9 @@ def test_get_job_not_found(db_session: Session) -> None:
     app.dependency_overrides[get_client] = lambda: models.Client(id=1, event_ids=[1])
 
     missing_id = (db_session.scalar(select(func.max(models.Job.id))) or 0) + 1
-    response = client.get(f"/jobs/{missing_id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{missing_id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Job not found"
+    assert response.json()['detail'] == 'Job not found'
 
 
 def test_get_job_unauthorized_event_returns_404(db_session: Session) -> None:
@@ -79,15 +80,15 @@ def test_get_job_unauthorized_event_returns_404(db_session: Session) -> None:
         talk.id,
         kind=JobKind.DETECT,
         status=JobStatus.DONE,
-        log_path=f"{talk.id}/logs/detect.log",
+        log_path=f'{talk.id}/logs/detect.log',
     )
 
     unowned_client = models.Client(id=1, event_ids=[event.id + 1])
     app.dependency_overrides[get_client] = lambda: unowned_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Job not found"
+    assert response.json()['detail'] == 'Job not found'
 
 
 def test_get_job_success(db_session: Session) -> None:
@@ -99,21 +100,21 @@ def test_get_job_success(db_session: Session) -> None:
         talk.id,
         kind=JobKind.TRANSCODE,
         status=JobStatus.RUNNING,
-        log_path=f"{talk.id}/logs/transcode.log",
+        log_path=f'{talk.id}/logs/transcode.log',
     )
 
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["talk_id"] == talk.id
-    assert data["kind"] == "transcode"
-    assert data["status"] == "running"
-    assert data["log_path"] == f"{talk.id}/logs/transcode.log"
-    assert data["progress_pct"] is None
+    assert data['id'] == job.id
+    assert data['talk_id'] == talk.id
+    assert data['kind'] == 'transcode'
+    assert data['status'] == 'running'
+    assert data['log_path'] == f'{talk.id}/logs/transcode.log'
+    assert data['progress_pct'] is None
 
 
 def test_get_job_success_null_log_path(db_session: Session) -> None:
@@ -125,15 +126,15 @@ def test_get_job_success_null_log_path(db_session: Session) -> None:
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["status"] == "queued"
-    assert data["log_path"] is None
-    assert data["progress_pct"] is None
-    assert data["elapsed_time"] is None
-    assert data["estimated_remaining"] is None
+    assert data['id'] == job.id
+    assert data['status'] == 'queued'
+    assert data['log_path'] is None
+    assert data['progress_pct'] is None
+    assert data['elapsed_time'] is None
+    assert data['estimated_remaining'] is None
 
 
 def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
@@ -148,7 +149,7 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
         talk.id,
         kind=JobKind.TRANSCODE,
         status=JobStatus.RUNNING,
-        log_path=f"{talk.id}/logs/transcode.log",
+        log_path=f'{talk.id}/logs/transcode.log',
         progress_pct=50.0,
         started_at=started,
         updated_at=updated,
@@ -157,18 +158,18 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["progress_pct"] == 50.0
-    assert data["started_at"] is not None
-    assert data["updated_at"] is not None
-    assert isinstance(data["elapsed_time"], float)
-    assert 19.0 <= data["elapsed_time"] <= 25.0
-    assert isinstance(data["estimated_remaining"], float)
+    assert data['id'] == job.id
+    assert data['progress_pct'] == 50.0
+    assert data['started_at'] is not None
+    assert data['updated_at'] is not None
+    assert isinstance(data['elapsed_time'], float)
+    assert 19.0 <= data['elapsed_time'] <= 25.0
+    assert isinstance(data['estimated_remaining'], float)
     # At 50%, remaining should be approximately equal to elapsed_time
-    assert abs(data["estimated_remaining"] - data["elapsed_time"]) < 0.1
+    assert abs(data['estimated_remaining'] - data['elapsed_time']) < 0.1
 
 
 def test_get_job_estimated_remaining_edge_cases() -> None:

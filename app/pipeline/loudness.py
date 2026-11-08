@@ -23,6 +23,7 @@ from typing import Any
 
 import av
 
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TARGET_LUFS = -16.0
@@ -86,16 +87,16 @@ def normalize(
     out_path = Path(output_path)
 
     if not in_path.is_file():
-        raise FileNotFoundError(f"Input file not found: {in_path}")
+        raise FileNotFoundError(f'Input file not found: {in_path}')
 
     if in_path.resolve() == out_path.resolve():
         raise ValueError(
-            f"Input and output paths must be different to prevent file truncation: {in_path}"
+            f'Input and output paths must be different to prevent file truncation: {in_path}'
         )
 
     if not math.isfinite(target_lufs) or target_lufs > -5.0 or target_lufs < -70.0:
         raise ValueError(
-            f"target_lufs must be between -70.0 and -5.0, got: {target_lufs}"
+            f'target_lufs must be between -70.0 and -5.0, got: {target_lufs}'
         )
 
     # storage-boundary-exempt: creating parent directory for pipeline output
@@ -106,7 +107,7 @@ def normalize(
         audio_streams = list(in_container.streams.audio)
 
         if not audio_streams:
-            raise ValueError(f"No audio stream found in {input_path}")
+            raise ValueError(f'No audio stream found in {input_path}')
 
         in_a = audio_streams[0]
         sample_rate = in_a.codec_context.sample_rate or 44100
@@ -116,31 +117,31 @@ def normalize(
         if in_a.codec_context.layout:
             layout_name = in_a.codec_context.layout.name
         elif channels == 2:
-            layout_name = "stereo"
+            layout_name = 'stereo'
         else:
-            layout_name = "mono"
+            layout_name = 'mono'
 
         # Construct audio filter graph: abuffer -> loudnorm -> abuffersink
         graph = av.filter.Graph()
         buf_node = graph.add_abuffer(template=in_a)
         loudnorm_node = graph.add(
-            "loudnorm",
-            f"I={target_lufs}:TP={DEFAULT_TRUE_PEAK}:LRA={DEFAULT_LRA}",
+            'loudnorm',
+            f'I={target_lufs}:TP={DEFAULT_TRUE_PEAK}:LRA={DEFAULT_LRA}',
         )
-        sink_node = graph.add("abuffersink")
+        sink_node = graph.add('abuffersink')
 
         buf_node.link_to(loudnorm_node)
         loudnorm_node.link_to(sink_node)
         graph.configure()
 
-        with av.open(str(out_path), mode="w") as out_container:
+        with av.open(str(out_path), mode='w') as out_container:
             # 1. Video stream copy (if present)
             out_video = None
             if video_streams:
                 out_video = out_container.add_stream_from_template(video_streams[0])
 
             # 2. Configure normalized audio stream
-            out_audio = out_container.add_stream("aac", rate=sample_rate)
+            out_audio = out_container.add_stream('aac', rate=sample_rate)
             out_audio.layout = layout_name
 
             # Streams to demux in a single interleaved pass
@@ -153,7 +154,7 @@ def normalize(
 
             # Single interleaved demuxing pass without seeking
             for packet in in_container.demux(*streams_to_demux):
-                if packet.stream.type == "video" and out_video is not None:
+                if packet.stream.type == 'video' and out_video is not None:
                     if packet.dts is None and packet.pts is None:
                         continue
                     rescale_pts(packet, video_streams[0].time_base, out_video.time_base)
@@ -162,12 +163,12 @@ def normalize(
                         out_container, packet, out_video.index, last_dts
                     )
 
-                elif packet.stream.type == "audio":
+                elif packet.stream.type == 'audio':
                     try:
                         decoded_frames = packet.decode()
                     except (av.error.InvalidDataError, av.FFmpegError) as exc:
                         logger.warning(
-                            "Skipping unparseable audio packet in loudness: %s", exc
+                            'Skipping unparseable audio packet in loudness: %s', exc
                         )
                         continue
                     for frame in decoded_frames:

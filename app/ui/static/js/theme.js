@@ -4,18 +4,18 @@
  */
 
 window.VEditorConfig = window.VEditorConfig || {
-  appName: "VEditor",
-  logoText: "VEditor",
-  seekSmall: 5,      // 5 seconds
-  seekMedium: 30,    // 30 seconds
-  seekBig: 60,       // 1 minute (for long talks)
-  seekMega: 300,     // 5 minutes (for multi-hour recordings)
+  appName: 'VEditor',
+  logoText: 'VEditor',
+  seekSmall: 5, // 5 seconds
+  seekMedium: 30, // 30 seconds
+  seekBig: 60, // 1 minute (for long talks)
+  seekMega: 300, // 5 minutes (for multi-hour recordings)
   frameRate: 25,
   pollingIntervalMs: 5000,
 };
 
 // ── Theme Manager ───────────────────────────────────────────────
-(function () {
+(function() {
   function getPreferredTheme() {
     const saved = localStorage.getItem('veditor_theme');
     if (saved === 'dark' || saved === 'light') return saved;
@@ -42,7 +42,7 @@ window.VEditorConfig = window.VEditorConfig || {
     }
   }
 
-  window.toggleTheme = function () {
+  window.toggleTheme = function() {
     const current = document.documentElement.getAttribute('data-theme') || 'light';
     const next = current === 'dark' ? 'light' : 'dark';
     applyTheme(next);
@@ -97,7 +97,7 @@ window.VEditorConfig = window.VEditorConfig || {
 })();
 
 // ── Sidebar Manager ─────────────────────────────────────────────
-(function () {
+(function() {
   function isStudioPath(path = window.location.pathname) {
     return path === '/studio' || path.startsWith('/studio/');
   }
@@ -131,7 +131,7 @@ window.VEditorConfig = window.VEditorConfig || {
     window.dispatchEvent(new CustomEvent('veditor:sidebar-toggle', { detail: { collapsed } }));
   }
 
-  window.toggleSidebar = function () {
+  window.toggleSidebar = function() {
     const isCollapsed = document.documentElement.getAttribute('data-sidebar') === 'collapsed';
     setSidebarCollapsed(!isCollapsed, true);
   };
@@ -159,28 +159,28 @@ window.VEditorConfig = window.VEditorConfig || {
 })();
 
 // ── Auth & Role Manager ─────────────────────────────────────────
-window.getApiKey = function () {
+window.getApiKey = function() {
   return localStorage.getItem('veditor_api_key') || '';
 };
 
-window.setApiKey = function (key) {
+window.setApiKey = function(key) {
   localStorage.setItem('veditor_api_key', key);
 };
 
-window.getUserRole = function () {
+window.getUserRole = function() {
   return localStorage.getItem('veditor_role') || 'admin';
 };
 
-window.setUserRole = function (role) {
+window.setUserRole = function(role) {
   localStorage.setItem('veditor_role', role);
   document.documentElement.setAttribute('data-user-role', role);
   window.dispatchEvent(new CustomEvent('veditor:role-changed', { detail: { role } }));
 };
 
-window.authFetch = function (url, options = {}) {
+window.authFetch = function(url, options = {}) {
   options.headers = options.headers || {};
   const isSessionLoggedIn = Boolean(
-    document.querySelector('.user-email')
+    document.querySelector('.user-email'),
   );
   if (!isSessionLoggedIn) {
     const key = window.getApiKey();

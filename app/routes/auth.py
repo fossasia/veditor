@@ -36,14 +36,15 @@ from ..security import (
 from ..tasks import job_send_password_reset_email, job_send_verification_email
 from ..ui.templating import templates
 
+
 logger = logging.getLogger(__name__)
 
-_DUMMY_HASH = hash_password("veditor-timing-defense-sentinel")
+_DUMMY_HASH = hash_password('veditor-timing-defense-sentinel')
 
-router = APIRouter(tags=["auth"])
+router = APIRouter(tags=['auth'])
 
 
-def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> str:
+def _get_safe_redirect_target(target: str | None, default: str = '/studio') -> str:
     """Validate and return a safe internal redirect path.
 
     Strictly verifies that scheme and netloc are empty, the path begins with a
@@ -65,23 +66,23 @@ def _get_safe_redirect_target(target: str | None, default: str = "/studio") -> s
     if parsed.scheme or parsed.netloc:
         return default
 
-    if not parsed.path.startswith("/") or parsed.path.startswith(("//", "/\\")):
+    if not parsed.path.startswith('/') or parsed.path.startswith(('//', '/\\')):
         return default
 
     unquoted_path = urllib.parse.unquote(parsed.path)
-    if not unquoted_path.startswith("/") or unquoted_path.startswith(("//", "/\\")):
+    if not unquoted_path.startswith('/') or unquoted_path.startswith(('//', '/\\')):
         return default
 
-    normalized_path = parsed.path.rstrip("/").lower()
+    normalized_path = parsed.path.rstrip('/').lower()
     if normalized_path in (
-        "/login",
-        "/logout",
-        "/signup",
-        "/verify-email",
-        "/verify-email/pending",
-        "/verify-email/resend",
-        "/forgot-password",
-        "/reset-password",
+        '/login',
+        '/logout',
+        '/signup',
+        '/verify-email',
+        '/verify-email/pending',
+        '/verify-email/resend',
+        '/forgot-password',
+        '/reset-password',
     ):
         return default
 
@@ -98,13 +99,13 @@ def _sync_speaker_role(user: models.User, db: Session, email: str) -> None:
 def _get_authenticated_user_from_cookie(
     request: Request, db: Session
 ) -> models.User | None:
-    token = request.cookies.get("veditor_session")
+    token = request.cookies.get('veditor_session')
     if not token:
         return None
     payload = decode_session_token(token)
     if not payload or not isinstance(payload, dict):
         return None
-    user_id = payload.get("user_id")
+    user_id = payload.get('user_id')
     if not user_id:
         return None
     user = db.scalar(select(models.User).where(models.User.id == user_id))
@@ -117,7 +118,7 @@ def _get_authenticated_user_from_cookie(
     return None
 
 
-@router.get("/login", response_class=HTMLResponse)
+@router.get('/login', response_class=HTMLResponse)
 def login_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
@@ -125,36 +126,36 @@ def login_page(
     reset: str | None = None,
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        target = _get_safe_redirect_target(next, default="/studio")
+        target = _get_safe_redirect_target(next, default='/studio')
         return RedirectResponse(url=target, status_code=HTTPStatus.FOUND)
     notice = None
-    if reset == "success":
-        notice = "Your password has been reset successfully. Please sign in with your new password."
+    if reset == 'success':
+        notice = 'Your password has been reset successfully. Please sign in with your new password.'
     return templates.TemplateResponse(
         request,
-        "login.html.jinja",
-        {"error": None, "email": "", "next": next or "", "notice": notice},
+        'login.html.jinja',
+        {'error': None, 'email': '', 'next': next or '', 'notice': notice},
     )
 
 
-@router.post("/login", response_class=HTMLResponse)
+@router.post('/login', response_class=HTMLResponse)
 def login_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    email: Annotated[str, Form()] = "",
-    password: Annotated[str, Form()] = "",
-    next: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = '',
+    password: Annotated[str, Form()] = '',
+    next: Annotated[str, Form()] = '',
 ) -> Response:
     clean_email = email.strip().lower()
     if not clean_email or not password:
         return templates.TemplateResponse(
             request,
-            "login.html.jinja",
+            'login.html.jinja',
             {
-                "error": "Invalid email or password.",
-                "email": clean_email,
-                "next": next or "",
-                "notice": None,
+                'error': 'Invalid email or password.',
+                'email': clean_email,
+                'next': next or '',
+                'notice': None,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -166,12 +167,12 @@ def login_submit(
     if not user or not user.is_active or not valid_password:
         return templates.TemplateResponse(
             request,
-            "login.html.jinja",
+            'login.html.jinja',
             {
-                "error": "Invalid email or password.",
-                "email": clean_email,
-                "next": next or "",
-                "notice": None,
+                'error': 'Invalid email or password.',
+                'email': clean_email,
+                'next': next or '',
+                'notice': None,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -179,13 +180,13 @@ def login_submit(
     if not user.is_verified:
         return templates.TemplateResponse(
             request,
-            "login.html.jinja",
+            'login.html.jinja',
             {
-                "error": "Please verify your email address before signing in.",
-                "email": clean_email,
-                "next": next or "",
-                "unverified": True,
-                "notice": None,
+                'error': 'Please verify your email address before signing in.',
+                'email': clean_email,
+                'next': next or '',
+                'unverified': True,
+                'notice': None,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -193,61 +194,61 @@ def login_submit(
     _sync_speaker_role(user, db, clean_email)
 
     token = create_session_token(user.id, user.role, password_hash=user.hashed_password)
-    redirect_target = _get_safe_redirect_target(next, default="/studio")
+    redirect_target = _get_safe_redirect_target(next, default='/studio')
     response = RedirectResponse(url=redirect_target, status_code=HTTPStatus.SEE_OTHER)
-    is_secure = (request.url.scheme == "https") or (
-        settings.environment.lower() in ("production", "prod")
+    is_secure = (request.url.scheme == 'https') or (
+        settings.environment.lower() in ('production', 'prod')
     )
     response.set_cookie(
-        key="veditor_session",
+        key='veditor_session',
         value=token,
         max_age=settings.session_token_expire_hours * 3600,
         httponly=True,
-        samesite="lax",
+        samesite='lax',
         secure=is_secure,
-        path="/",
+        path='/',
     )
     return response
 
 
-@router.get("/signup", response_class=HTMLResponse)
+@router.get('/signup', response_class=HTMLResponse)
 def signup_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    next: str = "",
+    next: str = '',
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        target = _get_safe_redirect_target(next, default="/studio")
+        target = _get_safe_redirect_target(next, default='/studio')
         return RedirectResponse(url=target, status_code=HTTPStatus.FOUND)
     return templates.TemplateResponse(
         request,
-        "signup.html.jinja",
+        'signup.html.jinja',
         {
-            "error": None,
-            "email": "",
-            "next": _get_safe_redirect_target(next) if next else "",
+            'error': None,
+            'email': '',
+            'next': _get_safe_redirect_target(next) if next else '',
         },
     )
 
 
-@router.post("/signup", response_class=HTMLResponse)
+@router.post('/signup', response_class=HTMLResponse)
 def signup_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    email: Annotated[str, Form()] = "",
-    password: Annotated[str, Form()] = "",
-    password_confirm: Annotated[str, Form()] = "",
-    next: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = '',
+    password: Annotated[str, Form()] = '',
+    password_confirm: Annotated[str, Form()] = '',
+    next: Annotated[str, Form()] = '',
 ) -> Response:
     clean_email = email.strip().lower()
     if len(clean_email) > 255 or not is_valid_email(clean_email):
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
+            'signup.html.jinja',
             {
-                "error": "Please enter a valid email address.",
-                "email": clean_email,
-                "next": next,
+                'error': 'Please enter a valid email address.',
+                'email': clean_email,
+                'next': next,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -255,11 +256,11 @@ def signup_submit(
     if len(password) < 8:
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
+            'signup.html.jinja',
             {
-                "error": "Password must be at least 8 characters long.",
-                "email": clean_email,
-                "next": next,
+                'error': 'Password must be at least 8 characters long.',
+                'email': clean_email,
+                'next': next,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -267,11 +268,11 @@ def signup_submit(
     if len(password) > 256:
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
+            'signup.html.jinja',
             {
-                "error": "Password must not exceed 256 characters.",
-                "email": clean_email,
-                "next": next,
+                'error': 'Password must not exceed 256 characters.',
+                'email': clean_email,
+                'next': next,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -279,8 +280,8 @@ def signup_submit(
     if password != password_confirm:
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
-            {"error": "Passwords do not match.", "email": clean_email, "next": next},
+            'signup.html.jinja',
+            {'error': 'Passwords do not match.', 'email': clean_email, 'next': next},
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
@@ -288,11 +289,11 @@ def signup_submit(
     if existing:
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
+            'signup.html.jinja',
             {
-                "error": "An account with this email already exists.",
-                "email": clean_email,
-                "next": next,
+                'error': 'An account with this email already exists.',
+                'email': clean_email,
+                'next': next,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -318,10 +319,10 @@ def signup_submit(
         db.rollback()
         return templates.TemplateResponse(
             request,
-            "signup.html.jinja",
+            'signup.html.jinja',
             {
-                "error": "An account with this email already exists.",
-                "email": clean_email,
+                'error': 'An account with this email already exists.',
+                'email': clean_email,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -343,15 +344,15 @@ def signup_submit(
             safe_next,
         )
     except RedisError as exc:
-        logger.error("Failed to enqueue verification email for %s: %s", user.email, exc)
+        logger.error('Failed to enqueue verification email for %s: %s', user.email, exc)
         enqueue_error = True
 
     encoded_email = urllib.parse.quote(clean_email)
-    redirect_url = f"/verify-email/pending?email={encoded_email}"
-    if safe_next != "/studio":
-        redirect_url += f"&next={urllib.parse.quote(safe_next, safe='/')}"
+    redirect_url = f'/verify-email/pending?email={encoded_email}'
+    if safe_next != '/studio':
+        redirect_url += f'&next={urllib.parse.quote(safe_next, safe="/")}'
     if enqueue_error:
-        redirect_url += "&error=delivery_failed"
+        redirect_url += '&error=delivery_failed'
 
     return RedirectResponse(
         url=redirect_url,
@@ -359,45 +360,45 @@ def signup_submit(
     )
 
 
-@router.post("/logout")
-@router.get("/logout")
+@router.post('/logout')
+@router.get('/logout')
 def logout(request: Request) -> RedirectResponse:
-    response = RedirectResponse(url="/login", status_code=HTTPStatus.SEE_OTHER)
-    is_secure = (request.url.scheme == "https") or (
-        settings.environment.lower() in ("production", "prod")
+    response = RedirectResponse(url='/login', status_code=HTTPStatus.SEE_OTHER)
+    is_secure = (request.url.scheme == 'https') or (
+        settings.environment.lower() in ('production', 'prod')
     )
     response.delete_cookie(
-        key="veditor_session",
-        path="/",
+        key='veditor_session',
+        path='/',
         httponly=True,
-        samesite="lax",
+        samesite='lax',
         secure=is_secure,
     )
     return response
 
 
-@router.post("/api/auth/token", response_model=schemas.TokenResponse)
+@router.post('/api/auth/token', response_model=schemas.TokenResponse)
 async def api_auth_token(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> schemas.TokenResponse:
-    content_type = request.headers.get("content-type", "").lower()
+    content_type = request.headers.get('content-type', '').lower()
     email_or_username = None
     password = None
 
-    if "application/json" in content_type:
+    if 'application/json' in content_type:
         try:
             body = await request.json()
             if isinstance(body, dict):
-                email_or_username = body.get("email") or body.get("username")
-                password = body.get("password")
+                email_or_username = body.get('email') or body.get('username')
+                password = body.get('password')
         except (ValueError, TypeError) as exc:
-            logger.debug("Failed parsing JSON request body: %s", exc)
+            logger.debug('Failed parsing JSON request body: %s', exc)
     else:
         try:
             form = await request.form()
-            email_or_username = form.get("email") or form.get("username")
-            password = form.get("password")
+            email_or_username = form.get('email') or form.get('username')
+            password = form.get('password')
         except (
             MultiPartException,
             StarletteHTTPException,
@@ -405,21 +406,21 @@ async def api_auth_token(
             TypeError,
             RuntimeError,
         ) as exc:
-            logger.debug("Failed parsing form request body: %s", exc)
+            logger.debug('Failed parsing form request body: %s', exc)
         if not email_or_username and not password:
             try:
                 body = await request.json()
                 if isinstance(body, dict):
-                    email_or_username = body.get("email") or body.get("username")
-                    password = body.get("password")
+                    email_or_username = body.get('email') or body.get('username')
+                    password = body.get('password')
             except (ValueError, TypeError, RuntimeError) as exc:
-                logger.debug("Failed fallback JSON parse: %s", exc)
+                logger.debug('Failed fallback JSON parse: %s', exc)
 
     if not email_or_username or not password or not isinstance(password, str):
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail='Invalid credentials',
+            headers={'WWW-Authenticate': 'Bearer'},
         )
 
     clean_email = str(email_or_username).strip().lower()
@@ -435,14 +436,14 @@ async def api_auth_token(
     if not user or not user.is_active or not valid_password:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail='Invalid credentials',
+            headers={'WWW-Authenticate': 'Bearer'},
         )
 
     if not user.is_verified:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="Email address not verified",
+            detail='Email address not verified',
         )
 
     _sync_speaker_role(user, db, clean_email)
@@ -456,41 +457,41 @@ async def api_auth_token(
     )
     return schemas.TokenResponse(
         access_token=token,
-        token_type="bearer",
+        token_type='bearer',
         expires_in=settings.access_token_expire_seconds,
     )
 
 
-@router.get("/verify-email/pending", response_class=HTMLResponse)
+@router.get('/verify-email/pending', response_class=HTMLResponse)
 def verify_email_pending_page(
     request: Request,
-    email: str = "",
-    error: str = "",
-    next: str = "",
+    email: str = '',
+    error: str = '',
+    next: str = '',
 ) -> HTMLResponse:
     error_msg = None
-    if error == "delivery_failed":
+    if error == 'delivery_failed':
         error_msg = (
-            "We were unable to deliver the verification email automatically. "
-            "Please click Resend Verification Email below to try again."
+            'We were unable to deliver the verification email automatically. '
+            'Please click Resend Verification Email below to try again.'
         )
     return templates.TemplateResponse(
         request,
-        "verify_email_pending.html.jinja",
+        'verify_email_pending.html.jinja',
         {
-            "email": email.strip(),
-            "error": error_msg,
-            "next": _get_safe_redirect_target(next) if next else "",
+            'email': email.strip(),
+            'error': error_msg,
+            'next': _get_safe_redirect_target(next) if next else '',
         },
     )
 
 
-@router.get("/verify-email", response_class=HTMLResponse)
+@router.get('/verify-email', response_class=HTMLResponse)
 def verify_email_confirm_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    token: str = "",
-    next: str = "",
+    token: str = '',
+    next: str = '',
 ) -> HTMLResponse:
     """Render confirmation page for email verification without mutating account state.
 
@@ -501,8 +502,8 @@ def verify_email_confirm_page(
     if not clean_token:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
-            {"error": "Verification link is missing or invalid.", "email": ""},
+            'verify_email_error.html.jinja',
+            {'error': 'Verification link is missing or invalid.', 'email': ''},
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
@@ -510,25 +511,25 @@ def verify_email_confirm_page(
     if not payload:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "Verification link is invalid or has expired.",
-                "email": "",
+                'error': 'Verification link is invalid or has expired.',
+                'email': '',
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
-    user_id = payload.get("user_id")
-    token_email = payload.get("email")
+    user_id = payload.get('user_id')
+    token_email = payload.get('email')
 
     user = db.scalar(select(models.User).where(models.User.id == user_id))
     if not user or not user.is_active or user.email != token_email:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "User account not found, deactivated, or email has changed.",
-                "email": token_email or "",
+                'error': 'User account not found, deactivated, or email has changed.',
+                'email': token_email or '',
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -536,39 +537,39 @@ def verify_email_confirm_page(
     if user.is_verified:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "This email address has already been verified. Please sign in.",
-                "email": user.email,
+                'error': 'This email address has already been verified. Please sign in.',
+                'email': user.email,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
     return templates.TemplateResponse(
         request,
-        "verify_email_confirm.html.jinja",
+        'verify_email_confirm.html.jinja',
         {
-            "email": user.email,
-            "token": clean_token,
-            "next": _get_safe_redirect_target(next) if next else "",
+            'email': user.email,
+            'token': clean_token,
+            'next': _get_safe_redirect_target(next) if next else '',
         },
     )
 
 
-@router.post("/verify-email")
+@router.post('/verify-email')
 def verify_email_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    token: Annotated[str, Form()] = "",
-    next: Annotated[str, Form()] = "",
+    token: Annotated[str, Form()] = '',
+    next: Annotated[str, Form()] = '',
 ) -> Response:
     """Perform atomic email verification and establish user session upon explicit user action."""
-    clean_token = token.strip() or request.query_params.get("token", "").strip()
+    clean_token = token.strip() or request.query_params.get('token', '').strip()
     if not clean_token:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
-            {"error": "Verification link is missing or invalid.", "email": ""},
+            'verify_email_error.html.jinja',
+            {'error': 'Verification link is missing or invalid.', 'email': ''},
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
@@ -576,25 +577,25 @@ def verify_email_submit(
     if not payload:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "Verification link is invalid or has expired.",
-                "email": "",
+                'error': 'Verification link is invalid or has expired.',
+                'email': '',
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
-    user_id = payload.get("user_id")
-    token_email = payload.get("email")
+    user_id = payload.get('user_id')
+    token_email = payload.get('email')
 
     user = db.scalar(select(models.User).where(models.User.id == user_id))
     if not user or not user.is_active or user.email != token_email:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "User account not found, deactivated, or email has changed.",
-                "email": token_email or "",
+                'error': 'User account not found, deactivated, or email has changed.',
+                'email': token_email or '',
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -615,10 +616,10 @@ def verify_email_submit(
     if verified_user_id is None:
         return templates.TemplateResponse(
             request,
-            "verify_email_error.html.jinja",
+            'verify_email_error.html.jinja',
             {
-                "error": "This email address has already been verified. Please sign in.",
-                "email": user.email,
+                'error': 'This email address has already been verified. Please sign in.',
+                'email': user.email,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -628,90 +629,90 @@ def verify_email_submit(
     session_token = create_session_token(
         user.id, user.role, password_hash=user.hashed_password
     )
-    target = _get_safe_redirect_target(next, default="/studio?verified=1")
+    target = _get_safe_redirect_target(next, default='/studio?verified=1')
     response = RedirectResponse(url=target, status_code=HTTPStatus.SEE_OTHER)
-    is_secure = (request.url.scheme == "https") or settings.is_production
+    is_secure = (request.url.scheme == 'https') or settings.is_production
     response.set_cookie(
-        key="veditor_session",
+        key='veditor_session',
         value=session_token,
         max_age=settings.session_token_expire_hours * 3600,
         httponly=True,
-        samesite="lax",
+        samesite='lax',
         secure=is_secure,
-        path="/",
+        path='/',
     )
     return response
 
 
-@router.get("/verify-email/resend", response_class=HTMLResponse)
+@router.get('/verify-email/resend', response_class=HTMLResponse)
 def verify_email_resend_page(
     request: Request,
-    email: str = "",
-    next: str = "",
+    email: str = '',
+    next: str = '',
 ) -> HTMLResponse:
-    safe_next = _get_safe_redirect_target(next) if next else ""
+    safe_next = _get_safe_redirect_target(next) if next else ''
     return templates.TemplateResponse(
         request,
-        "verify_email_resend.html.jinja",
+        'verify_email_resend.html.jinja',
         {
-            "error": None,
-            "message": None,
-            "email": email.strip(),
-            "next": safe_next,
+            'error': None,
+            'message': None,
+            'email': email.strip(),
+            'next': safe_next,
         },
     )
 
 
-@router.post("/verify-email/resend", response_class=HTMLResponse)
+@router.post('/verify-email/resend', response_class=HTMLResponse)
 def verify_email_resend_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    email: Annotated[str, Form()] = "",
-    next: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = '',
+    next: Annotated[str, Form()] = '',
 ) -> HTMLResponse:
-    safe_next = _get_safe_redirect_target(next) if next else ""
+    safe_next = _get_safe_redirect_target(next) if next else ''
     clean_email = email.strip().lower()
     if not clean_email or not is_valid_email(clean_email):
         return templates.TemplateResponse(
             request,
-            "verify_email_resend.html.jinja",
+            'verify_email_resend.html.jinja',
             {
-                "error": "Please enter a valid email address.",
-                "message": None,
-                "email": clean_email,
-                "next": safe_next,
+                'error': 'Please enter a valid email address.',
+                'message': None,
+                'email': clean_email,
+                'next': safe_next,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
     # Rate limiting via Redis (60 seconds cooldown) - atomic NX
-    rate_key = f"rate:resend_verification:{clean_email}"
+    rate_key = f'rate:resend_verification:{clean_email}'
     try:
-        acquired = redis_conn.set(rate_key, "1", ex=60, nx=True)
+        acquired = redis_conn.set(rate_key, '1', ex=60, nx=True)
         if not acquired:
             ttl = redis_conn.ttl(rate_key)
             wait_seconds = max(1, ttl) if ttl > 0 else 60
             return templates.TemplateResponse(
                 request,
-                "verify_email_resend.html.jinja",
+                'verify_email_resend.html.jinja',
                 {
-                    "error": f"Please wait {wait_seconds} seconds before requesting another verification email.",
-                    "message": None,
-                    "email": clean_email,
-                    "next": safe_next,
+                    'error': f'Please wait {wait_seconds} seconds before requesting another verification email.',
+                    'message': None,
+                    'email': clean_email,
+                    'next': safe_next,
                 },
                 status_code=HTTPStatus.TOO_MANY_REQUESTS,
             )
     except RedisError as exc:
-        logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
+        logger.error('Redis rate limit check failed for %s: %s', clean_email, exc)
         return templates.TemplateResponse(
             request,
-            "verify_email_resend.html.jinja",
+            'verify_email_resend.html.jinja',
             {
-                "error": "The service is temporarily unavailable. Please try again later.",
-                "message": None,
-                "email": clean_email,
-                "next": safe_next,
+                'error': 'The service is temporarily unavailable. Please try again later.',
+                'message': None,
+                'email': clean_email,
+                'next': safe_next,
             },
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
         )
@@ -733,7 +734,7 @@ def verify_email_resend_submit(
             )
         except RedisError as exc:
             logger.error(
-                "Failed to enqueue resend verification email for %s: %s",
+                'Failed to enqueue resend verification email for %s: %s',
                 user.email,
                 exc,
             )
@@ -741,58 +742,58 @@ def verify_email_resend_submit(
                 redis_conn.delete(rate_key)
             except RedisError as del_exc:
                 logger.debug(
-                    "Failed to clear resend rate limit for %s: %s",
+                    'Failed to clear resend rate limit for %s: %s',
                     clean_email,
                     del_exc,
                 )
 
     return templates.TemplateResponse(
         request,
-        "verify_email_resend.html.jinja",
+        'verify_email_resend.html.jinja',
         {
-            "error": None,
-            "message": "If an unverified account exists with that email address, a new verification link has been sent.",
-            "email": clean_email,
-            "next": safe_next,
+            'error': None,
+            'message': 'If an unverified account exists with that email address, a new verification link has been sent.',
+            'email': clean_email,
+            'next': safe_next,
         },
     )
 
 
-@router.post("/users/request-organizer", response_model=schemas.UserRead)
+@router.post('/users/request-organizer', response_model=schemas.UserRead)
 def request_organizer_role(
     payload: schemas.OrganizerRequestCreate,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> models.User:
     """Allow a standard user to request organizer role elevation."""
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     if (
         cookie_token and decode_sso_token(cookie_token) is not None
-    ) or request.headers.get("X-SSO-Token"):
+    ) or request.headers.get('X-SSO-Token'):
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="SSO sessions cannot request organizer access",
+            detail='SSO sessions cannot request organizer access',
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Authentication required",
+            detail='Authentication required',
         )
     if user.role != AuthRole.USER:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
-            detail="Only standard users can request organizer access",
+            detail='Only standard users can request organizer access',
         )
     if user.organizer_requested:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
-            detail="An organizer access request is already pending",
+            detail='An organizer access request is already pending',
         )
 
     requested_at = datetime.now(UTC)
-    note_val = (payload.note or "").strip() or None
+    note_val = (payload.note or '').strip() or None
 
     result = db.execute(
         update(models.User)
@@ -816,76 +817,76 @@ def request_organizer_role(
         if current_db_user and current_db_user.role != AuthRole.USER:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="Only standard users can request organizer access",
+                detail='Only standard users can request organizer access',
             )
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
-            detail="An organizer access request is already pending",
+            detail='An organizer access request is already pending',
         )
     db.commit()
     db.refresh(user)
-    logger.info("User %s submitted organizer role request", user.email)
+    logger.info('User %s submitted organizer role request', user.email)
     return user
 
 
-@router.get("/forgot-password", response_class=HTMLResponse)
+@router.get('/forgot-password', response_class=HTMLResponse)
 def forgot_password_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        return RedirectResponse(url="/studio", status_code=HTTPStatus.FOUND)
+        return RedirectResponse(url='/studio', status_code=HTTPStatus.FOUND)
     return templates.TemplateResponse(
         request,
-        "forgot_password.html.jinja",
-        {"error": None, "message": None, "email": ""},
+        'forgot_password.html.jinja',
+        {'error': None, 'message': None, 'email': ''},
     )
 
 
-@router.post("/forgot-password", response_class=HTMLResponse)
+@router.post('/forgot-password', response_class=HTMLResponse)
 def forgot_password_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    email: Annotated[str, Form()] = "",
+    email: Annotated[str, Form()] = '',
 ) -> HTMLResponse:
     clean_email = email.strip().lower()
     if not clean_email or not is_valid_email(clean_email):
         return templates.TemplateResponse(
             request,
-            "forgot_password.html.jinja",
+            'forgot_password.html.jinja',
             {
-                "error": "Please enter a valid email address.",
-                "message": None,
-                "email": clean_email,
+                'error': 'Please enter a valid email address.',
+                'message': None,
+                'email': clean_email,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
-    rate_key = f"rate:forgot_password:{clean_email}"
+    rate_key = f'rate:forgot_password:{clean_email}'
     try:
-        acquired = redis_conn.set(rate_key, "1", ex=60, nx=True)
+        acquired = redis_conn.set(rate_key, '1', ex=60, nx=True)
         if not acquired:
             ttl = redis_conn.ttl(rate_key)
             wait_seconds = max(1, ttl) if ttl > 0 else 60
             return templates.TemplateResponse(
                 request,
-                "forgot_password.html.jinja",
+                'forgot_password.html.jinja',
                 {
-                    "error": f"Please wait {wait_seconds} seconds before requesting another password reset.",
-                    "message": None,
-                    "email": clean_email,
+                    'error': f'Please wait {wait_seconds} seconds before requesting another password reset.',
+                    'message': None,
+                    'email': clean_email,
                 },
                 status_code=HTTPStatus.TOO_MANY_REQUESTS,
             )
     except RedisError as exc:
-        logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
+        logger.error('Redis rate limit check failed for %s: %s', clean_email, exc)
         return templates.TemplateResponse(
             request,
-            "forgot_password.html.jinja",
+            'forgot_password.html.jinja',
             {
-                "error": "The service is temporarily unavailable. Please try again later.",
-                "message": None,
-                "email": clean_email,
+                'error': 'The service is temporarily unavailable. Please try again later.',
+                'message': None,
+                'email': clean_email,
             },
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
         )
@@ -897,7 +898,7 @@ def forgot_password_submit(
         )
     except RedisError as exc:
         logger.error(
-            "Failed to enqueue password reset email for %s: %s",
+            'Failed to enqueue password reset email for %s: %s',
             clean_email,
             exc,
         )
@@ -905,27 +906,27 @@ def forgot_password_submit(
             redis_conn.delete(rate_key)
         except RedisError as del_exc:
             logger.debug(
-                "Failed to clear password reset rate limit for %s: %s",
+                'Failed to clear password reset rate limit for %s: %s',
                 clean_email,
                 del_exc,
             )
 
     return templates.TemplateResponse(
         request,
-        "forgot_password.html.jinja",
+        'forgot_password.html.jinja',
         {
-            "error": None,
-            "message": "If an account exists with that email address, a password reset link has been sent. Please check your inbox.",
-            "email": clean_email,
+            'error': None,
+            'message': 'If an account exists with that email address, a password reset link has been sent. Please check your inbox.',
+            'email': clean_email,
         },
     )
 
 
-@router.get("/reset-password", response_class=HTMLResponse)
+@router.get('/reset-password', response_class=HTMLResponse)
 def reset_password_page(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    token: str = "",
+    token: str = '',
 ) -> HTMLResponse:
     """Render reset password form without mutating account state (scanner-safe)."""
     clean_token = token.strip()
@@ -933,10 +934,10 @@ def reset_password_page(
     if not clean_token:
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is missing or invalid.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is missing or invalid.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -945,16 +946,16 @@ def reset_password_page(
     if not payload:
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is invalid or has expired.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is invalid or has expired.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
-    user_id = payload.get("user_id")
-    token_email = payload.get("email")
+    user_id = payload.get('user_id')
+    token_email = payload.get('email')
 
     user = db.scalar(select(models.User).where(models.User.id == user_id))
     if (
@@ -965,42 +966,42 @@ def reset_password_page(
     ):
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is invalid, expired, or has already been used.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is invalid, expired, or has already been used.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
     return templates.TemplateResponse(
         request,
-        "reset_password.html.jinja",
+        'reset_password.html.jinja',
         {
-            "error": None,
-            "email": user.email,
-            "token": clean_token,
+            'error': None,
+            'email': user.email,
+            'token': clean_token,
         },
     )
 
 
-@router.post("/reset-password", response_class=HTMLResponse)
+@router.post('/reset-password', response_class=HTMLResponse)
 def reset_password_submit(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    token: Annotated[str, Form()] = "",
-    password: Annotated[str, Form()] = "",
-    password_confirm: Annotated[str, Form()] = "",
+    token: Annotated[str, Form()] = '',
+    password: Annotated[str, Form()] = '',
+    password_confirm: Annotated[str, Form()] = '',
 ) -> Response:
-    clean_token = token.strip() or request.query_params.get("token", "").strip()
+    clean_token = token.strip() or request.query_params.get('token', '').strip()
     expire_hours = settings.password_reset_expire_hours
     if not clean_token:
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is missing or invalid.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is missing or invalid.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1009,16 +1010,16 @@ def reset_password_submit(
     if not payload:
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is invalid or has expired.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is invalid or has expired.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
 
-    user_id = payload.get("user_id")
-    token_email = payload.get("email")
+    user_id = payload.get('user_id')
+    token_email = payload.get('email')
 
     user = db.scalar(select(models.User).where(models.User.id == user_id))
     if (
@@ -1029,10 +1030,10 @@ def reset_password_submit(
     ):
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is invalid, expired, or has already been used.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is invalid, expired, or has already been used.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1040,11 +1041,11 @@ def reset_password_submit(
     if len(password) < 8:
         return templates.TemplateResponse(
             request,
-            "reset_password.html.jinja",
+            'reset_password.html.jinja',
             {
-                "error": "Password must be at least 8 characters long.",
-                "email": user.email,
-                "token": clean_token,
+                'error': 'Password must be at least 8 characters long.',
+                'email': user.email,
+                'token': clean_token,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1052,11 +1053,11 @@ def reset_password_submit(
     if len(password) > 256:
         return templates.TemplateResponse(
             request,
-            "reset_password.html.jinja",
+            'reset_password.html.jinja',
             {
-                "error": "Password must not exceed 256 characters.",
-                "email": user.email,
-                "token": clean_token,
+                'error': 'Password must not exceed 256 characters.',
+                'email': user.email,
+                'token': clean_token,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1064,11 +1065,11 @@ def reset_password_submit(
     if password != password_confirm:
         return templates.TemplateResponse(
             request,
-            "reset_password.html.jinja",
+            'reset_password.html.jinja',
             {
-                "error": "Passwords do not match.",
-                "email": user.email,
-                "token": clean_token,
+                'error': 'Passwords do not match.',
+                'email': user.email,
+                'token': clean_token,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1099,10 +1100,10 @@ def reset_password_submit(
     if updated_user_id is None:
         return templates.TemplateResponse(
             request,
-            "reset_password_error.html.jinja",
+            'reset_password_error.html.jinja',
             {
-                "error": "Password reset link is invalid, expired, or has already been used.",
-                "expire_hours": expire_hours,
+                'error': 'Password reset link is invalid, expired, or has already been used.',
+                'expire_hours': expire_hours,
             },
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -1113,24 +1114,24 @@ def reset_password_submit(
             timedelta(hours=settings.session_token_expire_hours).total_seconds()
         )
         redis_conn.set(
-            f"session_revoked:{user.id}",
+            f'session_revoked:{user.id}',
             int(datetime.now(UTC).timestamp()),
             ex=max(3600, expire_seconds),
         )
     except RedisError as redis_exc:
-        logger.debug("Failed to set session revocation marker: %s", redis_exc)
+        logger.debug('Failed to set session revocation marker: %s', redis_exc)
 
     response = RedirectResponse(
-        url="/login?reset=success", status_code=HTTPStatus.SEE_OTHER
+        url='/login?reset=success', status_code=HTTPStatus.SEE_OTHER
     )
-    is_secure = (request.url.scheme == "https") or (
-        settings.environment.lower() in ("production", "prod")
+    is_secure = (request.url.scheme == 'https') or (
+        settings.environment.lower() in ('production', 'prod')
     )
     response.delete_cookie(
-        key="veditor_session",
-        path="/",
+        key='veditor_session',
+        path='/',
         httponly=True,
-        samesite="lax",
+        samesite='lax',
         secure=is_secure,
     )
     return response

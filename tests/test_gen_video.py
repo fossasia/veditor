@@ -15,45 +15,45 @@ from .conftest import (
 
 
 def test_generates_standard_clip(tmp_path: Path) -> None:
-    path = generate_clip(0.5, pattern="gradient", output_dir=tmp_path)
+    path = generate_clip(0.5, pattern='gradient', output_dir=tmp_path)
 
     info = open_and_inspect(path)
     assert info.duration is not None
     assert info.duration > 0
     assert info.has_video
     assert info.has_audio
-    assert "h264" in info.codec_names
-    assert "aac" in info.codec_names
+    assert 'h264' in info.codec_names
+    assert 'aac' in info.codec_names
     assert info.resolution == (320, 240)
     assert_playable(path)
 
 
 def test_generate_clip_requires_at_least_one_stream(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="generate_clip requires at least one stream"):
+    with pytest.raises(ValueError, match='generate_clip requires at least one stream'):
         generate_clip(0.5, has_video=False, has_audio=False, output_dir=tmp_path)
 
 
 def test_generate_clip_rejects_non_positive_duration(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="duration_s must be greater than zero"):
-        generate_clip(0, pattern="gradient", output_dir=tmp_path)
+    with pytest.raises(ValueError, match='duration_s must be greater than zero'):
+        generate_clip(0, pattern='gradient', output_dir=tmp_path)
 
-    with pytest.raises(ValueError, match="duration_s must be greater than zero"):
-        generate_clip(-1.0, pattern="gradient", output_dir=tmp_path)
+    with pytest.raises(ValueError, match='duration_s must be greater than zero'):
+        generate_clip(-1.0, pattern='gradient', output_dir=tmp_path)
 
 
 def test_generate_clip_rejects_unknown_video_pattern(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="Unsupported video pattern: unknown-pattern"):
-        generate_clip(0.5, pattern="unknown-pattern", output_dir=tmp_path)
+    with pytest.raises(ValueError, match='Unsupported video pattern: unknown-pattern'):
+        generate_clip(0.5, pattern='unknown-pattern', output_dir=tmp_path)
 
 
 def test_generate_clip_rejects_unknown_audio_waveform(tmp_path: Path) -> None:
     with pytest.raises(
-        ValueError, match="Unsupported audio waveform: unknown-waveform"
+        ValueError, match='Unsupported audio waveform: unknown-waveform'
     ):
         generate_clip(
             0.5,
-            pattern="gradient",
-            audio_waveform="unknown-waveform",
+            pattern='gradient',
+            audio_waveform='unknown-waveform',
             output_dir=tmp_path,
         )
 
@@ -62,7 +62,7 @@ def test_generates_video_only_clip(tmp_path: Path) -> None:
     path = generate_clip(
         0.25,
         has_audio=False,
-        pattern="noise",
+        pattern='noise',
         resolution=(64, 48),
         output_dir=tmp_path,
     )
@@ -78,7 +78,7 @@ def test_generates_audio_only_clip(tmp_path: Path) -> None:
     path = generate_clip(
         0.25,
         has_video=False,
-        audio_waveform="silence",
+        audio_waveform='silence',
         output_dir=tmp_path,
     )
 
@@ -134,13 +134,13 @@ def test_assert_duration_close_within_tolerance(tmp_path: Path) -> None:
 
 def test_tests_directory_contains_no_binary_media_assets() -> None:
     tests_dir = Path(__file__).parent
-    media_suffixes = {".avi", ".m4a", ".mkv", ".mov", ".mp3", ".mp4", ".ogg", ".wav"}
+    media_suffixes = {'.avi', '.m4a', '.mkv', '.mov', '.mp3', '.mp4', '.ogg', '.wav'}
 
     committed_media = [
         path
-        for path in tests_dir.rglob("*")
+        for path in tests_dir.rglob('*')
         if path.is_file()
-        and "__pycache__" not in path.parts
+        and '__pycache__' not in path.parts
         and path.suffix.lower() in media_suffixes
     ]
 
