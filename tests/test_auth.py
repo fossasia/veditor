@@ -157,7 +157,7 @@ def test_current_user_model_attributes() -> None:
     )
     assert user.user_id == 1
     assert user.email == "user@example.com"
-    assert user.role == "organizer"
+    assert user.role == AuthRole.ORGANIZER
     assert user.source == "jwt"
     assert user.event_ids == []
     assert not user.is_machine
@@ -185,7 +185,7 @@ def test_get_current_user_api_key_valid(db_session: Session) -> None:
 
     user = get_current_user(request=MagicMock(), api_key="secret-key", db=db_session)
     assert user.source == "api_key"
-    assert user.role == "admin"
+    assert user.role == AuthRole.ADMIN
     assert user.user_id is None
     assert user.email is None
     assert user.event_ids == [42]
@@ -199,7 +199,7 @@ def test_get_current_user_cookie_api_key_valid(db_session: Session) -> None:
         request=MagicMock(), cookie_api_key="secret-cookie-key", db=db_session
     )
     assert user.source == "api_key"
-    assert user.role == "admin"
+    assert user.role == AuthRole.ADMIN
     assert user.user_id is None
     assert user.email is None
     assert user.event_ids == [42]
@@ -224,7 +224,7 @@ def test_get_current_user_session_cookie_valid(db_session: Session) -> None:
     assert user.source == "cookie"
     assert user.user_id == user_row.id
     assert user.email == "org@example.com"
-    assert user.role == "organizer"
+    assert user.role == AuthRole.ORGANIZER
     assert user.event_ids == []
     assert not user.is_machine
 
@@ -275,7 +275,7 @@ def test_get_current_user_bearer_token_valid(db_session: Session) -> None:
     assert user.source == "jwt"
     assert user.user_id == user_row.id
     assert user.email == "dev@example.com"
-    assert user.role == "admin"
+    assert user.role == AuthRole.ADMIN
     assert user.is_admin
 
 

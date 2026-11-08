@@ -11,9 +11,9 @@ from sqlalchemy import any_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import models
-from app.queue import light_queue
-from app.tasks import job_deliver_webhook
+from . import models
+from .queue import light_queue
+from .tasks import job_deliver_webhook
 
 logger = logging.getLogger(__name__)
 

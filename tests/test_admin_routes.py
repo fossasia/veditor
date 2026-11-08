@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import CurrentUser, get_current_user, hash_api_key
-from app.consts import AuthRole
+from app.consts import AuthRole, TalkStatus
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.security import (
@@ -255,7 +255,7 @@ def test_promote_user_success(
     assert data["role"] == "organizer"
 
     db_session.refresh(target_user)
-    assert target_user.role == "organizer"
+    assert target_user.role == AuthRole.ORGANIZER
 
     # Promote back to user
     res2 = client.post(f"/admin/users/{target_user.id}/promote", json={"role": "user"})
@@ -263,7 +263,7 @@ def test_promote_user_success(
     assert res2.json()["role"] == "user"
 
     db_session.refresh(target_user)
-    assert target_user.role == "user"
+    assert target_user.role == AuthRole.USER
 
 
 def test_promote_guard_cannot_demote_last_admin(
@@ -274,7 +274,7 @@ def test_promote_guard_cannot_demote_last_admin(
     try:
         existing_admin_ids = db_session.scalars(
             select(models.User.id).where(
-                models.User.role == "admin", models.User.is_active.is_(True)
+                models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True)
             )
         ).all()
         if existing_admin_ids:
@@ -329,7 +329,7 @@ def test_promote_demote_admin_allowed_if_another_admin_exists(
     assert res.json()["role"] == "organizer"
 
     db_session.refresh(admin2)
-    assert admin2.role == "organizer"
+    assert admin2.role == AuthRole.ORGANIZER
 
 
 def test_deactivate_self_prevented(
@@ -369,7 +369,7 @@ def test_deactivate_guard_cannot_deactivate_last_admin(
     try:
         existing_admin_ids = db_session.scalars(
             select(models.User.id).where(
-                models.User.role == "admin", models.User.is_active.is_(True)
+                models.User.role == AuthRole.ADMIN, models.User.is_active.is_(True)
             )
         ).all()
         if existing_admin_ids:
@@ -546,7 +546,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
         )
         other_admins = s.scalars(
             select(models.User).where(
-                models.User.role == "admin",
+                models.User.role == AuthRole.ADMIN,
                 ~models.User.email.like("%@concurrent-test.com"),
             )
         ).all()
@@ -575,8 +575,8 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
         id1, id2 = admin1.id, admin2.id
 
     try:
-        token1 = create_session_token(id1, "admin")
-        token2 = create_session_token(id2, "admin")
+        token1 = create_session_token(id1, AuthRole.ADMIN)
+        token2 = create_session_token(id2, AuthRole.ADMIN)
 
         results = []
 
@@ -604,7 +604,7 @@ def test_concurrent_admin_demotion_prevents_zero_admins(setup_database: None) ->
             remaining_admins = s.scalars(
                 select(models.User).where(
                     models.User.email.like("%@concurrent-test.com"),
-                    models.User.role == "admin",
+                    models.User.role == AuthRole.ADMIN,
                     models.User.is_active.is_(True),
                 )
             ).all()
@@ -694,7 +694,7 @@ def test_admin_events_list_and_aggregation(
             room="Main Hall",
             start=now,
             end=now + timedelta(minutes=45),
-            status="done",
+            status=TalkStatus.DONE,
         ),
         models.Talk(
             event_id=event1.id,
@@ -702,7 +702,7 @@ def test_admin_events_list_and_aggregation(
             room="Room A",
             start=now + timedelta(hours=1),
             end=now + timedelta(hours=1, minutes=45),
-            status="done",
+            status=TalkStatus.DONE,
         ),
         models.Talk(
             event_id=event1.id,
@@ -710,7 +710,7 @@ def test_admin_events_list_and_aggregation(
             room="Room B",
             start=now + timedelta(hours=2),
             end=now + timedelta(hours=2, minutes=45),
-            status="cutting",
+            status=TalkStatus.CUTTING,
         ),
         models.Talk(
             event_id=event1.id,
@@ -718,7 +718,7 @@ def test_admin_events_list_and_aggregation(
             room="Room C",
             start=now + timedelta(hours=3),
             end=now + timedelta(hours=3, minutes=45),
-            status="pending_approval",
+            status=TalkStatus.PENDING_APPROVAL,
         ),
         models.Talk(
             event_id=event1.id,
@@ -726,7 +726,7 @@ def test_admin_events_list_and_aggregation(
             room="Room D",
             start=now + timedelta(hours=4),
             end=now + timedelta(hours=4, minutes=45),
-            status="broken",
+            status=TalkStatus.BROKEN,
         ),
     ]
     db_session.add_all(talks)
@@ -802,7 +802,7 @@ def test_admin_event_detail_success(
         room="Theater 1",
         start=now,
         end=now + timedelta(minutes=30),
-        status="done",
+        status=TalkStatus.DONE,
     )
     talk2 = models.Talk(
         event_id=event.id,
@@ -810,7 +810,7 @@ def test_admin_event_detail_success(
         room="Theater 2",
         start=now + timedelta(hours=1),
         end=now + timedelta(hours=1, minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add_all([talk1, talk2])
     db_session.commit()
@@ -864,7 +864,7 @@ def test_admin_studio_editor_bypass(
         room="Auditorium",
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1539,7 +1539,7 @@ def test_promote_demote_to_user_role(
     assert res.json()["role"] == "user"
 
     db_session.refresh(target_user)
-    assert target_user.role == "user"
+    assert target_user.role == AuthRole.USER
 
 
 def test_promote_rejects_speaker_role(
@@ -1581,7 +1581,7 @@ def test_admin_users_role_alias_endpoint(
     assert res.json()["role"] == "organizer"
 
     db_session.refresh(target_user)
-    assert target_user.role == "organizer"
+    assert target_user.role == AuthRole.ORGANIZER
 
 
 def test_admin_nav_includes_users_link(

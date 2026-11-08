@@ -131,7 +131,7 @@ def test_end_to_end_smoke(clean_db: None) -> None:
             room="Main Hall",
             start=start_time,
             end=end_time,
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
         session.add(talk)
         session.commit()

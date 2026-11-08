@@ -2,6 +2,7 @@ import json
 import math
 from collections import Counter
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import (
@@ -11,7 +12,6 @@ from fastapi import (
     Query,
     Request,
     Response,
-    status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
 from redis.exceptions import RedisError
@@ -20,27 +20,27 @@ from sqlalchemy import case, delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from app import models, schemas
-from app.auth import (
+from .. import models, schemas
+from ..auth import (
     CurrentUser,
     get_current_user,
     lock_active_admins,
     require_admin,
 )
-from app.config import (
+from ..config import (
     EXCLUDED_SETTING_KEYS,
     PREVIEW_PRESETS,
     SYSTEM_SETTING_DEFINITIONS,
     SettingDefinition,
     settings,
 )
-from app.consts import AuthRole, TalkStatus
-from app.db import get_db
-from app.models import User
-from app.queue import redis_conn
-from app.schemas import SystemSettingRead, UserRead
-from app.storage import StorageBackend, get_storage_backend
-from app.ui.templating import templates
+from ..consts import AuthRole, TalkStatus
+from ..db import get_db
+from ..models import User
+from ..queue import redis_conn
+from ..schemas import SystemSettingRead, UserRead
+from ..storage import StorageBackend, get_storage_backend
+from ..ui.templating import templates
 
 router = APIRouter(
     prefix="/admin",
@@ -232,7 +232,7 @@ def list_users(
         and (calculated_page > total_pages or offset >= total_users)
     ):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Page not found",
         )
 
@@ -321,7 +321,7 @@ def promote_user(
     )
     if not target:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="User not found",
         )
 
@@ -335,7 +335,7 @@ def promote_user(
         db.refresh(target)
         if target.role == AuthRole.ADMIN and target.is_active and len(admin_ids) <= 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Cannot demote user; operation would leave zero active administrators",
             )
 
@@ -356,7 +356,7 @@ def activate_user(
     target = db.scalar(select(models.User).where(models.User.id == id))
     if not target:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="User not found",
         )
 
@@ -374,14 +374,14 @@ def deactivate_user(
 ) -> User:
     if current_user.user_id is not None and current_user.user_id == id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Cannot deactivate your own account",
         )
 
     target = db.scalar(select(models.User).where(models.User.id == id))
     if not target:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="User not found",
         )
 
@@ -390,7 +390,7 @@ def deactivate_user(
         db.refresh(target)
         if target.role == AuthRole.ADMIN and target.is_active and len(admin_ids) <= 1:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Cannot deactivate the last active administrator",
             )
 
@@ -404,12 +404,12 @@ def _validate_system_setting(key: str, value: str) -> None:
     norm = key.strip().lower()
     if norm in EXCLUDED_SETTING_KEYS:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=f"Setting '{key}' is a protected credential or infrastructure parameter and cannot be modified dynamically.",
         )
     if norm not in SYSTEM_SETTING_DEFINITIONS:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=f"Setting '{key}' is not a recognized platform setting.",
         )
 
@@ -436,7 +436,7 @@ def _validate_system_setting(key: str, value: str) -> None:
             valid = set(settings.preview_presets.keys()) | set(PREVIEW_PRESETS.keys())
             if value not in valid:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"default_preview_preset must be one of: {sorted(valid)}",
                 )
         elif norm == "default_transcode_preset":
@@ -444,7 +444,7 @@ def _validate_system_setting(key: str, value: str) -> None:
             # ("4k_master",) commented out for now
             if value not in valid_transcode:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=HTTPStatus.BAD_REQUEST,
                     detail=f"default_transcode_preset must be one of: {list(valid_transcode)}",
                 )
     except ValueError:
@@ -458,7 +458,7 @@ def _validate_system_setting(key: str, value: str) -> None:
             detail = (
                 "loudness_target_lufs must be a finite float between -70.0 and -5.0"
             )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=detail)
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -538,7 +538,7 @@ def admin_events(
     total_pages = max(1, (total_events + limit - 1) // limit) if total_events > 0 else 1
     if page > total_pages:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Page not found",
         )
     offset = (page - 1) * limit
@@ -637,12 +637,12 @@ def _upsert_setting(
     value = value.strip()
     if not key:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Setting key cannot be empty",
         )
     if len(key) > 255:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Setting key cannot exceed 255 characters",
         )
     _validate_system_setting(key, value)
@@ -681,7 +681,7 @@ async def update_setting(
                 raise TypeError
         except TypeError, ValueError, json.JSONDecodeError:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="JSON payload must be an object",
             )
 
@@ -717,7 +717,7 @@ async def update_setting(
         db.commit()
         return RedirectResponse(
             url="/admin/settings?status=reset",
-            status_code=status.HTTP_303_SEE_OTHER,
+            status_code=HTTPStatus.SEE_OTHER,
         )
 
     if "key" in form:
@@ -730,7 +730,7 @@ async def update_setting(
         )
         return RedirectResponse(
             url="/admin/settings?status=saved",
-            status_code=status.HTTP_303_SEE_OTHER,
+            status_code=HTTPStatus.SEE_OTHER,
         )
 
     for def_key, defn in SYSTEM_SETTING_DEFINITIONS.items():
@@ -766,7 +766,7 @@ async def update_setting(
     db.commit()
     return RedirectResponse(
         url="/admin/settings?status=saved",
-        status_code=status.HTTP_303_SEE_OTHER,
+        status_code=HTTPStatus.SEE_OTHER,
     )
 
 
@@ -788,7 +788,7 @@ async def reset_setting(
 
     return RedirectResponse(
         url="/admin/settings?status=reset",
-        status_code=status.HTTP_303_SEE_OTHER,
+        status_code=HTTPStatus.SEE_OTHER,
     )
 
 
@@ -805,7 +805,7 @@ def admin_event_detail(
     )
     if not event:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail="Event not found",
         )
 

@@ -18,7 +18,7 @@ from av.packet import Packet
 from av.video.codeccontext import VideoCodecContext
 from av.video.stream import VideoStream
 
-from app.pipeline.loudness import _mux_packet_with_monotonic_dts, rescale_pts
+from .loudness import _mux_packet_with_monotonic_dts, rescale_pts
 
 logger = logging.getLogger(__name__)
 

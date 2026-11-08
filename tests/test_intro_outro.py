@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import get_client
 from app.config import Settings, settings
-from app.consts import TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.ingest import get_bumper_staging_dir
 from app.main import app
 from app.storage import get_storage_backend
@@ -390,7 +390,7 @@ def test_intro_outro_skip_both_success(
         None,
         None,
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -437,7 +437,7 @@ def test_intro_outro_generated_both_success(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -485,7 +485,7 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/outro/outro.mp4",
-        job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
     )
 
 
@@ -533,7 +533,7 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
         stored_talk.id,
         f"{stored_talk.id}/cut/cut.mp4",
         f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
     )
 
 
@@ -585,7 +585,7 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
         f"{stored_talk.id}/intro/intro.mp4",
         f"{stored_talk.id}/outro/outro.mp4",
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -625,7 +625,7 @@ def test_intro_outro_custom_cut_key_threading(
         None,
         None,
         f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -643,8 +643,8 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
     )
     db_session.add_all(
         [
-            models.Job(talk_id=talk.id, kind="intro", status="done"),
-            models.Job(talk_id=talk.id, kind="outro", status="done"),
+            models.Job(talk_id=talk.id, kind=JobKind.INTRO, status=JobStatus.DONE),
+            models.Job(talk_id=talk.id, kind=JobKind.OUTRO, status=JobStatus.DONE),
         ]
     )
     db_session.commit()
@@ -661,7 +661,7 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
         f"{talk.id}/intro/intro.mp4",
         f"{talk.id}/outro/outro.mp4",
         f"{talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
     )
 
 
@@ -700,16 +700,16 @@ def test_job_concat_success_enqueues_job_loudness(
     assert reloaded.status == TalkStatus.ASSEMBLING
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "concat"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.CONCAT
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_light_enqueue.assert_called_once_with(
         job_loudness,
         talk.id,
         f"{talk.id}/assemble/assemble.mp4",
         f"{talk.id}/assemble/assemble_loud.mp4",
-        job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]["job_timeout"],
     )
 
 
@@ -740,16 +740,16 @@ def test_job_loudness_success_advances_to_transcoding(
     assert reloaded.status == TalkStatus.TRANSCODING
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "loudness"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.LOUDNESS
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_heavy_enqueue.assert_called_once_with(
         job_transcode,
         talk.id,
         f"{talk.id}/assemble/assemble_loud.mp4",
         f"{talk.id}/final/final.mp4",
-        job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+        job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]["job_timeout"],
     )
 
 
@@ -839,10 +839,10 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
     db_session.expire_all()
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "intro"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.INTRO
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
 
 
@@ -868,10 +868,10 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
     db_session.expire_all()
     job = db_session.scalars(
         select(models.Job).where(
-            models.Job.talk_id == talk.id, models.Job.kind == "outro"
+            models.Job.talk_id == talk.id, models.Job.kind == JobKind.OUTRO
         )
     ).one()
-    assert job.status == "done"
+    assert job.status == JobStatus.DONE
     mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
 
 
@@ -905,8 +905,8 @@ def test_configure_assembly_dispatch_failure_advances_to_broken(
     failed_job = db_session.scalar(
         select(models.Job).where(
             models.Job.talk_id == stored_talk.id,
-            models.Job.kind == "assembly",
-            models.Job.status == "failed",
+            models.Job.kind == JobKind.ASSEMBLY,
+            models.Job.status == JobStatus.FAILED,
         )
     )
     assert failed_job is not None

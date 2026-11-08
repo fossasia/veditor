@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, settings
+from app.consts import TalkStatus
 from app.db import Base
 from app.models import Event, Talk
 from app.retention import (
@@ -291,7 +292,7 @@ def test_sweep_removes_final_past_default_window(
         title="Old Done Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
@@ -322,7 +323,7 @@ def test_sweep_preserves_final_within_window(
         title="Recent Done Talk",
         start=recent_date,
         end=recent_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=recent_date,
     )
     db_session.add(talk)
@@ -354,7 +355,7 @@ def test_sweep_honors_custom_override(
         title="Talk 20 Days Old",
         start=date_20_days_ago,
         end=date_20_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_20_days_ago,
     )
     db_session.add(talk_30)
@@ -373,7 +374,7 @@ def test_sweep_honors_custom_override(
         title="Talk 8 Days Old",
         start=date_8_days_ago,
         end=date_8_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_8_days_ago,
     )
     db_session.add(talk_7)
@@ -408,7 +409,7 @@ def test_sweep_honors_indefinite_override(
         title="Ancient Talk",
         start=ancient_date,
         end=ancient_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=ancient_date,
     )
     db_session.add(talk)
@@ -436,7 +437,7 @@ def test_sweep_never_touches_rejected_talks(
         title="Rejected Talk",
         start=old_date,
         end=old_date,
-        status="rejected",
+        status=TalkStatus.REJECTED,
         updated_at=old_date,
     )
     db_session.add(talk)
@@ -464,7 +465,7 @@ def test_sweep_idempotency_on_already_cleaned_paths(
         title="Idempotency Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
@@ -499,7 +500,7 @@ def test_sweep_dynamic_override_takes_effect_without_redeploy(
         title="Dynamic Talk",
         start=date_15_days_ago,
         end=date_15_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_15_days_ago,
     )
     db_session.add(talk)
@@ -581,7 +582,7 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None
         title="Failing Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     talk2 = Talk(
@@ -589,7 +590,7 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None
         title="Succeeding Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add_all([talk1, talk2])
@@ -627,7 +628,7 @@ def test_sweep_sets_final_cleaned_at_and_skips_subsequent(
         title="Tracking Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
@@ -692,7 +693,7 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None
         title="First Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     talk2 = Talk(
@@ -700,7 +701,7 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None
         title="Second Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add_all([talk1, talk2])
@@ -757,7 +758,7 @@ def test_sweep_deletes_when_storage_lacks_list_keys(db_session: Session) -> None
         title="No ListKeys Talk",
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)

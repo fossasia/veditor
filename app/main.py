@@ -10,10 +10,10 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.db import get_db
-from app.queue import redis_conn
-from app.routes import admin, auth, client, events, jobs, ops, reviews, studio, talks
-from app.ui.templating import templates
+from .db import get_db
+from .queue import redis_conn
+from .routes import admin, auth, client, events, jobs, ops, reviews, studio, talks
+from .ui.templating import templates
 
 app = FastAPI(title="VEditor API")
 

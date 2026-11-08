@@ -24,10 +24,9 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.db import Base
-from app.retention import validate_retention_overrides
-
-from .consts import TalkStatus
+from .consts import AuthRole, JobKind, JobStatus, TalkStatus
+from .db import Base
+from .retention import validate_retention_overrides
 
 
 class RetentionOverrides(MutableDict):
@@ -66,9 +65,15 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(
-        String(32),
-        default="user",
+    role: Mapped[AuthRole] = mapped_column(
+        SAEnum(
+            AuthRole,
+            native_enum=False,
+            length=32,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=AuthRole.USER,
         server_default=text("'user'"),
         nullable=False,
     )
@@ -335,8 +340,26 @@ class Job(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     talk_id: Mapped[int] = mapped_column(ForeignKey("talks.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    kind: Mapped[JobKind] = mapped_column(
+        SAEnum(
+            JobKind,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+    )
+    status: Mapped[JobStatus] = mapped_column(
+        SAEnum(
+            JobStatus,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+    )
     log_path: Mapped[str | None] = mapped_column(Text)
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
@@ -357,7 +380,7 @@ class Job(Base):
     def elapsed_time(self) -> float | None:
         """Calculate elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        Uses `updated_at` as the end time for terminal statuses (`JobStatus.is_terminal`)
         when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
@@ -367,7 +390,7 @@ class Job(Base):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed", "broken", "rejected", "cancelled"):
+        if self.status.is_terminal:
             if self.updated_at is None:
                 return None
             end = (
@@ -382,10 +405,10 @@ class Job(Base):
     @property
     def estimated_remaining(self) -> float | None:
         """Estimate remaining runtime in seconds based on elapsed time and progress percentage."""
-        if self.status != "running":
+        if self.status != JobStatus.RUNNING:
             return (
                 0.0
-                if self.status == "done"
+                if self.status == JobStatus.DONE
                 and self.progress_pct is not None
                 and self.progress_pct >= 100.0
                 else None

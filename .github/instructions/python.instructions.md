@@ -33,3 +33,8 @@ applyTo: "**/*.py"
 - Prefer unqualified type names in annotations and casts (for example, `Request` instead of `urllib.request.Request`); import the type at module top level.
 - If two imports would collide (for example FastAPI's `Request` and `urllib.request.Request` in the same module), keep the more domain-relevant one (FastAPI's `Request`) under its plain name and alias the other (for example, `from urllib.request import Request as URLRequest`).
 - In a `cast()` call with a subscripted generic (for example `Packet[VideoStream]`), pass the type as a string so it is not evaluated at runtime: `cast("Packet[VideoStream]", value)`.
+
+## Constants
+
+- Use `HTTPStatus`, `HTTPMethod` from `http` module, instead of literal strings or numbers.
+- Prefer constants from standard `http` module over the third-party (FastAPI) ones.

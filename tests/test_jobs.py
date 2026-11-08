@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import get_client
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.main import app
 from app.schemas import JobRead
 
@@ -30,7 +31,7 @@ def _create_talk(
         title=title,
         start=now,
         end=now,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db.add(talk)
     db.commit()
@@ -42,8 +43,8 @@ def _create_job(
     db: Session,
     talk_id: int,
     *,
-    kind: str = "transcode",
-    status: str = "queued",
+    kind: JobKind = JobKind.TRANSCODE,
+    status: JobStatus = JobStatus.QUEUED,
     **kwargs: Any,
 ) -> models.Job:
     job = models.Job(talk_id=talk_id, kind=kind, status=status, **kwargs)
@@ -76,8 +77,8 @@ def test_get_job_unauthorized_event_returns_404(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="detect",
-        status="done",
+        kind=JobKind.DETECT,
+        status=JobStatus.DONE,
         log_path=f"{talk.id}/logs/detect.log",
     )
 
@@ -96,8 +97,8 @@ def test_get_job_success(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         log_path=f"{talk.id}/logs/transcode.log",
     )
 
@@ -119,7 +120,7 @@ def test_get_job_success_null_log_path(db_session: Session) -> None:
     """Queued job with null log_path returns valid JobRead schema."""
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id)
-    job = _create_job(db_session, talk.id, kind="cut", status="queued")
+    job = _create_job(db_session, talk.id, kind=JobKind.CUT, status=JobStatus.QUEUED)
 
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
@@ -145,8 +146,8 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         log_path=f"{talk.id}/logs/transcode.log",
         progress_pct=50.0,
         started_at=started,
@@ -180,8 +181,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_no_start = JobRead(
         id=1,
         talk_id=1,
-        kind="cut",
-        status="queued",
+        kind=JobKind.CUT,
+        status=JobStatus.QUEUED,
         started_at=None,
         progress_pct=50.0,
     )
@@ -192,8 +193,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_none_pct = JobRead(
         id=2,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started,
         progress_pct=None,
     )
@@ -204,8 +205,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_zero_pct = JobRead(
         id=3,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started,
         progress_pct=0.0,
     )
@@ -216,8 +217,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_100_pct = JobRead(
         id=4,
         talk_id=1,
-        kind="transcode",
-        status="done",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=now,
         progress_pct=100.0,
@@ -236,8 +237,8 @@ def test_linear_extrapolation_accuracy() -> None:
     job_25 = JobRead(
         id=10,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started_25,
         progress_pct=25.0,
     )
@@ -250,8 +251,8 @@ def test_linear_extrapolation_accuracy() -> None:
     job_75 = JobRead(
         id=11,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started_75,
         progress_pct=75.0,
     )
@@ -270,8 +271,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     done_job = JobRead(
         id=20,
         talk_id=1,
-        kind="cut",
-        status="done",
+        kind=JobKind.CUT,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=updated,
         progress_pct=100.0,
@@ -283,8 +284,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     failed_job = JobRead(
         id=21,
         talk_id=1,
-        kind="transcode",
-        status="failed",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.FAILED,
         started_at=started,
         updated_at=updated,
         progress_pct=40.0,
@@ -297,8 +298,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     terminal_missing_updated = JobRead(
         id=22,
         talk_id=1,
-        kind="transcode",
-        status="failed",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.FAILED,
         started_at=started,
         updated_at=None,
         progress_pct=40.0,
@@ -309,8 +310,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     # 4. Model level elapsed_time property and started_at default
     db_queued_job = models.Job(
         talk_id=1,
-        kind="cut",
-        status="queued",
+        kind=JobKind.CUT,
+        status=JobStatus.QUEUED,
     )
     assert db_queued_job.started_at is None
     assert db_queued_job.elapsed_time is None
@@ -319,8 +320,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     db_done_job = models.Job(
         id=23,
         talk_id=1,
-        kind="cut",
-        status="done",
+        kind=JobKind.CUT,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=updated,
         progress_pct=100.0,
@@ -330,8 +331,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     db_broken_no_updated = models.Job(
         id=24,
         talk_id=1,
-        kind="cut",
-        status="broken",
+        kind=JobKind.CUT,
+        status=JobStatus.BROKEN,
         started_at=started,
         updated_at=None,
     )

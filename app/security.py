@@ -14,10 +14,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import ALLOWED_JWT_ALGORITHMS, settings
-from app.consts import AuthRole, SSOScopeType
-from app.db import new_session
-from app.models import User
+from .config import ALLOWED_JWT_ALGORITHMS, settings
+from .consts import AuthRole, SSOScopeType
+from .db import new_session
+from .models import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +131,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_session_token(
     user_id: int,
-    role: str,
+    role: AuthRole,
     expires_in_hours: int | None = None,
     password_hash: str | None = None,
 ) -> str:
@@ -260,7 +260,7 @@ def decode_session_token(token: str) -> dict | None:
 def create_access_token(
     user_id: int,
     email: str,
-    role: str,
+    role: AuthRole,
     expires_in_seconds: int | None = None,
     password_hash: str | None = None,
 ) -> str:
@@ -473,7 +473,7 @@ def is_valid_email(email: str) -> bool:
 def create_sso_token(
     scope_type: SSOScopeType | Literal["event", "talk"],
     scope_id: int,
-    role: str,
+    role: AuthRole,
     expires_in_seconds: int | None = None,
     email: str | None = None,
     display_name: str | None = None,
@@ -488,11 +488,11 @@ def create_sso_token(
         raise ValueError("scope_type must be 'event' or 'talk'")
     if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
         raise ValueError("scope_id must be a positive integer")
-    if role not in ("organizer", "speaker"):
+    if role not in SSO_VALID_ROLES:
         raise ValueError("role must be 'organizer' or 'speaker'")
     if (
         scope_type_enum is SSOScopeType.EVENT
-        and role == "speaker"
+        and role is AuthRole.SPEAKER
         and (not isinstance(email, str) or not email.strip())
     ):
         raise ValueError("email is required for event-scoped speaker tokens")

@@ -2,9 +2,10 @@ import asyncio
 import logging
 import urllib.parse
 from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
 from sqlalchemy import select, update
@@ -13,12 +14,12 @@ from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.formparsers import MultiPartException
 
-from app import models, schemas
-from app.config import settings
-from app.consts import AuthRole
-from app.db import get_db
-from app.queue import light_queue, redis_conn
-from app.security import (
+from .. import models, schemas
+from ..config import settings
+from ..consts import AuthRole
+from ..db import get_db
+from ..queue import light_queue, redis_conn
+from ..security import (
     create_access_token,
     create_email_verification_token,
     create_session_token,
@@ -32,8 +33,8 @@ from app.security import (
     verify_password_reset_token,
     verify_session_token_not_revoked,
 )
-from app.tasks import job_send_password_reset_email, job_send_verification_email
-from app.ui.templating import templates
+from ..tasks import job_send_password_reset_email, job_send_verification_email
+from ..ui.templating import templates
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def login_page(
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
         target = _get_safe_redirect_target(next, default="/studio")
-        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url=target, status_code=HTTPStatus.FOUND)
     notice = None
     if reset == "success":
         notice = "Your password has been reset successfully. Please sign in with your new password."
@@ -155,7 +156,7 @@ def login_submit(
                 "next": next or "",
                 "notice": None,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     user = db.scalar(select(models.User).where(models.User.email == clean_email))
@@ -172,7 +173,7 @@ def login_submit(
                 "next": next or "",
                 "notice": None,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if not user.is_verified:
@@ -186,16 +187,14 @@ def login_submit(
                 "unverified": True,
                 "notice": None,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     _sync_speaker_role(user, db, clean_email)
 
     token = create_session_token(user.id, user.role, password_hash=user.hashed_password)
     redirect_target = _get_safe_redirect_target(next, default="/studio")
-    response = RedirectResponse(
-        url=redirect_target, status_code=status.HTTP_303_SEE_OTHER
-    )
+    response = RedirectResponse(url=redirect_target, status_code=HTTPStatus.SEE_OTHER)
     is_secure = (request.url.scheme == "https") or (
         settings.environment.lower() in ("production", "prod")
     )
@@ -219,7 +218,7 @@ def signup_page(
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
         target = _get_safe_redirect_target(next, default="/studio")
-        return RedirectResponse(url=target, status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url=target, status_code=HTTPStatus.FOUND)
     return templates.TemplateResponse(
         request,
         "signup.html.jinja",
@@ -250,7 +249,7 @@ def signup_submit(
                 "email": clean_email,
                 "next": next,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if len(password) < 8:
@@ -262,7 +261,7 @@ def signup_submit(
                 "email": clean_email,
                 "next": next,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if len(password) > 256:
@@ -274,7 +273,7 @@ def signup_submit(
                 "email": clean_email,
                 "next": next,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if password != password_confirm:
@@ -282,7 +281,7 @@ def signup_submit(
             request,
             "signup.html.jinja",
             {"error": "Passwords do not match.", "email": clean_email, "next": next},
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     existing = db.scalar(select(models.User).where(models.User.email == clean_email))
@@ -295,7 +294,7 @@ def signup_submit(
                 "email": clean_email,
                 "next": next,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     hashed = hash_password(password)
@@ -324,7 +323,7 @@ def signup_submit(
                 "error": "An account with this email already exists.",
                 "email": clean_email,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
     db.refresh(user)
 
@@ -356,14 +355,14 @@ def signup_submit(
 
     return RedirectResponse(
         url=redirect_url,
-        status_code=status.HTTP_303_SEE_OTHER,
+        status_code=HTTPStatus.SEE_OTHER,
     )
 
 
 @router.post("/logout")
 @router.get("/logout")
 def logout(request: Request) -> RedirectResponse:
-    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url="/login", status_code=HTTPStatus.SEE_OTHER)
     is_secure = (request.url.scheme == "https") or (
         settings.environment.lower() in ("production", "prod")
     )
@@ -418,7 +417,7 @@ async def api_auth_token(
 
     if not email_or_username or not password or not isinstance(password, str):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
@@ -435,14 +434,14 @@ async def api_auth_token(
 
     if not user or not user.is_active or not valid_password:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     if not user.is_verified:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Email address not verified",
         )
 
@@ -504,7 +503,7 @@ def verify_email_confirm_page(
             request,
             "verify_email_error.html.jinja",
             {"error": "Verification link is missing or invalid.", "email": ""},
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     payload = decode_email_verification_token(clean_token)
@@ -516,7 +515,7 @@ def verify_email_confirm_page(
                 "error": "Verification link is invalid or has expired.",
                 "email": "",
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     user_id = payload.get("user_id")
@@ -531,7 +530,7 @@ def verify_email_confirm_page(
                 "error": "User account not found, deactivated, or email has changed.",
                 "email": token_email or "",
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if user.is_verified:
@@ -542,7 +541,7 @@ def verify_email_confirm_page(
                 "error": "This email address has already been verified. Please sign in.",
                 "email": user.email,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     return templates.TemplateResponse(
@@ -570,7 +569,7 @@ def verify_email_submit(
             request,
             "verify_email_error.html.jinja",
             {"error": "Verification link is missing or invalid.", "email": ""},
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     payload = decode_email_verification_token(clean_token)
@@ -582,7 +581,7 @@ def verify_email_submit(
                 "error": "Verification link is invalid or has expired.",
                 "email": "",
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     user_id = payload.get("user_id")
@@ -597,7 +596,7 @@ def verify_email_submit(
                 "error": "User account not found, deactivated, or email has changed.",
                 "email": token_email or "",
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     result = db.execute(
@@ -621,7 +620,7 @@ def verify_email_submit(
                 "error": "This email address has already been verified. Please sign in.",
                 "email": user.email,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     _sync_speaker_role(user, db, user.email)
@@ -630,7 +629,7 @@ def verify_email_submit(
         user.id, user.role, password_hash=user.hashed_password
     )
     target = _get_safe_redirect_target(next, default="/studio?verified=1")
-    response = RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(url=target, status_code=HTTPStatus.SEE_OTHER)
     is_secure = (request.url.scheme == "https") or settings.is_production
     response.set_cookie(
         key="veditor_session",
@@ -682,7 +681,7 @@ def verify_email_resend_submit(
                 "email": clean_email,
                 "next": safe_next,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     # Rate limiting via Redis (60 seconds cooldown) - atomic NX
@@ -701,7 +700,7 @@ def verify_email_resend_submit(
                     "email": clean_email,
                     "next": safe_next,
                 },
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                status_code=HTTPStatus.TOO_MANY_REQUESTS,
             )
     except RedisError as exc:
         logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
@@ -714,7 +713,7 @@ def verify_email_resend_submit(
                 "email": clean_email,
                 "next": safe_next,
             },
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
         )
 
     user = db.scalar(select(models.User).where(models.User.email == clean_email))
@@ -771,24 +770,24 @@ def request_organizer_role(
         cookie_token and decode_sso_token(cookie_token) is not None
     ) or request.headers.get("X-SSO-Token"):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="SSO sessions cannot request organizer access",
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Authentication required",
         )
     if user.role != AuthRole.USER:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail="Only standard users can request organizer access",
         )
     if user.organizer_requested:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail="An organizer access request is already pending",
         )
 
@@ -816,11 +815,11 @@ def request_organizer_role(
         )
         if current_db_user and current_db_user.role != AuthRole.USER:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=HTTPStatus.BAD_REQUEST,
                 detail="Only standard users can request organizer access",
             )
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=HTTPStatus.CONFLICT,
             detail="An organizer access request is already pending",
         )
     db.commit()
@@ -835,7 +834,7 @@ def forgot_password_page(
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
     if _get_authenticated_user_from_cookie(request, db) is not None:
-        return RedirectResponse(url="/studio", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/studio", status_code=HTTPStatus.FOUND)
     return templates.TemplateResponse(
         request,
         "forgot_password.html.jinja",
@@ -859,7 +858,7 @@ def forgot_password_submit(
                 "message": None,
                 "email": clean_email,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     rate_key = f"rate:forgot_password:{clean_email}"
@@ -876,7 +875,7 @@ def forgot_password_submit(
                     "message": None,
                     "email": clean_email,
                 },
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                status_code=HTTPStatus.TOO_MANY_REQUESTS,
             )
     except RedisError as exc:
         logger.error("Redis rate limit check failed for %s: %s", clean_email, exc)
@@ -888,7 +887,7 @@ def forgot_password_submit(
                 "message": None,
                 "email": clean_email,
             },
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
         )
 
     try:
@@ -939,7 +938,7 @@ def reset_password_page(
                 "error": "Password reset link is missing or invalid.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     payload = decode_password_reset_token(clean_token)
@@ -951,7 +950,7 @@ def reset_password_page(
                 "error": "Password reset link is invalid or has expired.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     user_id = payload.get("user_id")
@@ -971,7 +970,7 @@ def reset_password_page(
                 "error": "Password reset link is invalid, expired, or has already been used.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     return templates.TemplateResponse(
@@ -1003,7 +1002,7 @@ def reset_password_submit(
                 "error": "Password reset link is missing or invalid.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     payload = decode_password_reset_token(clean_token)
@@ -1015,7 +1014,7 @@ def reset_password_submit(
                 "error": "Password reset link is invalid or has expired.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     user_id = payload.get("user_id")
@@ -1035,7 +1034,7 @@ def reset_password_submit(
                 "error": "Password reset link is invalid, expired, or has already been used.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if len(password) < 8:
@@ -1047,7 +1046,7 @@ def reset_password_submit(
                 "email": user.email,
                 "token": clean_token,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if len(password) > 256:
@@ -1059,7 +1058,7 @@ def reset_password_submit(
                 "email": user.email,
                 "token": clean_token,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     if password != password_confirm:
@@ -1071,7 +1070,7 @@ def reset_password_submit(
                 "email": user.email,
                 "token": clean_token,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     new_hashed = hash_password(password)
@@ -1105,7 +1104,7 @@ def reset_password_submit(
                 "error": "Password reset link is invalid, expired, or has already been used.",
                 "expire_hours": expire_hours,
             },
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     # Revoke all existing sessions across devices for this account
@@ -1122,7 +1121,7 @@ def reset_password_submit(
         logger.debug("Failed to set session revocation marker: %s", redis_exc)
 
     response = RedirectResponse(
-        url="/login?reset=success", status_code=status.HTTP_303_SEE_OTHER
+        url="/login?reset=success", status_code=HTTPStatus.SEE_OTHER
     )
     is_secure = (request.url.scheme == "https") or (
         settings.environment.lower() in ("production", "prod")

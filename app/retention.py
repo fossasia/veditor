@@ -12,10 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 
-from app.config import settings
-from app.db import new_session
-from app.queue import light_queue
-from app.storage import get_storage_backend
+from .config import settings
+from .consts import TalkStatus
+from .db import new_session
+from .queue import light_queue
+from .storage import get_storage_backend
 
 DEFAULT_FINAL_RETENTION_DAYS: Final[int] = 14
 INDEFINITE: Final = "indefinite"
@@ -23,7 +24,7 @@ INDEFINITE: Final = "indefinite"
 RetentionDays = int | Literal["indefinite"]
 
 if TYPE_CHECKING:
-    from app.models import Event, Talk
+    from .models import Event, Talk
 
 
 def validate_final_retention_days(value: Any) -> RetentionDays:
@@ -84,7 +85,7 @@ def get_retention(
 
     # Imported here, not at module top, to avoid a circular import:
     # app.models -> app.retention (for validate_retention_overrides).
-    from app.models import Talk
+    from .models import Talk
 
     if isinstance(event, dict):
         overrides = event.get("retention_overrides", event)
@@ -121,7 +122,7 @@ def run_retention_sweep(
     - Returns list of talk IDs whose final/ storage was deleted.
     """
 
-    from app.models import Talk
+    from .models import Talk
 
     logger = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ def run_retention_sweep(
     talks = db.scalars(
         select(Talk)
         .options(joinedload(Talk.event))
-        .where(Talk.status == "done", Talk.final_cleaned_at.is_(None))
+        .where(Talk.status == TalkStatus.DONE, Talk.final_cleaned_at.is_(None))
         .order_by(Talk.id.asc())
     ).all()
 

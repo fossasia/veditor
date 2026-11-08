@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.consts import AuthRole, JobKind, JobStatus
 from app.db import Base
 from app.models import Client, Event, Job, Review, Talk, User
 
@@ -49,7 +50,7 @@ def test_create_event_and_talk_relationships(db_session: Session) -> None:
     assert talk.custom_outro_path is None
     assert talk.updated_at is not None
 
-    job = Job(talk_id=talk.id, kind="cut", status="running")
+    job = Job(talk_id=talk.id, kind=JobKind.CUT, status=JobStatus.RUNNING)
     db_session.add(job)
 
     review = Review(talk_id=talk.id, decision="approved", note="Looks good")
@@ -182,7 +183,7 @@ def test_user_model_and_relationships(db_session: Session) -> None:
     db_session.flush()
 
     assert user.id is not None
-    assert user.role == "user"
+    assert user.role == AuthRole.USER
     assert user.is_active is True
     assert user.created_at is not None
     assert user.updated_at is not None
