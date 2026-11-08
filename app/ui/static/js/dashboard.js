@@ -72,8 +72,10 @@ async function pollTalk(talkId) {
     }
 
     if (row && talkStatus) row.dataset.status = talkStatus;
-    if (row && talkStatus && talkStatus !== previousStatus &&
-        sortBySelect && sortBySelect.value === 'status') {
+    if (
+      row && talkStatus && talkStatus !== previousStatus
+      && sortBySelect && sortBySelect.value === 'status'
+    ) {
       sortRows();
     }
   } catch { /* skip */ }
