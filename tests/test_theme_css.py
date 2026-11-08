@@ -4,16 +4,20 @@ import re
 from pathlib import Path
 
 
-def _parse_theme_blocks(theme_css_content: str) -> tuple[dict[str, str], dict[str, str]]:
+def _parse_theme_blocks(
+    theme_css_content: str,
+) -> tuple[dict[str, str], dict[str, str]]:
     """Extract CSS variables declared in light and dark theme blocks."""
+    uncommented_css = re.sub(r"/\*.*?\*/", "", theme_css_content, flags=re.DOTALL)
+
     light_match = re.search(
         r"(?::root|html\[data-theme=[\"']light[\"']\])[^{]*\{(.*?)\}",
-        theme_css_content,
+        uncommented_css,
         re.DOTALL,
     )
     dark_match = re.search(
         r"html\[data-theme=[\"']dark[\"']\][^{]*\{(.*?)\}",
-        theme_css_content,
+        uncommented_css,
         re.DOTALL,
     )
 
@@ -54,9 +58,7 @@ def test_v_bg_card_declared_in_light_and_dark_themes() -> None:
 
 def test_v_bg_card_usages_have_declarations() -> None:
     """Verify that all application CSS files referencing --v-bg-card have declarations."""
-    static_css_dir = (
-        Path(__file__).parent.parent / "app" / "ui" / "static" / "css"
-    )
+    static_css_dir = Path(__file__).parent.parent / "app" / "ui" / "static" / "css"
     theme_file = static_css_dir / "theme.css"
     theme_content = theme_file.read_text(encoding="utf-8")
     light_vars, dark_vars = _parse_theme_blocks(theme_content)
@@ -80,5 +82,37 @@ def test_v_bg_card_usages_have_declarations() -> None:
                     f"{var_name} referenced in {css_file.name} is missing from dark theme"
                 )
 
-    assert card_usages >= 6, f"Expected at least 6 usages of --v-bg-card, found {card_usages}"
+    assert card_usages >= 6, (
+        f"Expected at least 6 usages of --v-bg-card, found {card_usages}"
+    )
 
+
+def test_commented_declaration_is_ignored() -> None:
+    """Verify that custom property declarations inside comments are ignored."""
+    css_with_light_commented = """
+    :root, html[data-theme="light"] {
+        /* --v-bg-card: var(--v-bg-surface); */
+        --v-bg-surface: #ffffff;
+    }
+    html[data-theme="dark"] {
+        --v-bg-surface: #151922;
+        --v-bg-card: var(--v-bg-surface);
+    }
+    """
+    light_vars, dark_vars = _parse_theme_blocks(css_with_light_commented)
+    assert "--v-bg-card" not in light_vars
+    assert "--v-bg-card" in dark_vars
+
+    css_with_dark_commented = """
+    :root, html[data-theme="light"] {
+        --v-bg-surface: #ffffff;
+        --v-bg-card: var(--v-bg-surface);
+    }
+    html[data-theme="dark"] {
+        --v-bg-surface: #151922;
+        /* --v-bg-card: var(--v-bg-surface); */
+    }
+    """
+    light_vars2, dark_vars2 = _parse_theme_blocks(css_with_dark_commented)
+    assert "--v-bg-card" in light_vars2
+    assert "--v-bg-card" not in dark_vars2
