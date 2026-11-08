@@ -17,9 +17,13 @@ rq-worker:
 type-check:
     mypy app migrations scripts tests
 
-# Format Python code with Ruff
+# Lint Python code with Ruff (same as pre-commit ruff-check hook)
+lint-py:
+    ruff check --fix --exit-non-zero-on-fix
+
+# Format Python code with Ruff (same as pre-commit ruff-format hook)
 format-py:
-    ruff format app migrations scripts tests
+    ruff format
 
 # Format JS with dprint
 format-js:
