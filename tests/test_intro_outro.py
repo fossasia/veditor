@@ -32,6 +32,7 @@ from app.ui.templating import format_timecode_filter
 
 from .conftest import FakeStorageBackend, generate_clip
 
+
 client = TestClient(app)
 
 
@@ -41,18 +42,18 @@ def fake_storage() -> FakeStorageBackend:
 
 
 def _create_stored_talk(db: Session, **overrides: Any) -> models.Talk:
-    event_row = models.Event(name="Intro/Outro Test Event")
+    event_row = models.Event(name='Intro/Outro Test Event')
     db.add(event_row)
     db.commit()
     db.refresh(event_row)
 
     talk = models.Talk(
         event_id=event_row.id,
-        title=overrides.pop("title", "Keynote on Scalable Systems"),
-        room="Auditorium A",
+        title=overrides.pop('title', 'Keynote on Scalable Systems'),
+        room='Auditorium A',
         start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
-        status=overrides.pop("status", TalkStatus.PENDING_INTRO_OUTRO),
+        status=overrides.pop('status', TalkStatus.PENDING_INTRO_OUTRO),
         cut_start=0.0,
         cut_end=1800.0,
         raw_duration_seconds=1800.0,
@@ -67,20 +68,20 @@ def _create_stored_talk(db: Session, **overrides: Any) -> models.Talk:
 @pytest.fixture
 def stored_talk(db_session: Session, fake_storage: FakeStorageBackend) -> models.Talk:
     talk = _create_stored_talk(db_session)
-    fake_storage.put(f"{talk.id}/cut/cut.mp4", b"fake cut video bytes")
+    fake_storage.put(f'{talk.id}/cut/cut.mp4', b'fake cut video bytes')
     return talk
 
 
 @pytest.fixture
 def auth_client(stored_talk: models.Talk) -> models.Client:
     return models.Client(
-        id=1, hashed_key="valid_hash", event_ids=[stored_talk.event_id]
+        id=1, hashed_key='valid_hash', event_ids=[stored_talk.event_id]
     )
 
 
 def test_intro_outro_unauthorized() -> None:
     """POST /talks/{id}/assemble without X-API-Key returns 401."""
-    response = client.post("/talks/1/assemble", json={})
+    response = client.post('/talks/1/assemble', json={})
     assert response.status_code == 401
 
 
@@ -93,12 +94,12 @@ def test_intro_outro_talk_not_found(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{missing_id}/assemble",
-        json={"include_intro": False, "include_outro": False},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{missing_id}/assemble',
+        json={'include_intro': False, 'include_outro': False},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 404
-    assert response.json()["detail"] == "Talk not found"
+    assert response.json()['detail'] == 'Talk not found'
 
 
 def test_intro_outro_unauthorized_event(
@@ -106,22 +107,22 @@ def test_intro_outro_unauthorized_event(
 ) -> None:
     """POST /talks/{id}/assemble for talk outside client's event_ids returns 404."""
     unauthorized_client = models.Client(
-        id=2, hashed_key="other_hash", event_ids=[stored_talk.event_id + 100]
+        id=2, hashed_key='other_hash', event_ids=[stored_talk.event_id + 100]
     )
     app.dependency_overrides[get_client] = lambda: unauthorized_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
-        json={"include_intro": False, "include_outro": False},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{stored_talk.id}/assemble',
+        json={'include_intro': False, 'include_outro': False},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 404
-    assert response.json()["detail"] == "Talk not found"
+    assert response.json()['detail'] == 'Talk not found'
 
 
 @pytest.mark.parametrize(
-    "invalid_status",
+    'invalid_status',
     [
         TalkStatus.WAITING_FILES,
         TalkStatus.DETECTING,
@@ -152,15 +153,15 @@ def test_intro_outro_invalid_status_conflict(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
-        json={"include_intro": False, "include_outro": False},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{stored_talk.id}/assemble',
+        json={'include_intro': False, 'include_outro': False},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 409
-    assert "pending_intro_outro" in response.json()["detail"]
+    assert 'pending_intro_outro' in response.json()['detail']
 
 
-@pytest.mark.parametrize("empty_path", [None, "", "   "])
+@pytest.mark.parametrize('empty_path', [None, '', '   '])
 def test_intro_outro_missing_custom_intro_path_returns_422(
     db_session: Session,
     auth_client: models.Client,
@@ -173,13 +174,13 @@ def test_intro_outro_missing_custom_intro_path_returns_422(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_intro": True,
-            "intro_source": "custom",
-            "custom_intro_path": empty_path,
+            'include_intro': True,
+            'intro_source': 'custom',
+            'custom_intro_path': empty_path,
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 422
     db_session.expire_all()
@@ -188,7 +189,7 @@ def test_intro_outro_missing_custom_intro_path_returns_422(
     assert reloaded_talk.status == TalkStatus.PENDING_INTRO_OUTRO
 
 
-@pytest.mark.parametrize("empty_path", [None, "", "   "])
+@pytest.mark.parametrize('empty_path', [None, '', '   '])
 def test_intro_outro_missing_custom_outro_path_returns_422(
     db_session: Session,
     auth_client: models.Client,
@@ -201,13 +202,13 @@ def test_intro_outro_missing_custom_outro_path_returns_422(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_outro": True,
-            "outro_source": "custom",
-            "custom_outro_path": empty_path,
+            'include_outro': True,
+            'outro_source': 'custom',
+            'custom_outro_path': empty_path,
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 422
     db_session.expire_all()
@@ -227,12 +228,12 @@ def test_intro_outro_invalid_source_value(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_intro": True,
-            "intro_source": "third_party",
+            'include_intro': True,
+            'intro_source': 'third_party',
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 422
 
@@ -246,12 +247,12 @@ def test_intro_outro_no_cut_recording(
     app.dependency_overrides[get_storage_backend] = lambda: empty_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
-        json={"include_intro": False, "include_outro": False},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{stored_talk.id}/assemble',
+        json={'include_intro': False, 'include_outro': False},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 400
-    assert "No cut recording found" in response.json()["detail"]
+    assert 'No cut recording found' in response.json()['detail']
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -269,16 +270,16 @@ def test_intro_outro_custom_intro_outside_roots(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_intro": True,
-            "intro_source": "custom",
-            "custom_intro_path": "/etc/passwd",
+            'include_intro': True,
+            'intro_source': 'custom',
+            'custom_intro_path': '/etc/passwd',
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 400
-    assert "Intro clip rejected" in response.json()["detail"]
+    assert 'Intro clip rejected' in response.json()['detail']
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -296,16 +297,16 @@ def test_intro_outro_custom_outro_outside_roots(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_outro": True,
-            "outro_source": "custom",
-            "custom_outro_path": "/etc/shadow",
+            'include_outro': True,
+            'outro_source': 'custom',
+            'custom_outro_path': '/etc/shadow',
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 400
-    assert "Outro clip rejected" in response.json()["detail"]
+    assert 'Outro clip rejected' in response.json()['detail']
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -321,24 +322,24 @@ def test_intro_outro_custom_path_corrupt_or_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Custom path inside ingest_roots but nonexistent or invalid video returns 400."""
-    monkeypatch.setattr(settings, "ingest_roots", [str(tmp_path)])
-    non_video = tmp_path / "corrupt.txt"
-    non_video.write_text("not a video")
+    monkeypatch.setattr(settings, 'ingest_roots', [str(tmp_path)])
+    non_video = tmp_path / 'corrupt.txt'
+    non_video.write_text('not a video')
 
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     response = client.post(
-        f"/talks/{stored_talk.id}/assemble",
+        f'/talks/{stored_talk.id}/assemble',
         json={
-            "include_intro": True,
-            "intro_source": "custom",
-            "custom_intro_path": str(non_video),
+            'include_intro': True,
+            'intro_source': 'custom',
+            'custom_intro_path': str(non_video),
         },
-        headers={"X-API-Key": "valid_key"},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 400
-    assert "Intro clip rejected" in response.json()["detail"]
+    assert 'Intro clip rejected' in response.json()['detail']
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -357,24 +358,24 @@ def test_intro_outro_skip_both_success(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": False,
-                "include_outro": False,
+                'include_intro': False,
+                'include_outro': False,
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
     data = response.json()
-    assert data["status"] == "assembling"
-    assert data["include_intro"] is False
-    assert data["include_outro"] is False
-    assert data["intro_source"] is None
-    assert data["outro_source"] is None
+    assert data['status'] == 'assembling'
+    assert data['include_intro'] is False
+    assert data['include_outro'] is False
+    assert data['intro_source'] is None
+    assert data['outro_source'] is None
 
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
@@ -386,11 +387,11 @@ def test_intro_outro_skip_both_success(
     mock_enqueue.assert_called_once_with(
         job_concat,
         stored_talk.id,
-        f"{stored_talk.id}/cut/cut.mp4",
+        f'{stored_talk.id}/cut/cut.mp4',
         None,
         None,
-        f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
+        f'{stored_talk.id}/assemble/assemble.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]['job_timeout'],
     )
 
 
@@ -406,26 +407,26 @@ def test_intro_outro_generated_both_success(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": True,
-                "intro_source": "generated",
-                "include_outro": True,
-                "outro_source": "generated",
+                'include_intro': True,
+                'intro_source': 'generated',
+                'include_outro': True,
+                'outro_source': 'generated',
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
     data = response.json()
-    assert data["status"] == "assembling"
-    assert data["include_intro"] is True
-    assert data["include_outro"] is True
-    assert data["intro_source"] == "generated"
-    assert data["outro_source"] == "generated"
+    assert data['status'] == 'assembling'
+    assert data['include_intro'] is True
+    assert data['include_outro'] is True
+    assert data['intro_source'] == 'generated'
+    assert data['outro_source'] == 'generated'
 
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
@@ -435,9 +436,9 @@ def test_intro_outro_generated_both_success(
     mock_enqueue.assert_called_once_with(
         job_intro,
         stored_talk.id,
-        f"{stored_talk.id}/cut/cut.mp4",
-        f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
+        f'{stored_talk.id}/cut/cut.mp4',
+        f'{stored_talk.id}/intro/intro.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]['job_timeout'],
     )
 
 
@@ -451,29 +452,29 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Custom intro stages the clip and immediately triggers job_outro if outro is generated."""
-    monkeypatch.setattr(settings, "ingest_roots", [str(tmp_path)])
+    monkeypatch.setattr(settings, 'ingest_roots', [str(tmp_path)])
     valid_intro = generate_clip(0.5, output_dir=tmp_path)
 
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": True,
-                "intro_source": "custom",
-                "custom_intro_path": str(valid_intro),
-                "include_outro": True,
-                "outro_source": "generated",
+                'include_intro': True,
+                'intro_source': 'custom',
+                'custom_intro_path': str(valid_intro),
+                'include_outro': True,
+                'outro_source': 'generated',
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
-    assert fake_storage.exists(f"{stored_talk.id}/intro/intro.mp4")
+    assert fake_storage.exists(f'{stored_talk.id}/intro/intro.mp4')
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
     assert persisted is not None
@@ -483,9 +484,9 @@ def test_intro_outro_custom_intro_stages_and_enqueues_outro(
     mock_enqueue.assert_called_once_with(
         job_outro,
         stored_talk.id,
-        f"{stored_talk.id}/cut/cut.mp4",
-        f"{stored_talk.id}/outro/outro.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.OUTRO]["job_timeout"],
+        f'{stored_talk.id}/cut/cut.mp4',
+        f'{stored_talk.id}/outro/outro.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.OUTRO]['job_timeout'],
     )
 
 
@@ -499,29 +500,29 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Custom outro stages the clip and starts job_intro first if intro is generated."""
-    monkeypatch.setattr(settings, "ingest_roots", [str(tmp_path)])
+    monkeypatch.setattr(settings, 'ingest_roots', [str(tmp_path)])
     valid_outro = generate_clip(0.5, output_dir=tmp_path)
 
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": True,
-                "intro_source": "generated",
-                "include_outro": True,
-                "outro_source": "custom",
-                "custom_outro_path": str(valid_outro),
+                'include_intro': True,
+                'intro_source': 'generated',
+                'include_outro': True,
+                'outro_source': 'custom',
+                'custom_outro_path': str(valid_outro),
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
-    assert fake_storage.exists(f"{stored_talk.id}/outro/outro.mp4")
+    assert fake_storage.exists(f'{stored_talk.id}/outro/outro.mp4')
     db_session.expire_all()
     persisted = db_session.get(models.Talk, stored_talk.id)
     assert persisted is not None
@@ -531,9 +532,9 @@ def test_intro_outro_custom_outro_stages_and_enqueues_intro(
     mock_enqueue.assert_called_once_with(
         job_intro,
         stored_talk.id,
-        f"{stored_talk.id}/cut/cut.mp4",
-        f"{stored_talk.id}/intro/intro.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.INTRO]["job_timeout"],
+        f'{stored_talk.id}/cut/cut.mp4',
+        f'{stored_talk.id}/intro/intro.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.INTRO]['job_timeout'],
     )
 
 
@@ -547,7 +548,7 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Providing custom clips for both stages both and enqueues job_concat directly."""
-    monkeypatch.setattr(settings, "ingest_roots", [str(tmp_path)])
+    monkeypatch.setattr(settings, 'ingest_roots', [str(tmp_path)])
     valid_intro = generate_clip(0.5, output_dir=tmp_path)
     valid_outro = generate_clip(0.5, output_dir=tmp_path)
 
@@ -555,24 +556,24 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": True,
-                "intro_source": "custom",
-                "custom_intro_path": str(valid_intro),
-                "include_outro": True,
-                "outro_source": "custom",
-                "custom_outro_path": str(valid_outro),
+                'include_intro': True,
+                'intro_source': 'custom',
+                'custom_intro_path': str(valid_intro),
+                'include_outro': True,
+                'outro_source': 'custom',
+                'custom_outro_path': str(valid_outro),
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
-    assert fake_storage.exists(f"{stored_talk.id}/intro/intro.mp4")
-    assert fake_storage.exists(f"{stored_talk.id}/outro/outro.mp4")
+    assert fake_storage.exists(f'{stored_talk.id}/intro/intro.mp4')
+    assert fake_storage.exists(f'{stored_talk.id}/outro/outro.mp4')
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -581,11 +582,11 @@ def test_intro_outro_custom_both_stages_and_enqueues_concat(
     mock_enqueue.assert_called_once_with(
         job_concat,
         stored_talk.id,
-        f"{stored_talk.id}/cut/cut.mp4",
-        f"{stored_talk.id}/intro/intro.mp4",
-        f"{stored_talk.id}/outro/outro.mp4",
-        f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
+        f'{stored_talk.id}/cut/cut.mp4',
+        f'{stored_talk.id}/intro/intro.mp4',
+        f'{stored_talk.id}/outro/outro.mp4',
+        f'{stored_talk.id}/assemble/assemble.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]['job_timeout'],
     )
 
 
@@ -597,35 +598,35 @@ def test_intro_outro_custom_cut_key_threading(
     stored_talk: models.Talk,
 ) -> None:
     """Custom cut key prefix in storage is threaded to the enqueued task."""
-    fake_storage.delete(f"{stored_talk.id}/cut/cut.mp4")
+    fake_storage.delete(f'{stored_talk.id}/cut/cut.mp4')
     fake_storage.put(
-        f"{stored_talk.id}/cut/recording_custom_bounds.mp4", b"special cut content"
+        f'{stored_talk.id}/cut/recording_custom_bounds.mp4', b'special cut content'
     )
 
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": False,
-                "include_outro": False,
+                'include_intro': False,
+                'include_outro': False,
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     assert response.status_code == 202
     mock_enqueue.assert_called_once_with(
         job_concat,
         stored_talk.id,
-        f"{stored_talk.id}/cut/recording_custom_bounds.mp4",
+        f'{stored_talk.id}/cut/recording_custom_bounds.mp4',
         None,
         None,
-        f"{stored_talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
+        f'{stored_talk.id}/assemble/assemble.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]['job_timeout'],
     )
 
 
@@ -637,9 +638,9 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
         db_session,
         status=TalkStatus.ASSEMBLING,
         include_intro=True,
-        intro_source="generated",
+        intro_source='generated',
         include_outro=True,
-        outro_source="generated",
+        outro_source='generated',
     )
     db_session.add_all(
         [
@@ -650,18 +651,18 @@ def test_dispatch_assembly_both_done_enqueues_job_concat(
     db_session.commit()
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
-        dispatch_assembly(talk.id, cut_key=f"{talk.id}/cut/cut.mp4")
+        dispatch_assembly(talk.id, cut_key=f'{talk.id}/cut/cut.mp4')
 
     mock_enqueue.assert_called_once_with(
         job_concat,
         talk.id,
-        f"{talk.id}/cut/cut.mp4",
-        f"{talk.id}/intro/intro.mp4",
-        f"{talk.id}/outro/outro.mp4",
-        f"{talk.id}/assemble/assemble.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.CONCAT]["job_timeout"],
+        f'{talk.id}/cut/cut.mp4',
+        f'{talk.id}/intro/intro.mp4',
+        f'{talk.id}/outro/outro.mp4',
+        f'{talk.id}/assemble/assemble.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.CONCAT]['job_timeout'],
     )
 
 
@@ -672,26 +673,26 @@ def test_job_concat_success_enqueues_job_loudness(
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_cut.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.concat") as mock_concat,
-        patch("app.tasks.light_queue.enqueue") as mock_light_enqueue,
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.concat') as mock_concat,
+        patch('app.tasks.light_queue.enqueue') as mock_light_enqueue,
     ):
         job_concat(
             talk_id=talk.id,
-            cut_key=f"{talk.id}/cut/cut.mp4",
+            cut_key=f'{talk.id}/cut/cut.mp4',
             intro_key=None,
             outro_key=None,
-            concat_key=f"{talk.id}/assemble/assemble.mp4",
+            concat_key=f'{talk.id}/assemble/assemble.mp4',
         )
 
     mock_concat.assert_called_once_with(
-        cut_path=Path("/tmp/fake_cut.mp4"),
+        cut_path=Path('/tmp/fake_cut.mp4'),
         intro_path=None,
         outro_path=None,
-        output_path=f"{talk.id}/assemble/assemble.mp4",
+        output_path=f'{talk.id}/assemble/assemble.mp4',
         backend=mock_storage,
     )
     db_session.expire_all()
@@ -707,9 +708,9 @@ def test_job_concat_success_enqueues_job_loudness(
     mock_light_enqueue.assert_called_once_with(
         job_loudness,
         talk.id,
-        f"{talk.id}/assemble/assemble.mp4",
-        f"{talk.id}/assemble/assemble_loud.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]["job_timeout"],
+        f'{talk.id}/assemble/assemble.mp4',
+        f'{talk.id}/assemble/assemble_loud.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]['job_timeout'],
     )
 
 
@@ -720,17 +721,17 @@ def test_job_loudness_success_advances_to_transcoding(
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_concat.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_concat.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.normalize") as mock_normalize,
-        patch("app.tasks.heavy_queue.enqueue") as mock_heavy_enqueue,
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.normalize') as mock_normalize,
+        patch('app.tasks.heavy_queue.enqueue') as mock_heavy_enqueue,
     ):
         job_loudness(
             talk_id=talk.id,
-            cut_key=f"{talk.id}/assemble/assemble.mp4",
-            loud_key=f"{talk.id}/assemble/assemble_loud.mp4",
+            cut_key=f'{talk.id}/assemble/assemble.mp4',
+            loud_key=f'{talk.id}/assemble/assemble_loud.mp4',
         )
 
     mock_normalize.assert_called_once()
@@ -747,9 +748,9 @@ def test_job_loudness_success_advances_to_transcoding(
     mock_heavy_enqueue.assert_called_once_with(
         job_transcode,
         talk.id,
-        f"{talk.id}/assemble/assemble_loud.mp4",
-        f"{talk.id}/final/final.mp4",
-        job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]["job_timeout"],
+        f'{talk.id}/assemble/assemble_loud.mp4',
+        f'{talk.id}/final/final.mp4',
+        job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]['job_timeout'],
     )
 
 
@@ -760,18 +761,18 @@ def test_job_loudness_failure_marks_talk_broken(
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_concat.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_concat.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.normalize", side_effect=RuntimeError("Loudnorm filter error")),
-        patch("app.tasks._handle_failure") as mock_fail,
-        pytest.raises(RuntimeError, match="Loudnorm filter error"),
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.normalize', side_effect=RuntimeError('Loudnorm filter error')),
+        patch('app.tasks._handle_failure') as mock_fail,
+        pytest.raises(RuntimeError, match='Loudnorm filter error'),
     ):
         job_loudness(
             talk_id=talk.id,
-            cut_key=f"{talk.id}/assemble/assemble.mp4",
-            loud_key=f"{talk.id}/assemble/assemble_loud.mp4",
+            cut_key=f'{talk.id}/assemble/assemble.mp4',
+            loud_key=f'{talk.id}/assemble/assemble_loud.mp4',
         )
 
     assert mock_fail.call_count == 1
@@ -791,20 +792,20 @@ def test_job_concat_failure_marks_talk_broken(
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
 
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_cut.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.concat", side_effect=RuntimeError("FFmpeg concat failure")),
-        patch("app.tasks._handle_failure") as mock_fail,
-        pytest.raises(RuntimeError, match="FFmpeg concat failure"),
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.concat', side_effect=RuntimeError('FFmpeg concat failure')),
+        patch('app.tasks._handle_failure') as mock_fail,
+        pytest.raises(RuntimeError, match='FFmpeg concat failure'),
     ):
         job_concat(
             talk_id=talk.id,
-            cut_key=f"{talk.id}/cut/cut.mp4",
+            cut_key=f'{talk.id}/cut/cut.mp4',
             intro_key=None,
             outro_key=None,
-            concat_key=f"{talk.id}/assemble/assemble.mp4",
+            concat_key=f'{talk.id}/assemble/assemble.mp4',
         )
 
     assert mock_fail.call_count == 1
@@ -823,17 +824,17 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
     """job_intro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_cut.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.generate_intro_clip"),
-        patch("app.tasks.dispatch_assembly") as mock_dispatch,
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.generate_intro_clip'),
+        patch('app.tasks.dispatch_assembly') as mock_dispatch,
     ):
         job_intro(
             talk.id,
-            cut_key=f"{talk.id}/cut/cut.mp4",
-            intro_key=f"{talk.id}/intro/intro.mp4",
+            cut_key=f'{talk.id}/cut/cut.mp4',
+            intro_key=f'{talk.id}/intro/intro.mp4',
         )
 
     db_session.expire_all()
@@ -843,7 +844,7 @@ def test_job_intro_assembling_invokes_dispatch_assembly(
         )
     ).one()
     assert job.status == JobStatus.DONE
-    mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
+    mock_dispatch.assert_called_once_with(talk.id, f'{talk.id}/cut/cut.mp4')
 
 
 def test_job_outro_assembling_invokes_dispatch_assembly(
@@ -852,17 +853,17 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
     """job_outro in assembling status completes and triggers dispatch_assembly without DetachedInstanceError."""
     talk = _create_stored_talk(db_session, status=TalkStatus.ASSEMBLING)
     mock_storage = MagicMock()
-    mock_storage.get.return_value = Path("/tmp/fake_cut.mp4")
+    mock_storage.get.return_value = Path('/tmp/fake_cut.mp4')
 
     with (
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.generate_outro_clip"),
-        patch("app.tasks.dispatch_assembly") as mock_dispatch,
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.generate_outro_clip'),
+        patch('app.tasks.dispatch_assembly') as mock_dispatch,
     ):
         job_outro(
             talk.id,
-            cut_key=f"{talk.id}/cut/cut.mp4",
-            outro_key=f"{talk.id}/outro/outro.mp4",
+            cut_key=f'{talk.id}/cut/cut.mp4',
+            outro_key=f'{talk.id}/outro/outro.mp4',
         )
 
     db_session.expire_all()
@@ -872,7 +873,7 @@ def test_job_outro_assembling_invokes_dispatch_assembly(
         )
     ).one()
     assert job.status == JobStatus.DONE
-    mock_dispatch.assert_called_once_with(talk.id, f"{talk.id}/cut/cut.mp4")
+    mock_dispatch.assert_called_once_with(talk.id, f'{talk.id}/cut/cut.mp4')
 
 
 def test_configure_assembly_dispatch_failure_advances_to_broken(
@@ -887,15 +888,15 @@ def test_configure_assembly_dispatch_failure_advances_to_broken(
 
     with (
         patch(
-            "app.routes.talks.dispatch_assembly",
-            side_effect=RuntimeError("Redis connection lost"),
+            'app.routes.talks.dispatch_assembly',
+            side_effect=RuntimeError('Redis connection lost'),
         ),
-        pytest.raises(RuntimeError, match="Redis connection lost"),
+        pytest.raises(RuntimeError, match='Redis connection lost'),
     ):
         client.post(
-            f"/talks/{stored_talk.id}/assemble",
-            json={"include_intro": False, "include_outro": False},
-            headers={"X-API-Key": "valid_key"},
+            f'/talks/{stored_talk.id}/assemble',
+            json={'include_intro': False, 'include_outro': False},
+            headers={'X-API-Key': 'valid_key'},
         )
 
     db_session.expire_all()
@@ -910,11 +911,11 @@ def test_configure_assembly_dispatch_failure_advances_to_broken(
         )
     )
     assert failed_job is not None
-    assert failed_job.log_path == f"{stored_talk.id}/logs/assembly.log"
-    assert fake_storage.exists(f"{stored_talk.id}/logs/assembly.log")
+    assert failed_job.log_path == f'{stored_talk.id}/logs/assembly.log'
+    assert fake_storage.exists(f'{stored_talk.id}/logs/assembly.log')
     assert (
-        b"Redis connection lost"
-        in fake_storage.get(f"{stored_talk.id}/logs/assembly.log").read_bytes()
+        b'Redis connection lost'
+        in fake_storage.get(f'{stored_talk.id}/logs/assembly.log').read_bytes()
     )
 
 
@@ -937,20 +938,20 @@ def test_configure_assembly_locks_talk_row_with_for_update(
     ) -> None:
         statements.append(statement)
 
-    event.listen(db_session.get_bind(), "before_cursor_execute", record_statement)
+    event.listen(db_session.get_bind(), 'before_cursor_execute', record_statement)
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
-    with patch("app.routes.talks.dispatch_assembly") as mock_dispatch:
+    with patch('app.routes.talks.dispatch_assembly') as mock_dispatch:
         response = client.post(
-            f"/talks/{stored_talk.id}/assemble",
-            json={"include_intro": False, "include_outro": False},
-            headers={"X-API-Key": "valid_key"},
+            f'/talks/{stored_talk.id}/assemble',
+            json={'include_intro': False, 'include_outro': False},
+            headers={'X-API-Key': 'valid_key'},
         )
     assert response.status_code == 202
-    assert any("FOR UPDATE" in statement.upper() for statement in statements)
+    assert any('FOR UPDATE' in statement.upper() for statement in statements)
     mock_dispatch.assert_called_once_with(
-        stored_talk.id, f"{stored_talk.id}/cut/cut.mp4"
+        stored_talk.id, f'{stored_talk.id}/cut/cut.mp4'
     )
 
 
@@ -961,16 +962,16 @@ def test_upload_bumper_file_success(
     app.dependency_overrides[get_client] = lambda: auth_client
 
     response = client.post(
-        f"/talks/{stored_talk.id}/bumpers/upload",
-        files={"file": ("test_intro.mp4", b"dummy video bytes", "video/mp4")},
-        data={"kind": "intro"},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{stored_talk.id}/bumpers/upload',
+        files={'file': ('test_intro.mp4', b'dummy video bytes', 'video/mp4')},
+        data={'kind': 'intro'},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["filename"] == "test_intro.mp4"
-    assert data["path"].startswith(f"bumpers/bumper_{stored_talk.id}_intro_")
-    staged_file = get_bumper_staging_dir() / Path(data["path"]).name
+    assert data['filename'] == 'test_intro.mp4'
+    assert data['path'].startswith(f'bumpers/bumper_{stored_talk.id}_intro_')
+    staged_file = get_bumper_staging_dir() / Path(data['path']).name
     assert staged_file.is_file()
     staged_file.unlink(missing_ok=True)
 
@@ -982,19 +983,19 @@ def test_upload_bumper_file_replaces_previous_staged_file(
     app.dependency_overrides[get_client] = lambda: auth_client
 
     staging_dir = get_bumper_staging_dir()
-    previous_file = staging_dir / f"bumper_{stored_talk.id}_intro_previous.mp4"
-    previous_file.write_bytes(b"old bumper")
+    previous_file = staging_dir / f'bumper_{stored_talk.id}_intro_previous.mp4'
+    previous_file.write_bytes(b'old bumper')
     try:
         response = client.post(
-            f"/talks/{stored_talk.id}/bumpers/upload",
-            files={"file": ("test_intro.mp4", b"new bumper", "video/mp4")},
-            data={"kind": "intro"},
-            headers={"X-API-Key": "valid_key"},
+            f'/talks/{stored_talk.id}/bumpers/upload',
+            files={'file': ('test_intro.mp4', b'new bumper', 'video/mp4')},
+            data={'kind': 'intro'},
+            headers={'X-API-Key': 'valid_key'},
         )
 
         assert response.status_code == 200
         assert not previous_file.exists()
-        staged_file = staging_dir / Path(response.json()["path"]).name
+        staged_file = staging_dir / Path(response.json()['path']).name
         assert staged_file.is_file()
         staged_file.unlink(missing_ok=True)
     finally:
@@ -1008,22 +1009,22 @@ def test_upload_bumper_file_exceeds_max_size(
 ) -> None:
     """POST /talks/{id}/bumpers/upload exceeding max size returns 413 and unlinks partial file."""
     app.dependency_overrides[get_client] = lambda: auth_client
-    monkeypatch.setattr(settings, "max_bumper_upload_size_bytes", 10)
+    monkeypatch.setattr(settings, 'max_bumper_upload_size_bytes', 10)
 
     response = client.post(
-        f"/talks/{stored_talk.id}/bumpers/upload",
+        f'/talks/{stored_talk.id}/bumpers/upload',
         files={
-            "file": (
-                "large_bumper.mp4",
-                b"this payload is longer than 10 bytes",
-                "video/mp4",
+            'file': (
+                'large_bumper.mp4',
+                b'this payload is longer than 10 bytes',
+                'video/mp4',
             )
         },
-        data={"kind": "intro"},
-        headers={"X-API-Key": "valid_key"},
+        data={'kind': 'intro'},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 413
-    assert "exceeds maximum allowed size" in response.json()["detail"]
+    assert 'exceeds maximum allowed size' in response.json()['detail']
 
 
 def test_settings_max_bumper_upload_size_strictly_positive() -> None:
@@ -1045,13 +1046,13 @@ def test_upload_bumper_file_invalid_kind(
     app.dependency_overrides[get_client] = lambda: auth_client
 
     response = client.post(
-        f"/talks/{stored_talk.id}/bumpers/upload",
-        files={"file": ("test.mp4", b"dummy video bytes", "video/mp4")},
-        data={"kind": "unsupported"},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{stored_talk.id}/bumpers/upload',
+        files={'file': ('test.mp4', b'dummy video bytes', 'video/mp4')},
+        data={'kind': 'unsupported'},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 400
-    assert "Bumper kind must be 'intro' or 'outro'" in response.json()["detail"]
+    assert "Bumper kind must be 'intro' or 'outro'" in response.json()['detail']
 
 
 def test_upload_bumper_file_talk_not_found(
@@ -1062,10 +1063,10 @@ def test_upload_bumper_file_talk_not_found(
     app.dependency_overrides[get_client] = lambda: auth_client
 
     response = client.post(
-        f"/talks/{missing_id}/bumpers/upload",
-        files={"file": ("test.mp4", b"dummy bytes", "video/mp4")},
-        data={"kind": "intro"},
-        headers={"X-API-Key": "valid_key"},
+        f'/talks/{missing_id}/bumpers/upload',
+        files={'file': ('test.mp4', b'dummy bytes', 'video/mp4')},
+        data={'kind': 'intro'},
+        headers={'X-API-Key': 'valid_key'},
     )
     assert response.status_code == 404
 
@@ -1083,31 +1084,31 @@ def test_upload_bumper_and_assemble_flow(
     app.dependency_overrides[get_client] = lambda: auth_client
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
 
-    with open(valid_clip, "rb") as f:
+    with open(valid_clip, 'rb') as f:
         upload_resp = client.post(
-            f"/talks/{stored_talk.id}/bumpers/upload",
-            files={"file": ("custom_intro.mp4", f, "video/mp4")},
-            data={"kind": "intro"},
-            headers={"X-API-Key": "valid_key"},
+            f'/talks/{stored_talk.id}/bumpers/upload',
+            files={'file': ('custom_intro.mp4', f, 'video/mp4')},
+            data={'kind': 'intro'},
+            headers={'X-API-Key': 'valid_key'},
         )
     assert upload_resp.status_code == 200
-    uploaded_path = upload_resp.json()["path"]
+    uploaded_path = upload_resp.json()['path']
 
     with (
-        patch("app.tasks.light_queue.enqueue") as mock_enqueue,
+        patch('app.tasks.light_queue.enqueue') as mock_enqueue,
     ):
         assemble_resp = client.post(
-            f"/talks/{stored_talk.id}/assemble",
+            f'/talks/{stored_talk.id}/assemble',
             json={
-                "include_intro": True,
-                "intro_source": "custom",
-                "custom_intro_path": uploaded_path,
-                "include_outro": False,
+                'include_intro': True,
+                'intro_source': 'custom',
+                'custom_intro_path': uploaded_path,
+                'include_outro': False,
             },
-            headers={"X-API-Key": "valid_key"},
+            headers={'X-API-Key': 'valid_key'},
         )
     assert assemble_resp.status_code == 202
-    assert fake_storage.exists(f"{stored_talk.id}/intro/intro.mp4")
+    assert fake_storage.exists(f'{stored_talk.id}/intro/intro.mp4')
     db_session.expire_all()
     reloaded_talk = db_session.get(models.Talk, stored_talk.id)
     assert reloaded_talk is not None
@@ -1119,9 +1120,9 @@ def test_upload_bumper_and_assemble_flow(
 def test_format_timecode_filter_rollover() -> None:
     """format_timecode_filter handles centisecond rollover without emitting .100."""
 
-    assert format_timecode_filter(59.996) == "00:01:00.00"
-    assert format_timecode_filter(3599.999) == "01:00:00.00"
-    assert format_timecode_filter(0) == "00:00:00.00"
-    assert format_timecode_filter(None) == "00:00:00.00"
-    assert format_timecode_filter(-1) == "00:00:00.00"
-    assert format_timecode_filter(12.34) == "00:00:12.34"
+    assert format_timecode_filter(59.996) == '00:01:00.00'
+    assert format_timecode_filter(3599.999) == '01:00:00.00'
+    assert format_timecode_filter(0) == '00:00:00.00'
+    assert format_timecode_filter(None) == '00:00:00.00'
+    assert format_timecode_filter(-1) == '00:00:00.00'
+    assert format_timecode_filter(12.34) == '00:00:12.34'

@@ -20,13 +20,14 @@ from av.video.stream import VideoStream
 
 from .loudness import _mux_packet_with_monotonic_dts, rescale_pts
 
+
 logger = logging.getLogger(__name__)
 
 
 def _is_avcc(stream: VideoStream) -> bool:
     """Check if stream uses AVCC / HVCC length-prefixed packet format."""
     extra = (
-        bytes(stream.codec_context.extradata) if stream.codec_context.extradata else b""
+        bytes(stream.codec_context.extradata) if stream.codec_context.extradata else b''
     )
     return len(extra) >= 7 and extra[0] == 1
 
@@ -42,7 +43,7 @@ def _extract_sps_pps_from_avcc(extra: bytes) -> tuple[list[bytes], list[bytes]]:
     for _ in range(num_sps):
         if idx + 2 > len(extra):
             break
-        sps_len = struct.unpack(">H", extra[idx : idx + 2])[0]
+        sps_len = struct.unpack('>H', extra[idx : idx + 2])[0]
         idx += 2
         sps_list.append(extra[idx : idx + sps_len])
         idx += sps_len
@@ -52,7 +53,7 @@ def _extract_sps_pps_from_avcc(extra: bytes) -> tuple[list[bytes], list[bytes]]:
         for _ in range(num_pps):
             if idx + 2 > len(extra):
                 break
-            pps_len = struct.unpack(">H", extra[idx : idx + 2])[0]
+            pps_len = struct.unpack('>H', extra[idx : idx + 2])[0]
             idx += 2
             pps_list.append(extra[idx : idx + pps_len])
             idx += pps_len
@@ -66,12 +67,12 @@ def _annexb_to_avcc(data: bytes) -> bytes:
     n = len(data)
     start = -1
     while i < n:
-        if i + 4 <= n and data[i : i + 4] == b"\x00\x00\x00\x01":
+        if i + 4 <= n and data[i : i + 4] == b'\x00\x00\x00\x01':
             if start != -1:
                 nalus.append(data[start:i])
             i += 4
             start = i
-        elif i + 3 <= n and data[i : i + 3] == b"\x00\x00\x01":
+        elif i + 3 <= n and data[i : i + 3] == b'\x00\x00\x01':
             if start != -1:
                 nalus.append(data[start:i])
             i += 3
@@ -85,48 +86,48 @@ def _annexb_to_avcc(data: bytes) -> bytes:
     for nalu in nalus:
         if not nalu:
             continue
-        out.extend(struct.pack(">I", len(nalu)))
+        out.extend(struct.pack('>I', len(nalu)))
         out.extend(nalu)
     return bytes(out)
 
 
 class CutStrategy(str, Enum):
-    STREAM_COPY = "stream_copy"
-    SMART_CUT = "smart_cut"
+    STREAM_COPY = 'stream_copy'
+    SMART_CUT = 'smart_cut'
 
 
 DECODER_TO_ENCODER_VIDEO: dict[str, str] = {
-    "h264": "libx264",
-    "hevc": "libx265",
-    "h265": "libx265",
-    "vp8": "libvpx",
-    "vp9": "libvpx-vp9",
-    "av1": "libsvtav1",
-    "mpeg4": "mpeg4",
+    'h264': 'libx264',
+    'hevc': 'libx265',
+    'h265': 'libx265',
+    'vp8': 'libvpx',
+    'vp9': 'libvpx-vp9',
+    'av1': 'libsvtav1',
+    'mpeg4': 'mpeg4',
 }
 
 DECODER_TO_ENCODER_AUDIO: dict[str, str] = {
-    "aac": "aac",
-    "mp3": "libmp3lame",
-    "opus": "libopus",
-    "vorbis": "libvorbis",
-    "flac": "flac",
-    "pcm_s16le": "pcm_s16le",
+    'aac': 'aac',
+    'mp3': 'libmp3lame',
+    'opus': 'libopus',
+    'vorbis': 'libvorbis',
+    'flac': 'flac',
+    'pcm_s16le': 'pcm_s16le',
 }
 
 
 def _resolve_video_encoder(decoder_name: str | None) -> str:
     """Map a decoder codec name (e.g., 'h264') to an encoder (e.g., 'libx264')."""
     if not decoder_name:
-        return "libx264"
-    return DECODER_TO_ENCODER_VIDEO.get(decoder_name.lower(), "libx264")
+        return 'libx264'
+    return DECODER_TO_ENCODER_VIDEO.get(decoder_name.lower(), 'libx264')
 
 
 def _resolve_audio_encoder(decoder_name: str | None) -> str:
     """Map an audio decoder codec name to an encoder."""
     if not decoder_name:
-        return "aac"
-    return DECODER_TO_ENCODER_AUDIO.get(decoder_name.lower(), "aac")
+        return 'aac'
+    return DECODER_TO_ENCODER_AUDIO.get(decoder_name.lower(), 'aac')
 
 
 def cut(
@@ -162,23 +163,23 @@ def cut(
     out_path = Path(output_path)
 
     if not in_path.is_file():
-        raise FileNotFoundError(f"Input file not found: {in_path}")
+        raise FileNotFoundError(f'Input file not found: {in_path}')
 
     if in_path.resolve() == out_path.resolve():
         raise ValueError(
-            f"Input and output paths must be different to prevent file truncation: {in_path}"
+            f'Input and output paths must be different to prevent file truncation: {in_path}'
         )
 
     if start_seconds < 0:
-        raise ValueError(f"start_seconds must be non-negative: {start_seconds}")
+        raise ValueError(f'start_seconds must be non-negative: {start_seconds}')
 
     if end_seconds <= start_seconds:
         raise ValueError(
-            f"end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})"
+            f'end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})'
         )
 
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be greater than zero: {threads}")
+        raise ValueError(f'threads must be greater than zero: {threads}')
 
     # storage-boundary-exempt: creating parent directory for pipeline output
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +190,7 @@ def cut(
             str(in_path), str(out_path), start_seconds, end_seconds, threads=threads
         )
         logger.info(
-            "Cut completed for %s [%.2fs -> %.2fs] using strategy: %s",
+            'Cut completed for %s [%.2fs -> %.2fs] using strategy: %s',
             in_path.name,
             start_seconds,
             end_seconds,
@@ -205,7 +206,7 @@ def cut(
     ) as smart_exc:
         smart_err = str(smart_exc)
         logger.warning(
-            "Smart cut failed for %s [%.2fs -> %.2fs] (%s); falling back to stream copy at nearest keyframes.",
+            'Smart cut failed for %s [%.2fs -> %.2fs] (%s); falling back to stream copy at nearest keyframes.',
             in_path.name,
             start_seconds,
             end_seconds,
@@ -217,7 +218,7 @@ def cut(
             str(in_path), str(out_path), start_seconds, end_seconds
         )
         logger.info(
-            "Cut completed for %s [%.2fs -> %.2fs] using fallback strategy: %s",
+            'Cut completed for %s [%.2fs -> %.2fs] using fallback strategy: %s',
             in_path.name,
             start_seconds,
             end_seconds,
@@ -226,15 +227,15 @@ def cut(
         return strategy
     except Exception as stream_exc:
         logger.error(
-            "Both smart cut and stream copy fallback failed for %s [%.2fs -> %.2fs]: %s",
+            'Both smart cut and stream copy fallback failed for %s [%.2fs -> %.2fs]: %s',
             in_path.name,
             start_seconds,
             end_seconds,
             stream_exc,
         )
         raise RuntimeError(
-            f"Trimming failed for {in_path.name} [{start_seconds:.2f}s -> {end_seconds:.2f}s]: "
-            f"smart cut failed ({smart_err}), stream copy fallback failed ({stream_exc})"
+            f'Trimming failed for {in_path.name} [{start_seconds:.2f}s -> {end_seconds:.2f}s]: '
+            f'smart cut failed ({smart_err}), stream copy fallback failed ({stream_exc})'
         ) from stream_exc
 
 
@@ -251,7 +252,7 @@ def _cut_smart(
         audio_streams = list(in_container.streams.audio)
 
         if not video_streams and not audio_streams:
-            raise ValueError(f"No audio or video streams found in {input_path}")
+            raise ValueError(f'No audio or video streams found in {input_path}')
 
         # If no video stream (e.g. audio-only), fallback to stream copy
         if not video_streams:
@@ -309,8 +310,8 @@ def _cut_smart(
             K_next = min(next_candidates) if next_candidates else None
             if K_next is None or K_next >= end_seconds:
                 raise RuntimeError(
-                    f"Smart cut cannot trim interval [{start_seconds:.2f}s, {end_seconds:.2f}s]: "
-                    "no interior keyframe found between start and end bounds."
+                    f'Smart cut cannot trim interval [{start_seconds:.2f}s, {end_seconds:.2f}s]: '
+                    'no interior keyframe found between start and end bounds.'
                 )
             K_start_body = K_next
 
@@ -323,8 +324,8 @@ def _cut_smart(
         else:
             if K_last is None or K_last <= K_start_body:
                 raise RuntimeError(
-                    f"Smart cut cannot trim interval [{start_seconds:.2f}s, {end_seconds:.2f}s]: "
-                    "interval is smaller than a single GOP (no stream-copyable interior)."
+                    f'Smart cut cannot trim interval [{start_seconds:.2f}s, {end_seconds:.2f}s]: '
+                    'interval is smaller than a single GOP (no stream-copyable interior).'
                 )
             K_end_body = K_last
 
@@ -338,7 +339,7 @@ def _cut_smart(
                 try:
                     decoded_frames = pkt.decode()
                 except (av.error.InvalidDataError, av.FFmpegError) as exc:
-                    logger.warning("Skipping unparseable head packet in cut: %s", exc)
+                    logger.warning('Skipping unparseable head packet in cut: %s', exc)
                     continue
                 for frame in decoded_frames:
                     t = (
@@ -365,7 +366,7 @@ def _cut_smart(
                 try:
                     decoded_frames = pkt.decode()
                 except (av.error.InvalidDataError, av.FFmpegError) as exc:
-                    logger.warning("Skipping unparseable tail packet in cut: %s", exc)
+                    logger.warning('Skipping unparseable tail packet in cut: %s', exc)
                     continue
                 for frame in decoded_frames:
                     t = (
@@ -381,20 +382,20 @@ def _cut_smart(
                     break
 
     container_options = (
-        {"movflags": "faststart"}
-        if output_path.lower().endswith((".mp4", ".mov", ".m4v"))
+        {'movflags': 'faststart'}
+        if output_path.lower().endswith(('.mp4', '.mov', '.m4v'))
         else {}
     )
     with (
         av.open(input_path) as in_container,
-        av.open(output_path, mode="w", options=container_options) as out_container,
+        av.open(output_path, mode='w', options=container_options) as out_container,
     ):
         in_v = in_container.streams.video[0]
         in_a = in_container.streams.audio[0] if in_container.streams.audio else None
         out_v = out_container.add_stream_from_template(in_v)
         is_avcc = _is_avcc(in_v)
         extra = (
-            bytes(in_v.codec_context.extradata) if in_v.codec_context.extradata else b""
+            bytes(in_v.codec_context.extradata) if in_v.codec_context.extradata else b''
         )
         sps_list, pps_list = _extract_sps_pps_from_avcc(extra)
         out_a = None
@@ -404,13 +405,13 @@ def _cut_smart(
             except ValueError, av.FFmpegError:
                 sample_rate = in_a.codec_context.sample_rate or 44100
                 channels = in_a.codec_context.channels or 1
-                out_a = out_container.add_stream("aac", rate=sample_rate)
+                out_a = out_container.add_stream('aac', rate=sample_rate)
                 if in_a.codec_context.layout:
                     out_a.layout = in_a.codec_context.layout.name
                 elif channels == 2:
-                    out_a.layout = "stereo"
+                    out_a.layout = 'stereo'
                 else:
-                    out_a.layout = "mono"
+                    out_a.layout = 'mono'
 
         last_dts: dict[int, int] = {}
 
@@ -444,18 +445,18 @@ def _cut_smart(
 
         # 2. Encode & Mux Video Head [start_seconds, K_start_body)
         if head_frames:
-            head_options = {"preset": "ultrafast"}
+            head_options = {'preset': 'ultrafast'}
             if threads is not None:
-                head_options["threads"] = str(threads)
+                head_options['threads'] = str(threads)
             if in_v.profile:
-                head_options["profile"] = in_v.profile.lower().split()[0]
+                head_options['profile'] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             head_ctx = cast(
-                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, "w"))
+                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )
             head_ctx.width = in_v.codec_context.width
             head_ctx.height = in_v.codec_context.height
-            head_ctx.pix_fmt = in_v.codec_context.pix_fmt or "yuv420p"
+            head_ctx.pix_fmt = in_v.codec_context.pix_fmt or 'yuv420p'
             head_ctx.time_base = Fraction(1, fps)
             head_ctx.framerate = Fraction(fps, 1)
             head_ctx.options = head_options
@@ -515,17 +516,17 @@ def _cut_smart(
                     if is_avcc and sps_list and pps_list:
                         prefix = bytearray()
                         for s in sps_list:
-                            prefix.extend(struct.pack(">I", len(s)))
+                            prefix.extend(struct.pack('>I', len(s)))
                             prefix.extend(s)
                         for pp in pps_list:
-                            prefix.extend(struct.pack(">I", len(pp)))
+                            prefix.extend(struct.pack('>I', len(pp)))
                             prefix.extend(pp)
                         prefix.extend(bytes(bp))
                         npkt = av.Packet(bytes(prefix))
                         npkt.pts = bp.pts
                         npkt.dts = bp.dts
                         npkt.time_base = bp.time_base
-                        bp = cast("Packet[VideoStream]", npkt)
+                        bp = cast('Packet[VideoStream]', npkt)
                 assert body_first_pts is not None
                 assert body_first_dts is not None
                 assert bp.pts is not None
@@ -543,18 +544,18 @@ def _cut_smart(
 
         # 4. Encode & Mux Video Tail [K_end_body, end_seconds]
         if tail_frames:
-            tail_options = {"preset": "ultrafast"}
+            tail_options = {'preset': 'ultrafast'}
             if threads is not None:
-                tail_options["threads"] = str(threads)
+                tail_options['threads'] = str(threads)
             if in_v.profile:
-                tail_options["profile"] = in_v.profile.lower().split()[0]
+                tail_options['profile'] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             tail_ctx = cast(
-                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, "w"))
+                VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )
             tail_ctx.width = in_v.codec_context.width
             tail_ctx.height = in_v.codec_context.height
-            tail_ctx.pix_fmt = in_v.codec_context.pix_fmt or "yuv420p"
+            tail_ctx.pix_fmt = in_v.codec_context.pix_fmt or 'yuv420p'
             tail_ctx.time_base = Fraction(1, fps)
             tail_ctx.framerate = Fraction(fps, 1)
             tail_ctx.options = tail_options
@@ -611,13 +612,13 @@ def _cut_stream_copy(
     with av.open(input_path) as in_container:
         streams = [*in_container.streams.video, *in_container.streams.audio]
         if not streams:
-            raise ValueError(f"No audio or video streams found in {input_path}")
+            raise ValueError(f'No audio or video streams found in {input_path}')
 
         # Seek container to the nearest keyframe at or before start_seconds
         seek_target = int(start_seconds * av.time_base)
         in_container.seek(seek_target, backward=True, any_frame=False)
 
-        with av.open(output_path, mode="w") as out_container:
+        with av.open(output_path, mode='w') as out_container:
             out_streams: dict[int, av.stream.Stream] = {}
             offset_map: dict[int, int] = {}
             streams_past_end: set[int] = set()
@@ -652,7 +653,7 @@ def _cut_stream_copy(
                     continue
 
                 if (
-                    stream.type == "video"
+                    stream.type == 'video'
                     and stream.index not in offset_map
                     and not packet.is_keyframe
                 ):

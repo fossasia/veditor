@@ -10,15 +10,16 @@ from ..auth import get_client, verify_event_access
 from ..db import get_db
 from ..models import Job, Talk
 
+
 router = APIRouter(
-    prefix="/ops",
-    tags=["ops"],
+    prefix='/ops',
+    tags=['ops'],
     dependencies=[Depends(get_client)],
     include_in_schema=False,
 )
 
 
-@router.get("/talks", response_model=list[schemas.TalkRead])
+@router.get('/talks', response_model=list[schemas.TalkRead])
 def list_talks(
     client: Annotated[models.Client, Depends(get_client)],
     db: Annotated[Session, Depends(get_db)],
@@ -35,7 +36,7 @@ def list_talks(
     return talks
 
 
-@router.get("/talks/{talk_id}", response_model=schemas.TalkWithJobsRead)
+@router.get('/talks/{talk_id}', response_model=schemas.TalkWithJobsRead)
 def get_talk(
     talk_id: int,
     client: Annotated[models.Client, Depends(get_client)],
@@ -44,14 +45,14 @@ def get_talk(
     """Talk detail including its associated jobs."""
     talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
     if not talk:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Talk not found")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Talk not found')
 
     verify_event_access(talk.event_id, client)
 
     return talk
 
 
-@router.get("/jobs/{job_id}", response_model=schemas.JobRead)
+@router.get('/jobs/{job_id}', response_model=schemas.JobRead)
 def get_job(
     job_id: int,
     client: Annotated[models.Client, Depends(get_client)],
@@ -60,14 +61,14 @@ def get_job(
     """Job status and log_path."""
     job = db.scalar(select(models.Job).where(models.Job.id == job_id))
     if not job:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Job not found')
 
     # verify access to the job's talk's event
     # we need to join with talk or fetch the talk
     talk = job.talk
     if not talk:
         raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND, detail="Job talk not found"
+            status_code=HTTPStatus.NOT_FOUND, detail='Job talk not found'
         )
 
     verify_event_access(talk.event_id, client)

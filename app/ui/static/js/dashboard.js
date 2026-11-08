@@ -3,30 +3,39 @@
  */
 
 const ACTIVE_STATUSES = new Set([
-  'detecting', 'cutting', 'generating_previews', 'normalizing', 'assembling', 'rendering', 'transcoding', 'uploading', 'publishing'
+  'detecting',
+  'cutting',
+  'generating_previews',
+  'normalizing',
+  'assembling',
+  'rendering',
+  'transcoding',
+  'uploading',
+  'publishing',
 ]);
 
 const STATUS_BADGE_MAP = {
-  waiting_for_files:   '<span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>',
-  detecting:           '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>',
-  approval_pending:    '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>',
-  pending_approval:    '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>',
+  waiting_for_files: '<span class="badge badge-waiting"><span class="badge-dot"></span>Waiting for files</span>',
+  detecting: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Detecting</span>',
+  approval_pending: '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>',
+  pending_approval: '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Review</span>',
   pending_intro_outro: '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Bumpers</span>',
-  pending_bounds:      '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Bounds</span>',
-  needs_work:          '<span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>',
-  cutting:             '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Cutting</span>',
-  generating_previews: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Generating Previews</span>',
-  normalizing:         '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Normalizing</span>',
-  assembling:          '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Assembling</span>',
-  rendering:           '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Rendering</span>',
-  transcoding:         '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Transcoding</span>',
-  uploading:           '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Uploading</span>',
-  preview:             '<span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>',
-  publishing:          '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Publishing</span>',
-  done:                '<span class="badge badge-done"><span class="badge-dot"></span>Finished</span>',
-  rejected:            '<span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>',
-  failed:              '<span class="badge badge-danger"><span class="badge-dot"></span>Failed</span>',
-  broken:              '<span class="badge badge-danger"><span class="badge-dot"></span>Broken</span>',
+  pending_bounds: '<span class="badge badge-pending"><span class="badge-dot"></span>Pending Bounds</span>',
+  needs_work: '<span class="badge badge-pending"><span class="badge-dot"></span>Needs Work</span>',
+  cutting: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Cutting</span>',
+  generating_previews:
+    '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Generating Previews</span>',
+  normalizing: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Normalizing</span>',
+  assembling: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Assembling</span>',
+  rendering: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Rendering</span>',
+  transcoding: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Transcoding</span>',
+  uploading: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Uploading</span>',
+  preview: '<span class="badge badge-preview"><span class="badge-dot"></span>Preview Ready</span>',
+  publishing: '<span class="badge badge-processing"><span class="spinner spinner-sm"></span>Publishing</span>',
+  done: '<span class="badge badge-done"><span class="badge-dot"></span>Finished</span>',
+  rejected: '<span class="badge badge-danger"><span class="badge-dot"></span>Rejected</span>',
+  failed: '<span class="badge badge-danger"><span class="badge-dot"></span>Failed</span>',
+  broken: '<span class="badge badge-danger"><span class="badge-dot"></span>Broken</span>',
 };
 
 function getActiveTalkIds() {
@@ -38,13 +47,13 @@ function getActiveTalkIds() {
 async function pollTalk(talkId) {
   try {
     const isSessionLoggedIn = Boolean(
-      document.querySelector('.user-email') ||
-      document.getElementById('logout-btn')
+      document.querySelector('.user-email')
+        || document.getElementById('logout-btn'),
     );
     const key = (window.getApiKey && window.getApiKey()) || '';
     if (!key && !isSessionLoggedIn) return;
     const cell = document.querySelector(`.status-cell[data-talk-id="${talkId}"]`);
-    const row  = document.querySelector(`tr[data-talk-id="${talkId}"]`);
+    const row = document.querySelector(`tr[data-talk-id="${talkId}"]`);
     if (!cell) return;
 
     let talkStatus = row ? row.dataset.status : '';
@@ -56,7 +65,8 @@ async function pollTalk(talkId) {
     talkStatus = data.status || talkStatus;
 
     if (talkStatus) {
-      const newBadge = STATUS_BADGE_MAP[talkStatus] ?? `<span class="badge badge-waiting"><span class="badge-dot"></span>${talkStatus}</span>`;
+      const newBadge = STATUS_BADGE_MAP[talkStatus]
+        ?? `<span class="badge badge-waiting"><span class="badge-dot"></span>${talkStatus}</span>`;
       cell.innerHTML = newBadge;
     }
 
@@ -66,8 +76,8 @@ async function pollTalk(talkId) {
 
 function startPolling() {
   const isSessionLoggedIn = Boolean(
-    document.querySelector('.user-email') ||
-    document.getElementById('logout-btn')
+    document.querySelector('.user-email')
+      || document.getElementById('logout-btn'),
   );
   const key = (window.getApiKey && window.getApiKey()) || '';
   if (!key && !isSessionLoggedIn) return;
@@ -410,7 +420,10 @@ window.submitAttachRoomRecording = async function() {
     }
 
     const data = await res.json();
-    await Modal.alert({ title: 'Attachment Successful', message: `Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!` });
+    await Modal.alert({
+      title: 'Attachment Successful',
+      message: `Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!`,
+    });
     location.reload();
   } catch (err) {
     await Modal.alert({ title: 'Attachment Failed', message: `Attachment failed: ${err.message}`, variant: 'danger' });
@@ -545,12 +558,15 @@ async function createQuickRoom(event) {
   const descriptionInput = document.getElementById('quick-create-room-description');
   try {
     const response = await (window.authFetch || fetch)(`/events/${eventId}/rooms`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: nameInput.value, description: descriptionInput.value || null }),
     });
     if (!response.ok) {
       let body = {};
-      try { body = await response.json(); } catch (_) { /* empty response */ }
+      try {
+        body = await response.json();
+      } catch (_) { /* empty response */ }
       const detail = Array.isArray(body.detail) ? body.detail.map(item => item.msg || item).join(', ') : body.detail;
       return Modal.alert({ title: 'Add Room', message: detail || 'Unable to add room.', variant: 'danger' });
     }
@@ -593,7 +609,11 @@ window.submitScheduleImport = async function() {
       res = await (window.authFetch || fetch)('/talks/schedule/import', { method: 'POST', body: fd });
     } else if (jsonText.trim()) {
       let parsed;
-      try { parsed = JSON.parse(jsonText); } catch { throw new Error('Invalid JSON format'); }
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch {
+        throw new Error('Invalid JSON format');
+      }
       res = await (window.authFetch || fetch)('/talks/schedule/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -609,7 +629,10 @@ window.submitScheduleImport = async function() {
     }
 
     const data = await res.json();
-    await Modal.alert({ title: 'Import Successful', message: `Successfully imported ${data.imported_count} session(s) into "${data.event_name}"!` });
+    await Modal.alert({
+      title: 'Import Successful',
+      message: `Successfully imported ${data.imported_count} session(s) into "${data.event_name}"!`,
+    });
     if (data && data.event_id) {
       window.location.href = `/studio?event_id=${data.event_id}`;
     } else {
@@ -721,7 +744,11 @@ window.submitQuickTalk = async function() {
       window.location.href = targetUrl;
     }
   } catch (err) {
-    await Modal.alert({ title: 'Operation Failed', message: `Failed to ${editId ? 'edit' : 'create'} talk: ${err.message}`, variant: 'danger' });
+    await Modal.alert({
+      title: 'Operation Failed',
+      message: `Failed to ${editId ? 'edit' : 'create'} talk: ${err.message}`,
+      variant: 'danger',
+    });
     setBtnBusy(btn, false);
   }
 };
@@ -737,9 +764,10 @@ window.deleteSingleTalkFromButton = function(btn) {
 window.deleteSingleTalk = async function(id, title) {
   const confirmed = await Modal.confirm({
     title: 'Delete Talk',
-    message: `Are you sure you want to delete talk #${id}: "${title}"?\nThis will permanently delete all associated recording and media files.`,
+    message:
+      `Are you sure you want to delete talk #${id}: "${title}"?\nThis will permanently delete all associated recording and media files.`,
     confirmText: 'Delete',
-    variant: 'danger'
+    variant: 'danger',
   });
   if (!confirmed) {
     return;
@@ -792,9 +820,14 @@ window.updateBulkSelectionUI = function() {
 };
 
 window.clearBulkSelection = function() {
-  document.querySelectorAll('.talk-checkbox').forEach(cb => { cb.checked = false; });
+  document.querySelectorAll('.talk-checkbox').forEach(cb => {
+    cb.checked = false;
+  });
   const selectAll = document.getElementById('select-all-talks');
-  if (selectAll) { selectAll.checked = false; selectAll.indeterminate = false; }
+  if (selectAll) {
+    selectAll.checked = false;
+    selectAll.indeterminate = false;
+  }
   window.updateBulkSelectionUI();
 };
 
@@ -804,9 +837,10 @@ window.submitBulkDelete = async function() {
 
   const confirmed = await Modal.confirm({
     title: 'Delete Talks',
-    message: `Are you sure you want to delete ${selected.length} selected talk(s)?\nThis will permanently delete all associated video and audio artifacts.`,
+    message:
+      `Are you sure you want to delete ${selected.length} selected talk(s)?\nThis will permanently delete all associated video and audio artifacts.`,
     confirmText: 'Delete All',
-    variant: 'danger'
+    variant: 'danger',
   });
   if (!confirmed) {
     return;
@@ -831,7 +865,11 @@ window.submitBulkDelete = async function() {
     await Modal.alert({ title: 'Delete Successful', message: `Successfully deleted ${data.deleted_count} talk(s).` });
     window.location.reload();
   } catch (err) {
-    await Modal.alert({ title: 'Bulk Delete Failed', message: `Bulk delete failed: ${err.message}`, variant: 'danger' });
+    await Modal.alert({
+      title: 'Bulk Delete Failed',
+      message: `Bulk delete failed: ${err.message}`,
+      variant: 'danger',
+    });
     setBtnBusy(btn, false);
   }
 };
@@ -979,7 +1017,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modal && !modal.dataset.editId) modal.dataset.eventId = eventId;
     loadQuickRooms(eventId);
   });
-  document.getElementById('btn-quick-add-room')?.addEventListener('click', () => Modal.open(document.getElementById('modal-quick-create-room')));
+  document.getElementById('btn-quick-add-room')?.addEventListener(
+    'click',
+    () => Modal.open(document.getElementById('modal-quick-create-room')),
+  );
   document.getElementById('quick-create-room-form')?.addEventListener('submit', createQuickRoom);
 
   ['quick-talk-title', 'quick-talk-room'].forEach((id) => {
@@ -1013,11 +1054,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const row = e.target.closest('tr[data-talk-id]');
     if (!row) return;
     if (
-      e.target.closest('.col-checkbox') ||
-      e.target.closest('.col-actions') ||
-      e.target.closest('button') ||
-      e.target.closest('a') ||
-      e.target.closest('input')
+      e.target.closest('.col-checkbox')
+      || e.target.closest('.col-actions')
+      || e.target.closest('button')
+      || e.target.closest('a')
+      || e.target.closest('input')
     ) {
       return;
     }
@@ -1036,27 +1077,29 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-
 // ---------------------------------------------------------------------------
 // Organizer Role Request Flow
 // ---------------------------------------------------------------------------
 (function initOrganizerRequest() {
   const btnRequest = document.getElementById('btn-request-organizer');
-  const modal      = document.getElementById('modal-request-organizer');
-  const btnClose   = document.getElementById('btn-close-request-organizer');
-  const btnCancel  = document.getElementById('btn-cancel-request-organizer');
-  const btnSubmit  = document.getElementById('btn-submit-request-organizer');
-  const noteInput  = document.getElementById('organizer-request-note');
-  const noteChars  = document.getElementById('organizer-request-note-chars');
-  const errorEl    = document.getElementById('organizer-request-error');
-  const banner     = document.getElementById('role-request-banner');
+  const modal = document.getElementById('modal-request-organizer');
+  const btnClose = document.getElementById('btn-close-request-organizer');
+  const btnCancel = document.getElementById('btn-cancel-request-organizer');
+  const btnSubmit = document.getElementById('btn-submit-request-organizer');
+  const noteInput = document.getElementById('organizer-request-note');
+  const noteChars = document.getElementById('organizer-request-note-chars');
+  const errorEl = document.getElementById('organizer-request-error');
+  const banner = document.getElementById('role-request-banner');
 
   if (!btnRequest || !modal) return;
 
   function openModal() {
     if (noteInput) noteInput.value = '';
     if (noteChars) noteChars.textContent = '0 / 500';
-    if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
     Modal.open(modal);
     if (noteInput) noteInput.focus();
   }
@@ -1077,7 +1120,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnSubmit) {
     btnSubmit.addEventListener('click', async () => {
-      if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.classList.add('hidden');
+      }
       btnSubmit.disabled = true;
       btnSubmit.textContent = 'Submitting\u2026';
       try {
@@ -1116,12 +1162,18 @@ document.addEventListener('DOMContentLoaded', () => {
           const msg = (typeof data.detail === 'string' && data.detail.trim())
             ? data.detail
             : 'Failed to submit request. Please try again.';
-          if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
+          if (errorEl) {
+            errorEl.textContent = msg;
+            errorEl.classList.remove('hidden');
+          }
           btnSubmit.disabled = false;
           btnSubmit.textContent = 'Submit Request';
         }
       } catch (_err) {
-        if (errorEl) { errorEl.textContent = 'Network error. Please try again.'; errorEl.classList.remove('hidden'); }
+        if (errorEl) {
+          errorEl.textContent = 'Network error. Please try again.';
+          errorEl.classList.remove('hidden');
+        }
         btnSubmit.disabled = false;
         btnSubmit.textContent = 'Submit Request';
       }

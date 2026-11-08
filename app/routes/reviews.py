@@ -18,14 +18,15 @@ from ..review_handlers import DECISION_HANDLERS
 from ..schemas import ReviewResponse
 from ..storage import StorageBackend, get_storage_backend
 
+
 router = APIRouter(
-    prefix="/talks",
-    tags=["reviews"],
+    prefix='/talks',
+    tags=['reviews'],
 )
 
 
 @router.post(
-    "/{talk_id}/review",
+    '/{talk_id}/review',
     response_model=schemas.ReviewResponse,
     status_code=HTTPStatus.OK,
 )
@@ -42,10 +43,10 @@ def review_talk(
     if not talk:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
-            detail="Talk not found",
+            detail='Talk not found',
         )
 
-    if user.source == "sso" or user.role == AuthRole.SPEAKER:
+    if user.source == 'sso' or user.role == AuthRole.SPEAKER:
         check_talk_access(talk, user, db)
     else:
         if (

@@ -10,14 +10,15 @@ from ..auth import get_client
 from ..db import get_db
 from ..models import Job
 
+
 router = APIRouter(
-    prefix="/jobs",
-    tags=["jobs"],
+    prefix='/jobs',
+    tags=['jobs'],
     dependencies=[Depends(get_client)],
 )
 
 
-@router.get("/{job_id}", response_model=schemas.JobRead)
+@router.get('/{job_id}', response_model=schemas.JobRead)
 def get_job(
     job_id: int,
     client: Annotated[models.Client, Depends(get_client)],
@@ -41,6 +42,6 @@ def get_job(
             not client.is_platform and job.talk.event_id not in (client.event_ids or [])
         )
     ):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Job not found')
 
     return job

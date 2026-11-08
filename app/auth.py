@@ -22,25 +22,26 @@ from .security import (
     verify_session_token_not_revoked,
 )
 
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+api_key_header = APIKeyHeader(name='X-API-Key', auto_error=False)
 bearer_security = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "CurrentUser",
-    "api_key_header",
-    "bearer_security",
-    "check_event_access",
-    "check_talk_access",
-    "get_client",
-    "get_current_user",
-    "hash_api_key",
-    "lock_active_admins",
-    "require_admin",
-    "require_event_access",
-    "require_role",
-    "require_talk_access",
-    "verify_event_access",
+    'CurrentUser',
+    'api_key_header',
+    'bearer_security',
+    'check_event_access',
+    'check_talk_access',
+    'get_client',
+    'get_current_user',
+    'hash_api_key',
+    'lock_active_admins',
+    'require_admin',
+    'require_event_access',
+    'require_role',
+    'require_talk_access',
+    'verify_event_access',
 ]
 
 
@@ -50,7 +51,7 @@ class CurrentUser(BaseModel):
     email: str | None = None
     display_name: str | None = None
     role: AuthRole = AuthRole.USER
-    source: Literal["api_key", "cookie", "jwt", "sso"]
+    source: Literal['api_key', 'cookie', 'jwt', 'sso']
     event_ids: list[int] = Field(default_factory=list)
     scope_type: SSOScopeType | None = None
     scope_id: int | None = None
@@ -58,15 +59,15 @@ class CurrentUser(BaseModel):
 
     @property
     def is_machine(self) -> bool:
-        return self.source == "api_key"
+        return self.source == 'api_key'
 
     @property
     def is_sso(self) -> bool:
-        return self.source == "sso"
+        return self.source == 'sso'
 
     @property
     def is_human(self) -> bool:
-        return self.source in ("cookie", "jwt")
+        return self.source in ('cookie', 'jwt')
 
     @property
     def is_admin(self) -> bool:
@@ -84,7 +85,7 @@ class CurrentUser(BaseModel):
 
 def hash_api_key(api_key: str) -> str:
     """Returns a SHA-256 hash of the API key."""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    return hashlib.sha256(api_key.encode('utf-8')).hexdigest()
 
 
 def _normalize_auth_value(value: str | None) -> str | None:
@@ -114,7 +115,7 @@ def get_client(
     if not api_key:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Missing API Key",
+            detail='Missing API Key',
         )
 
     hashed_key = hash_api_key(api_key)
@@ -125,7 +126,7 @@ def get_client(
     if not client:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid API Key",
+            detail='Invalid API Key',
         )
 
     now = datetime.now(UTC)
@@ -156,7 +157,7 @@ def get_client(
                 )
                 separate_db.commit()
         except SQLAlchemyError as exc:
-            logger.debug("Failed to update client last_used_at: %s", exc)
+            logger.debug('Failed to update client last_used_at: %s', exc)
 
     return client
 
@@ -171,7 +172,7 @@ def verify_event_access(event_id: int, client: models.Client) -> None:
     if event_id not in client.event_ids:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="Client is not authorized to access this event",
+            detail='Client is not authorized to access this event',
         )
 
 
@@ -179,8 +180,8 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
     if not isinstance(raw_key, str) or not raw_key:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid API Key",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail='Invalid API Key',
+            headers={'WWW-Authenticate': 'Bearer'},
         )
     hashed_key = hash_api_key(raw_key)
     client = db.scalar(
@@ -189,15 +190,15 @@ def _authenticate_api_key(raw_key: str | None, db: Session) -> CurrentUser:
     if not client:
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid API Key",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail='Invalid API Key',
+            headers={'WWW-Authenticate': 'Bearer'},
         )
     return CurrentUser(
         user_id=None,
         client_id=client.id,
         email=None,
         role=AuthRole.ADMIN,
-        source="api_key",
+        source='api_key',
         event_ids=list(client.event_ids or []),
         is_platform=client.is_platform,
     )
@@ -207,8 +208,8 @@ def get_current_user(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     api_key: Annotated[str | None, Security(api_key_header)] = None,
-    cookie_token: Annotated[str | None, Cookie(alias="veditor_session")] = None,
-    cookie_api_key: Annotated[str | None, Cookie(alias="veditor_api_key")] = None,
+    cookie_token: Annotated[str | None, Cookie(alias='veditor_session')] = None,
+    cookie_api_key: Annotated[str | None, Cookie(alias='veditor_api_key')] = None,
     bearer_creds: Annotated[
         HTTPAuthorizationCredentials | None, Security(bearer_security)
     ] = None,
@@ -225,7 +226,7 @@ def get_current_user(
     provided credentials are invalid, expired, or deactivated.
     """
     if db is None:
-        raise RuntimeError("Database session is required")
+        raise RuntimeError('Database session is required')
 
     app_overrides: dict[Any, Any] = request.app.dependency_overrides if request else {}
     if get_client in app_overrides:
@@ -237,7 +238,7 @@ def get_current_user(
                 client_id=client.id,
                 email=None,
                 role=AuthRole.ADMIN,
-                source="api_key",
+                source='api_key',
                 event_ids=list(client.event_ids or []),
                 is_platform=bool(client.is_platform),
             )
@@ -247,7 +248,7 @@ def get_current_user(
 
     # 1. Explicit machine client header (X-API-Key)
     header_key = _normalize_auth_value(
-        req_headers.get("X-API-Key") or req_headers.get("x-api-key")
+        req_headers.get('X-API-Key') or req_headers.get('x-api-key')
     )
     provided_api_key = _normalize_auth_value(api_key)
     has_header_api_key = header_key is not None or provided_api_key is not None
@@ -256,9 +257,9 @@ def get_current_user(
 
     # 2. SSO header (X-SSO-Token)
     raw_sso = None
-    if hasattr(req_headers, "get"):
-        candidate_header = req_headers.get("X-SSO-Token") or req_headers.get(
-            "x-sso-token"
+    if hasattr(req_headers, 'get'):
+        candidate_header = req_headers.get('X-SSO-Token') or req_headers.get(
+            'x-sso-token'
         )
         raw_sso = _normalize_auth_value(candidate_header)
 
@@ -267,8 +268,8 @@ def get_current_user(
         if not sso_payload:
             raise HTTPException(
                 status_code=HTTPStatus.UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail='Invalid or expired SSO token',
+                headers={'WWW-Authenticate': 'Bearer'},
             )
         return CurrentUser(
             user_id=None,
@@ -276,21 +277,21 @@ def get_current_user(
             email=sso_payload.email,
             display_name=sso_payload.display_name,
             role=sso_payload.role,
-            source="sso",
+            source='sso',
             event_ids=[sso_payload.scope_id]
-            if sso_payload.scope_type == "event"
+            if sso_payload.scope_type == 'event'
             else [],
             scope_type=sso_payload.scope_type,
             scope_id=sso_payload.scope_id,
         )
 
     # 3. Session cookie (veditor_session)
-    has_cookie = cookie_token is not None or "veditor_session" in req_cookies
+    has_cookie = cookie_token is not None or 'veditor_session' in req_cookies
     if has_cookie:
         raw_cookie = _normalize_auth_value(
             cookie_token
             if cookie_token is not None
-            else req_cookies.get("veditor_session")
+            else req_cookies.get('veditor_session')
         )
         if raw_cookie:
             # First attempt decoding as an SSO session token
@@ -302,9 +303,9 @@ def get_current_user(
                     email=sso_payload.email,
                     display_name=sso_payload.display_name,
                     role=sso_payload.role,
-                    source="sso",
+                    source='sso',
                     event_ids=[sso_payload.scope_id]
-                    if sso_payload.scope_type == "event"
+                    if sso_payload.scope_type == 'event'
                     else [],
                     scope_type=sso_payload.scope_type,
                     scope_id=sso_payload.scope_id,
@@ -313,7 +314,7 @@ def get_current_user(
             payload = decode_session_token(raw_cookie)
             if payload:
                 user = db.scalar(
-                    select(models.User).where(models.User.id == payload["user_id"])
+                    select(models.User).where(models.User.id == payload['user_id'])
                 )
                 if (
                     not user
@@ -324,26 +325,26 @@ def get_current_user(
                 ):
                     raise HTTPException(
                         status_code=HTTPStatus.UNAUTHORIZED,
-                        detail="User account not found or inactive",
-                        headers={"WWW-Authenticate": "Bearer"},
+                        detail='User account not found or inactive',
+                        headers={'WWW-Authenticate': 'Bearer'},
                     )
                 return CurrentUser(
                     user_id=user.id,
                     email=user.email,
                     role=user.role,
-                    source="cookie",
+                    source='cookie',
                     event_ids=[],
                 )
             raise HTTPException(
                 status_code=HTTPStatus.UNAUTHORIZED,
-                detail="Invalid or expired session token",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail='Invalid or expired session token',
+                headers={'WWW-Authenticate': 'Bearer'},
             )
 
     # 4. Machine client cookie fallback (veditor_api_key)
     cookie_api = _normalize_auth_value(cookie_api_key)
     if cookie_api is None:
-        cookie_api = _normalize_auth_value(req_cookies.get("veditor_api_key"))
+        cookie_api = _normalize_auth_value(req_cookies.get('veditor_api_key'))
     if cookie_api:
         client = db.scalar(
             select(models.Client).where(
@@ -356,14 +357,14 @@ def get_current_user(
                 client_id=client.id,
                 email=None,
                 role=AuthRole.ADMIN,
-                source="api_key",
+                source='api_key',
                 event_ids=list(client.event_ids or []),
                 is_platform=client.is_platform,
             )
         # Ignore stale machine cookies so a later bearer credential can be used.
 
     # 5. Authorization header (Authorization: Bearer <token>)
-    auth_header = req_headers.get("Authorization") or req_headers.get("authorization")
+    auth_header = req_headers.get('Authorization') or req_headers.get('authorization')
     has_auth_header = auth_header is not None or bearer_creds is not None
     if has_auth_header:
         token: str | None = None
@@ -373,24 +374,24 @@ def get_current_user(
             token = _normalize_auth_value(auth_header)
             if token:
                 parts = token.split()
-                if len(parts) == 2 and parts[0].lower() == "bearer":
+                if len(parts) == 2 and parts[0].lower() == 'bearer':
                     token = parts[1]
                 else:
                     raise HTTPException(
                         status_code=HTTPStatus.UNAUTHORIZED,
-                        detail="Invalid authorization header format",
-                        headers={"WWW-Authenticate": "Bearer"},
+                        detail='Invalid authorization header format',
+                        headers={'WWW-Authenticate': 'Bearer'},
                     )
         if not token:
             raise HTTPException(
                 status_code=HTTPStatus.UNAUTHORIZED,
-                detail="Invalid or expired access token",
-                headers={"WWW-Authenticate": "Bearer"},
+                detail='Invalid or expired access token',
+                headers={'WWW-Authenticate': 'Bearer'},
             )
         payload = decode_access_token(token)
         if payload:
             user = db.scalar(
-                select(models.User).where(models.User.id == payload["user_id"])
+                select(models.User).where(models.User.id == payload['user_id'])
             )
             if (
                 not user
@@ -401,14 +402,14 @@ def get_current_user(
             ):
                 raise HTTPException(
                     status_code=HTTPStatus.UNAUTHORIZED,
-                    detail="User account not found or inactive",
-                    headers={"WWW-Authenticate": "Bearer"},
+                    detail='User account not found or inactive',
+                    headers={'WWW-Authenticate': 'Bearer'},
                 )
             return CurrentUser(
                 user_id=user.id,
                 email=user.email,
                 role=user.role,
-                source="jwt",
+                source='jwt',
                 event_ids=[],
             )
 
@@ -420,9 +421,9 @@ def get_current_user(
                 email=sso_payload.email,
                 display_name=sso_payload.display_name,
                 role=sso_payload.role,
-                source="sso",
+                source='sso',
                 event_ids=[sso_payload.scope_id]
-                if sso_payload.scope_type == "event"
+                if sso_payload.scope_type == 'event'
                 else [],
                 scope_type=sso_payload.scope_type,
                 scope_id=sso_payload.scope_id,
@@ -430,15 +431,15 @@ def get_current_user(
 
         raise HTTPException(
             status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Invalid or expired access token",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail='Invalid or expired access token',
+            headers={'WWW-Authenticate': 'Bearer'},
         )
 
     # 5. No credentials present
     raise HTTPException(
         status_code=HTTPStatus.UNAUTHORIZED,
-        detail="Not authenticated",
-        headers={"WWW-Authenticate": "Bearer"},
+        detail='Not authenticated',
+        headers={'WWW-Authenticate': 'Bearer'},
     )
 
 
@@ -472,7 +473,7 @@ def require_admin(
     if not user.is_human_admin or user.user_id is None:
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="Operation requires a human administrator",
+            detail='Operation requires a human administrator',
         )
     return user
 
@@ -491,17 +492,17 @@ def check_event_access(
     - Denies all other callers with HTTP 403 Forbidden.
     Raises HTTP 404 Not Found if the event does not exist.
     """
-    if user.source == "api_key":
+    if user.source == 'api_key':
         if not user.has_event_access(event_id):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN,
-                detail="Client is not authorized to access this event",
+                detail='Client is not authorized to access this event',
             )
         event = db.scalar(select(models.Event).where(models.Event.id == event_id))
         if not event:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND,
-                detail="Event not found",
+                detail='Event not found',
             )
         return event
 
@@ -509,15 +510,15 @@ def check_event_access(
     if not event:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
-            detail="Event not found",
+            detail='Event not found',
         )
 
-    if user.source == "sso":
-        if user.scope_type == "event" and user.scope_id == event_id:
+    if user.source == 'sso':
+        if user.scope_type == 'event' and user.scope_id == event_id:
             return event
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="SSO session is not authorized to access this event",
+            detail='SSO session is not authorized to access this event',
         )
 
     # Human administrator: unconditional access
@@ -530,7 +531,7 @@ def check_event_access(
 
     raise HTTPException(
         status_code=HTTPStatus.FORBIDDEN,
-        detail="User is not authorized to access this event",
+        detail='User is not authorized to access this event',
     )
 
 
@@ -559,22 +560,22 @@ def check_talk_access(
     if not target_talk:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
-            detail="Talk not found",
+            detail='Talk not found',
         )
 
-    if user.source == "sso":
-        if user.scope_type == "talk":
+    if user.source == 'sso':
+        if user.scope_type == 'talk':
             if user.scope_id != target_talk.id:
                 raise HTTPException(
                     status_code=HTTPStatus.FORBIDDEN,
-                    detail="SSO session is not authorized for this talk",
+                    detail='SSO session is not authorized for this talk',
                 )
             return target_talk
-        if user.scope_type == "event":
+        if user.scope_type == 'event':
             if user.scope_id != target_talk.event_id:
                 raise HTTPException(
                     status_code=HTTPStatus.FORBIDDEN,
-                    detail="SSO session is not authorized for this event",
+                    detail='SSO session is not authorized for this event',
                 )
             if (
                 user.email
@@ -593,19 +594,19 @@ def check_talk_access(
             elif user.role == AuthRole.SPEAKER:
                 raise HTTPException(
                     status_code=HTTPStatus.FORBIDDEN,
-                    detail="SSO speaker session is not authorized for this talk",
+                    detail='SSO speaker session is not authorized for this talk',
                 )
             return target_talk
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
-            detail="Unauthorized SSO scope",
+            detail='Unauthorized SSO scope',
         )
 
-    if user.source == "api_key":
+    if user.source == 'api_key':
         if not user.has_event_access(target_talk.event_id):
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN,
-                detail="Client is not authorized to access this talk",
+                detail='Client is not authorized to access this talk',
             )
         return target_talk
 
@@ -636,12 +637,12 @@ def check_talk_access(
 
     raise HTTPException(
         status_code=HTTPStatus.FORBIDDEN,
-        detail="User is not authorized to access this talk",
+        detail='User is not authorized to access this talk',
     )
 
 
 def require_event_access(
-    event_id_param: str | int = "event_id",
+    event_id_param: str | int = 'event_id',
 ) -> Callable[[Request, Session, CurrentUser], models.Event]:
     """
     Dependency factory to gate access to existing events.
@@ -657,11 +658,11 @@ def require_event_access(
         resolved_id: int | None = None
         if isinstance(event_id_param, int):
             resolved_id = event_id_param
-        elif request is not None and hasattr(request, "path_params"):
+        elif request is not None and hasattr(request, 'path_params'):
             raw = request.path_params.get(event_id_param)
             if raw is None:
-                raw = request.path_params.get("event_id") or request.path_params.get(
-                    "id"
+                raw = request.path_params.get('event_id') or request.path_params.get(
+                    'id'
                 )
             if raw is not None:
                 try:
@@ -669,13 +670,13 @@ def require_event_access(
                 except (ValueError, TypeError) as exc:
                     raise HTTPException(
                         status_code=HTTPStatus.BAD_REQUEST,
-                        detail=f"Invalid event ID: {raw}",
+                        detail=f'Invalid event ID: {raw}',
                     ) from exc
 
         if resolved_id is None:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="Event ID could not be resolved from request",
+                detail='Event ID could not be resolved from request',
             )
 
         return check_event_access(resolved_id, user, db)
@@ -684,7 +685,7 @@ def require_event_access(
 
 
 def require_talk_access(
-    talk_id_param: str | int = "talk_id",
+    talk_id_param: str | int = 'talk_id',
 ) -> Callable[[Request, Session, CurrentUser], models.Talk]:
     """
     Dependency factory to gate access to existing talks.
@@ -700,11 +701,11 @@ def require_talk_access(
         resolved_id: int | None = None
         if isinstance(talk_id_param, int):
             resolved_id = talk_id_param
-        elif request is not None and hasattr(request, "path_params"):
+        elif request is not None and hasattr(request, 'path_params'):
             raw = request.path_params.get(talk_id_param)
             if raw is None:
-                raw = request.path_params.get("talk_id") or request.path_params.get(
-                    "id"
+                raw = request.path_params.get('talk_id') or request.path_params.get(
+                    'id'
                 )
             if raw is not None:
                 try:
@@ -712,13 +713,13 @@ def require_talk_access(
                 except (ValueError, TypeError) as exc:
                     raise HTTPException(
                         status_code=HTTPStatus.BAD_REQUEST,
-                        detail=f"Invalid talk ID: {raw}",
+                        detail=f'Invalid talk ID: {raw}',
                     ) from exc
 
         if resolved_id is None:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="Talk ID could not be resolved from request",
+                detail='Talk ID could not be resolved from request',
             )
 
         return check_talk_access(resolved_id, user, db)

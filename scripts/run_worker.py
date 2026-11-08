@@ -32,22 +32,22 @@ def _run_single_worker(
     # the verification link printed when SMTP is unset) would never reach the
     # worker output. Only the app logger is configured so that libraries such
     # as SQLAlchemy keep their default levels.
-    app_logger = logging.getLogger("app")
+    app_logger = logging.getLogger('app')
     if not app_logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
         )
         app_logger.addHandler(handler)
         # Don't also pass records to a root handler set up elsewhere.
         app_logger.propagate = False
     app_logger.setLevel(logging.INFO)
 
-    if nice_level is not None and hasattr(os, "nice"):
+    if nice_level is not None and hasattr(os, 'nice'):
         try:
             os.nice(nice_level)
         except OSError as exc:
-            print(f"Warning: Failed to set process niceness: {exc}", file=sys.stderr)
+            print(f'Warning: Failed to set process niceness: {exc}', file=sys.stderr)
 
     # Eagerly import task modules in the worker process so job code is loaded
     # once at worker boot rather than re-imported per job fork.
@@ -59,16 +59,16 @@ def _run_single_worker(
     worker = Worker(queues, connection=redis_conn, name=name)
     if with_scheduler:
         scheduler_queue = next(
-            (q for q in worker.queues if q.name == "light"),
+            (q for q in worker.queues if q.name == 'light'),
             worker.queues[0]
             if worker.queues
-            else Queue("light", connection=redis_conn),
+            else Queue('light', connection=redis_conn),
         )
         try:
             register_periodic_retention_sweep(queue=scheduler_queue)
         except (redis.exceptions.RedisError, ValueError) as exc:
             print(
-                f"Warning: Failed to register periodic retention sweep on worker startup: {exc}",
+                f'Warning: Failed to register periodic retention sweep on worker startup: {exc}',
                 file=sys.stderr,
             )
         worker.work(burst=burst, with_scheduler=True)
@@ -78,49 +78,49 @@ def _run_single_worker(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run an RQ worker for VEditor.",
+        description='Run an RQ worker for VEditor.',
     )
     parser.add_argument(
-        "queues",
-        nargs="*",
-        default=["light", "heavy"],
-        help="Queue names to listen on (default: light heavy)",
+        'queues',
+        nargs='*',
+        default=['light', 'heavy'],
+        help='Queue names to listen on (default: light heavy)',
     )
     parser.add_argument(
-        "--burst",
-        action="store_true",
-        help="Run in burst mode (quit after all current jobs are processed)",
+        '--burst',
+        action='store_true',
+        help='Run in burst mode (quit after all current jobs are processed)',
     )
     parser.add_argument(
-        "--name",
+        '--name',
         type=str,
         default=None,
-        help="Custom worker name",
+        help='Custom worker name',
     )
     parser.add_argument(
-        "--concurrency",
+        '--concurrency',
         type=int,
         default=1,
-        help="Number of worker processes to spawn (default: 1)",
+        help='Number of worker processes to spawn (default: 1)',
     )
     parser.add_argument(
-        "--with-scheduler",
-        action="store_true",
-        help="Run worker with scheduler enabled for periodic jobs",
+        '--with-scheduler',
+        action='store_true',
+        help='Run worker with scheduler enabled for periodic jobs',
     )
     parser.add_argument(
-        "--nice",
+        '--nice',
         type=int,
         default=None,
-        help="Process niceness level (default: None, e.g. 10 to yield CPU priority)",
+        help='Process niceness level (default: None, e.g. 10 to yield CPU priority)',
     )
 
     args = parser.parse_args(argv)
 
-    queues = args.queues if args.queues else ["light", "heavy"]
+    queues = args.queues if args.queues else ['light', 'heavy']
 
     if not settings.redis_url or not settings.redis_url.strip():
-        print("Error: REDIS_URL is unset.", file=sys.stderr)
+        print('Error: REDIS_URL is unset.', file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -129,16 +129,16 @@ def main(argv: list[str] | None = None) -> None:
         redis_conn.close()
     except (redis.exceptions.RedisError, ValueError) as exc:
         print(
-            f"Error: Could not connect to Redis at {settings.redis_url}: {exc}",
+            f'Error: Could not connect to Redis at {settings.redis_url}: {exc}',
             file=sys.stderr,
         )
         sys.exit(1)
 
     if args.concurrency > 1:
-        ctx = multiprocessing.get_context("spawn")
+        ctx = multiprocessing.get_context('spawn')
         processes = []
         for i in range(args.concurrency):
-            worker_name = f"{args.name}-{i + 1}" if args.name else None
+            worker_name = f'{args.name}-{i + 1}' if args.name else None
             is_sched = args.with_scheduler and (i == 0)
             p = ctx.Process(
                 target=_run_single_worker,
@@ -166,5 +166,5 @@ def main(argv: list[str] | None = None) -> None:
         )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

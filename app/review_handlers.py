@@ -17,6 +17,7 @@ from .states import advance
 from .storage import StorageBackend, cleanup_intermediates
 from .webhook import dispatch_talk_webhook
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +41,7 @@ def _record_review_and_advance(
             if talk.cut_start is None or talk.cut_end is None:
                 raise HTTPException(
                     status_code=HTTPStatus.BAD_REQUEST,
-                    detail="Cannot approve a talk without cut bounds.",
+                    detail='Cannot approve a talk without cut bounds.',
                 )
             db.add(
                 models.ApprovedCut(
@@ -64,10 +65,10 @@ def _record_review_and_advance(
 
     if target_state == TalkStatus.PENDING_BOUNDS:
         try:
-            dispatch_talk_webhook("talk.bounds_pending", talk, db)
+            dispatch_talk_webhook('talk.bounds_pending', talk, db)
         except (SQLAlchemyError, RedisError) as webhook_err:
             logger.warning(
-                "Failed to dispatch talk.bounds_pending webhook for talk %s: %s",
+                'Failed to dispatch talk.bounds_pending webhook for talk %s: %s',
                 talk.id,
                 webhook_err,
             )
@@ -82,8 +83,8 @@ def handle_approve(
     storage: StorageBackend | None = None,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
-    cut_keys = storage.list_keys(f"{talk.id}/cut/") if storage else []
-    cut_key = cut_keys[0] if cut_keys else f"{talk.id}/cut/cut.mp4"
+    cut_keys = storage.list_keys(f'{talk.id}/cut/') if storage else []
+    cut_key = cut_keys[0] if cut_keys else f'{talk.id}/cut/cut.mp4'
 
     response = _record_review_and_advance(
         talk, payload, TalkStatus.ASSEMBLING, db, user_id=user_id
@@ -95,12 +96,12 @@ def handle_approve(
         advance(talk, TalkStatus.BROKEN)
         log_key: str | None = None
         if storage is not None:
-            log_key = f"{talk.id}/logs/assembly.log"
+            log_key = f'{talk.id}/logs/assembly.log'
             try:
-                storage.put(log_key, traceback.format_exc().encode("utf-8"))
+                storage.put(log_key, traceback.format_exc().encode('utf-8'))
             except (OSError, ValueError, TypeError) as log_err:
                 logger.warning(
-                    "Failed to persist dispatch failure log to storage: %s", log_err
+                    'Failed to persist dispatch failure log to storage: %s', log_err
                 )
                 log_key = None
         db.add(

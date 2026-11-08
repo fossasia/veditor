@@ -16,3 +16,11 @@ rq-worker:
 
 type-check:
     mypy app migrations scripts tests
+
+# Format Python code with Ruff
+format-py:
+    ruff format app migrations scripts tests
+
+# Format JS with dprint
+format-js:
+    dprint fmt

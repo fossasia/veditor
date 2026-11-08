@@ -15,6 +15,7 @@ from . import models
 from .queue import light_queue
 from .tasks import job_deliver_webhook
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +30,7 @@ def get_candidate_clients(
 ) -> list[models.Client]:
     """Find all clients configured to receive webhooks for event_id or matching client_id."""
     bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
+    if bind is not None and bind.dialect.name == 'postgresql':
         candidates = db.scalars(
             select(models.Client).where(
                 (
@@ -79,11 +80,11 @@ def dispatch_talk_webhook(
             return
 
         payload_data: dict[str, Any] = {
-            "event": event_name,
-            "talk_id": talk.id,
-            "event_id": talk.event_id,
-            "external_id": talk.external_id,
-            "timestamp": datetime.now(UTC).isoformat(),
+            'event': event_name,
+            'talk_id': talk.id,
+            'event_id': talk.event_id,
+            'external_id': talk.external_id,
+            'timestamp': datetime.now(UTC).isoformat(),
         }
         if extra_payload:
             payload_data.update(extra_payload)
@@ -99,7 +100,7 @@ def dispatch_talk_webhook(
                 )
             except RedisError as exc:
                 logger.warning(
-                    "Failed to enqueue %s webhook for talk %d to client %s: %s",
+                    'Failed to enqueue %s webhook for talk %d to client %s: %s',
                     event_name,
                     talk.id,
                     client.id,
@@ -107,7 +108,7 @@ def dispatch_talk_webhook(
                 )
     except SQLAlchemyError as exc:
         logger.warning(
-            "Failed to dispatch %s webhook for talk %d: %s",
+            'Failed to dispatch %s webhook for talk %d: %s',
             event_name,
             talk.id,
             exc,

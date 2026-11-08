@@ -19,6 +19,6 @@ def publish(local_path: Path | str, talk_id: int, backend: StorageBackend) -> st
         The URL/URI string for the published media asset.
     """
     path = Path(local_path)
-    key = f"{talk_id}/final/{path.name}"
+    key = f'{talk_id}/final/{path.name}'
     backend.put(key, source=path)
     return backend.url(key)
