@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 import traceback
@@ -51,7 +50,11 @@ from .pipeline.detect import (
     detect,
 )
 from .pipeline.intro import generate_intro_clip
-from .pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
+from .pipeline.loudness import (
+    DEFAULT_TARGET_LUFS,
+    normalize,
+    synthesize_silent_audio,
+)
 from .pipeline.outro import generate_outro_clip
 from .pipeline.preview import generate_preview
 from .pipeline.publish import publish
@@ -1192,31 +1195,14 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                         'Talk %s has no audio stream; synthesizing silent audio track',
                         talk_id,
                     )
-                    cmd = [
-                        'ffmpeg',
-                        '-y',
-                        '-i',
-                        str(cut_path),
-                        '-f',
-                        'lavfi',
-                        '-i',
-                        'anullsrc=channel_layout=stereo:sample_rate=44100',
-                        '-c:v',
-                        'copy',
-                        '-c:a',
-                        'aac',
-                        '-shortest',
-                        str(tmp_out),
-                    ]
-                    # storage-boundary-exempt: silent audio track synthesis
-                    res = subprocess.run(
-                        cmd, capture_output=True, text=True, check=False
-                    )
-                    if res.returncode != 0:
+                    try:
+                        synthesize_silent_audio(cut_path, tmp_out)
+                    except (av.FFmpegError, OSError, ValueError) as synth_err:
                         logger.warning(
-                            'ffmpeg silent audio synthesis failed (%s); falling back to direct copy: %s',
-                            res.returncode,
-                            res.stderr,
+                            'Silent audio synthesis failed (%s: %s); '
+                            'falling back to direct copy',
+                            type(synth_err).__name__,
+                            synth_err,
                         )
                         # storage-boundary-exempt: fallback copy on silent audio synthesis failure
                         shutil.copy2(cut_path, tmp_out)
