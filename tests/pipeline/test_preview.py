@@ -27,12 +27,12 @@ def test_generate_preview_small_video_preset(tmp_path: Path) -> None:
     input_clip = generate_clip(
         2.0,
         resolution=(1280, 720),
-        pattern="gradient",
+        pattern='gradient',
         output_dir=tmp_path,
     )
-    output_clip = tmp_path / "small_video_preview.mp4"
+    output_clip = tmp_path / 'small_video_preview.mp4'
 
-    generate_preview(input_clip, output_clip, PREVIEW_PRESETS["small_video"])
+    generate_preview(input_clip, output_clip, PREVIEW_PRESETS['small_video'])
 
     assert output_clip.is_file()
     assert_playable(output_clip)
@@ -52,12 +52,12 @@ def test_generate_preview_big_video_preset(tmp_path: Path) -> None:
     input_clip = generate_clip(
         2.0,
         resolution=(1280, 720),
-        pattern="gradient",
+        pattern='gradient',
         output_dir=tmp_path,
     )
-    output_clip = tmp_path / "big_video_preview.mp4"
+    output_clip = tmp_path / 'big_video_preview.mp4'
 
-    generate_preview(input_clip, output_clip, PREVIEW_PRESETS["big_video"])
+    generate_preview(input_clip, output_clip, PREVIEW_PRESETS['big_video'])
 
     assert output_clip.is_file()
     assert_playable(output_clip)
@@ -78,14 +78,14 @@ def test_presets_are_differentiated(tmp_path: Path) -> None:
     input_clip = generate_clip(
         3.0,
         resolution=(1280, 720),
-        pattern="gradient",
+        pattern='gradient',
         output_dir=tmp_path,
     )
-    small_output = tmp_path / "diff_small.mp4"
-    big_output = tmp_path / "diff_big.mp4"
+    small_output = tmp_path / 'diff_small.mp4'
+    big_output = tmp_path / 'diff_big.mp4'
 
-    generate_preview(input_clip, small_output, PREVIEW_PRESETS["small_video"])
-    generate_preview(input_clip, big_output, PREVIEW_PRESETS["big_video"])
+    generate_preview(input_clip, small_output, PREVIEW_PRESETS['small_video'])
+    generate_preview(input_clip, big_output, PREVIEW_PRESETS['big_video'])
 
     small_info = open_and_inspect(small_output)
     big_info = open_and_inspect(big_output)
@@ -104,12 +104,12 @@ def test_generate_preview_video_only(tmp_path: Path) -> None:
         has_video=True,
         has_audio=False,
         resolution=(640, 480),
-        pattern="solid",
+        pattern='solid',
         output_dir=tmp_path,
     )
-    output_clip = tmp_path / "video_only_preview.mp4"
+    output_clip = tmp_path / 'video_only_preview.mp4'
 
-    generate_preview(input_clip, output_clip, PREVIEW_PRESETS["big_video"])
+    generate_preview(input_clip, output_clip, PREVIEW_PRESETS['big_video'])
 
     assert output_clip.is_file()
     assert_playable(output_clip)
@@ -124,16 +124,16 @@ def test_generate_preview_video_only(tmp_path: Path) -> None:
 def test_generate_preview_rejects_corrupt_input(tmp_path: Path) -> None:
     """Verify that corrupt or invalid media files raise appropriate errors."""
     corrupt_clip = generate_corrupt_clip(output_dir=tmp_path)
-    output_clip = tmp_path / "corrupt_output.mp4"
+    output_clip = tmp_path / 'corrupt_output.mp4'
 
     with pytest.raises(av.FFmpegError):
-        generate_preview(corrupt_clip, output_clip, PREVIEW_PRESETS["small_video"])
+        generate_preview(corrupt_clip, output_clip, PREVIEW_PRESETS['small_video'])
 
 
 def test_generate_preview_custom_preset(tmp_path: Path) -> None:
     """Verify generate_preview works with a custom PreviewPreset configuration."""
     custom_preset = PreviewPreset(
-        name="custom_low",
+        name='custom_low',
         resolution=(160, 120),
         video_bitrate=80_000,
         audio_bitrate=24_000,
@@ -141,10 +141,10 @@ def test_generate_preview_custom_preset(tmp_path: Path) -> None:
     input_clip = generate_clip(
         1.0,
         resolution=(320, 240),
-        pattern="gradient",
+        pattern='gradient',
         output_dir=tmp_path,
     )
-    output_clip = tmp_path / "custom_preview.mp4"
+    output_clip = tmp_path / 'custom_preview.mp4'
 
     generate_preview(input_clip, output_clip, custom_preset)
 
@@ -157,18 +157,18 @@ def test_generate_preview_custom_preset(tmp_path: Path) -> None:
 def test_generate_preview_with_threads_and_preset_speed(tmp_path: Path) -> None:
     """Verify preview generation with explicit thread count and speed preset."""
     preset = PreviewPreset(
-        name="custom_speed",
+        name='custom_speed',
         resolution=(320, 180),
         video_bitrate=150_000,
-        preset_speed="ultrafast",
+        preset_speed='ultrafast',
     )
     input_clip = generate_clip(
         1.0,
         resolution=(640, 360),
-        pattern="gradient",
+        pattern='gradient',
         output_dir=tmp_path,
     )
-    output_clip = tmp_path / "threads_preview.mp4"
+    output_clip = tmp_path / 'threads_preview.mp4'
 
     real_open: Callable[..., av.container.Container] = av.open
     captured_streams: list[tuple[tuple[str, ...], dict[str, object]]] = []
@@ -199,23 +199,23 @@ def test_generate_preview_with_threads_and_preset_speed(tmp_path: Path) -> None:
     def fake_open(*args: object, **kwargs: object) -> object:
         c = real_open(*args, **kwargs)
         return (
-            ContainerProxy(cast("av.container.OutputContainer", c))
-            if kwargs.get("mode") == "w"
+            ContainerProxy(cast('av.container.OutputContainer', c))
+            if kwargs.get('mode') == 'w'
             else c
         )
 
-    with patch("app.pipeline.preview.av.open", side_effect=fake_open):
+    with patch('app.pipeline.preview.av.open', side_effect=fake_open):
         generate_preview(input_clip, output_clip, preset, threads=1)
 
     libx264_calls = [
-        kwargs for args, kwargs in captured_streams if args and args[0] == "libx264"
+        kwargs for args, kwargs in captured_streams if args and args[0] == 'libx264'
     ]
     assert len(libx264_calls) == 1
-    encoder_options = libx264_calls[0].get("options", {})
+    encoder_options = libx264_calls[0].get('options', {})
     assert isinstance(encoder_options, dict)
-    assert encoder_options.get("preset") == "ultrafast"
-    assert encoder_options.get("tune") == "fastdecode,zerolatency"
-    assert encoder_options.get("threads") == "1"
+    assert encoder_options.get('preset') == 'ultrafast'
+    assert encoder_options.get('tune') == 'fastdecode,zerolatency'
+    assert encoder_options.get('threads') == '1'
 
     assert output_clip.is_file()
     assert_playable(output_clip)
@@ -226,22 +226,22 @@ def test_generate_preview_with_threads_and_preset_speed(tmp_path: Path) -> None:
 def test_generate_preview_rejects_invalid_threads(tmp_path: Path) -> None:
     """Verify that non-positive threads values raise ValueError."""
     input_clip = generate_clip(1.0, output_dir=tmp_path)
-    output_clip = tmp_path / "invalid_threads_preview.mp4"
-    preset = PREVIEW_PRESETS["small_video"]
+    output_clip = tmp_path / 'invalid_threads_preview.mp4'
+    preset = PREVIEW_PRESETS['small_video']
 
-    with pytest.raises(ValueError, match="threads must be greater than zero"):
+    with pytest.raises(ValueError, match='threads must be greater than zero'):
         generate_preview(input_clip, output_clip, preset, threads=0)
 
-    with pytest.raises(ValueError, match="threads must be greater than zero"):
+    with pytest.raises(ValueError, match='threads must be greater than zero'):
         generate_preview(input_clip, output_clip, preset, threads=-1)
 
 
 def test_generate_preview_high_framerate_decimation(tmp_path: Path) -> None:
     """Verify that >30 fps videos are decimated to <=30 fps and duration matches."""
-    input_clip = generate_clip(2.0, fps=60, pattern="solid", output_dir=tmp_path)
-    output_clip = tmp_path / "decimated_preview.mp4"
+    input_clip = generate_clip(2.0, fps=60, pattern='solid', output_dir=tmp_path)
+    output_clip = tmp_path / 'decimated_preview.mp4'
 
-    generate_preview(input_clip, output_clip, PREVIEW_PRESETS["small_video"])
+    generate_preview(input_clip, output_clip, PREVIEW_PRESETS['small_video'])
 
     assert output_clip.is_file()
     assert_playable(output_clip)
@@ -257,12 +257,12 @@ def test_generate_preview_high_framerate_decimation(tmp_path: Path) -> None:
 def test_generate_preview_start_and_end_seconds(tmp_path: Path) -> None:
     """Verify generate_preview correctly windows using start_seconds and end_seconds."""
     input_clip = generate_clip(6.0, resolution=(640, 360), output_dir=tmp_path)
-    output_clip = tmp_path / "windowed_preview.mp4"
+    output_clip = tmp_path / 'windowed_preview.mp4'
 
     generate_preview(
         input_clip,
         output_clip,
-        PREVIEW_PRESETS["small_video"],
+        PREVIEW_PRESETS['small_video'],
         start_seconds=1.5,
         end_seconds=4.5,
     )
@@ -278,21 +278,21 @@ def test_generate_preview_start_and_end_seconds(tmp_path: Path) -> None:
 def test_generate_preview_invalid_start_end_bounds(tmp_path: Path) -> None:
     """Verify negative start_seconds and inverted bounds raise ValueError."""
     input_clip = generate_clip(2.0, output_dir=tmp_path)
-    output_clip = tmp_path / "out.mp4"
-    preset = PREVIEW_PRESETS["small_video"]
+    output_clip = tmp_path / 'out.mp4'
+    preset = PREVIEW_PRESETS['small_video']
 
-    with pytest.raises(ValueError, match="start_seconds must be non-negative"):
+    with pytest.raises(ValueError, match='start_seconds must be non-negative'):
         generate_preview(input_clip, output_clip, preset, start_seconds=-1.0)
 
     with pytest.raises(
-        ValueError, match="end_seconds .* must be greater than start_seconds"
+        ValueError, match='end_seconds .* must be greater than start_seconds'
     ):
         generate_preview(
             input_clip, output_clip, preset, start_seconds=2.0, end_seconds=1.0
         )
 
     with pytest.raises(
-        ValueError, match="end_seconds .* must be greater than start_seconds"
+        ValueError, match='end_seconds .* must be greater than start_seconds'
     ):
         generate_preview(
             input_clip, output_clip, preset, start_seconds=2.0, end_seconds=2.0
@@ -302,17 +302,17 @@ def test_generate_preview_invalid_start_end_bounds(tmp_path: Path) -> None:
 def test_generate_preview_audio_stream_copy_vs_reencode(tmp_path: Path) -> None:
     """Verify audio is stream-copied when start_seconds==0, but re-encoded when windowed."""
     clip = generate_clip(3.0, has_video=True, has_audio=True, output_dir=tmp_path)
-    out_copy = tmp_path / "preview_copy.mp4"
-    out_windowed = tmp_path / "preview_windowed.mp4"
+    out_copy = tmp_path / 'preview_copy.mp4'
+    out_windowed = tmp_path / 'preview_windowed.mp4'
 
-    generate_preview(clip, out_copy, PREVIEW_PRESETS["small_video"], start_seconds=0.0)
+    generate_preview(clip, out_copy, PREVIEW_PRESETS['small_video'], start_seconds=0.0)
     assert out_copy.is_file()
     assert_playable(out_copy)
     info_copy = open_and_inspect(out_copy)
     assert info_copy.has_audio is True
 
     generate_preview(
-        clip, out_windowed, PREVIEW_PRESETS["small_video"], start_seconds=1.0
+        clip, out_windowed, PREVIEW_PRESETS['small_video'], start_seconds=1.0
     )
     assert out_windowed.is_file()
     assert_playable(out_windowed)

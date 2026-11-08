@@ -13,9 +13,10 @@ from urllib.request import Request
 
 import av
 
-from app.config import settings
-from app.schemas import RecordingIngestRequest
-from app.storage import StorageBackend
+from .config import settings
+from .schemas import RecordingIngestRequest
+from .storage import StorageBackend
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +30,20 @@ class InsufficientStorageError(Exception):
         self.required_bytes = required_bytes
         self.available_bytes = available_bytes
         super().__init__(
-            f"Insufficient storage: required {required_bytes} bytes, but only {available_bytes} bytes available"
+            f'Insufficient storage: required {required_bytes} bytes, but only {available_bytes} bytes available'
         )
 
 
 def validate_media_file(path: Path) -> None:
     try:
         with av.open(str(path)) as container:
-            has_video = any(s.type == "video" for s in container.streams)
+            has_video = any(s.type == 'video' for s in container.streams)
     except av.FFmpegError as exc:
-        raise IngestPathRejectedError(f"Invalid media file: {exc}") from exc
+        raise IngestPathRejectedError(f'Invalid media file: {exc}') from exc
 
     if not has_video:
         raise IngestPathRejectedError(
-            "File is not a valid video (no video stream found)"
+            'File is not a valid video (no video stream found)'
         )
 
 
@@ -52,10 +53,10 @@ def stage_recording(
     path_str = payload.source_path or payload.relative_key
     if path_str is None:
         raise IngestPathRejectedError(
-            "exactly one of source_path or relative_key is required"
+            'exactly one of source_path or relative_key is required'
         )
-    if "\0" in path_str:
-        raise IngestPathRejectedError("Invalid path")
+    if '\0' in path_str:
+        raise IngestPathRejectedError('Invalid path')
 
     target_path = Path(path_str)
     resolved_path = None
@@ -66,7 +67,7 @@ def stage_recording(
     matched_root = None
     if payload.source_path:
         if not target_path.is_absolute():
-            raise IngestPathRejectedError("source_path must be absolute")
+            raise IngestPathRejectedError('source_path must be absolute')
         try:
             candidate = target_path.resolve(strict=True)
             for root in roots:
@@ -78,7 +79,7 @@ def stage_recording(
             pass
     else:
         if target_path.is_absolute():
-            raise IngestPathRejectedError("relative_key must be relative")
+            raise IngestPathRejectedError('relative_key must be relative')
         for root in roots:
             try:
                 candidate = (root / target_path).resolve(strict=True)
@@ -90,7 +91,7 @@ def stage_recording(
                 pass
 
     if not resolved_path or not resolved_path.is_file() or not matched_root:
-        raise IngestPathRejectedError("Invalid or missing ingest path")
+        raise IngestPathRejectedError('Invalid or missing ingest path')
 
     file_size = resolved_path.stat().st_size
     required_bytes = int(
@@ -108,7 +109,7 @@ def stage_recording(
     validate_media_file(resolved_path)
 
     rel_path = resolved_path.relative_to(matched_root)
-    key = f"{talk_id}/raw/{rel_path}"
+    key = f'{talk_id}/raw/{rel_path}'
     backend.put(key=key, source=resolved_path)
     return key
 
@@ -117,7 +118,7 @@ def get_upload_staging_dir() -> Path:
     base = (
         Path(settings.ingest_roots[0])
         if settings.ingest_roots
-        else Path(tempfile.gettempdir()) / "veditor_staging"
+        else Path(tempfile.gettempdir()) / 'veditor_staging'
     ).resolve()
     # storage-boundary-exempt: upload staging directory
     base.mkdir(parents=True, exist_ok=True)
@@ -125,7 +126,7 @@ def get_upload_staging_dir() -> Path:
 
 
 def get_bumper_staging_dir() -> Path:
-    base = get_upload_staging_dir() / "bumpers"
+    base = get_upload_staging_dir() / 'bumpers'
     # storage-boundary-exempt: bumper staging directory
     base.mkdir(parents=True, exist_ok=True)
     return base
@@ -138,8 +139,8 @@ def stage_custom_clip(
 
     then stage it into {talk_id}/{stage}/{stage}.mp4 in storage.
     """
-    if not path_str or "\0" in path_str:
-        raise IngestPathRejectedError("Invalid path")
+    if not path_str or '\0' in path_str:
+        raise IngestPathRejectedError('Invalid path')
 
     roots = [Path(r).resolve() for r in settings.ingest_roots]
     resolved_path = None
@@ -155,8 +156,8 @@ def stage_custom_clip(
             pass
     elif (
         len(target_path.parts) == 2
-        and target_path.parts[0] == "bumpers"
-        and target_path.name.startswith(f"bumper_{talk_id}_{stage}_")
+        and target_path.parts[0] == 'bumpers'
+        and target_path.name.startswith(f'bumper_{talk_id}_{stage}_')
     ):
         bumper_root = get_bumper_staging_dir().parent.resolve()
         try:
@@ -167,17 +168,17 @@ def stage_custom_clip(
             pass
     else:
         raise IngestPathRejectedError(
-            f"custom_{stage}_path must be an absolute ingest path or staging key"
+            f'custom_{stage}_path must be an absolute ingest path or staging key'
         )
 
     if not resolved_path or not resolved_path.is_file():
         raise IngestPathRejectedError(
-            f"Invalid or missing custom {stage} path: outside allowed ingest roots"
+            f'Invalid or missing custom {stage} path: outside allowed ingest roots'
         )
 
     validate_media_file(resolved_path)
 
-    key = f"{talk_id}/{stage}/{stage}.mp4"
+    key = f'{talk_id}/{stage}/{stage}.mp4'
     backend.put(key=key, source=resolved_path)
     return key
 
@@ -192,27 +193,27 @@ def resolve_direct_media_url(url: str) -> str:
     host = parsed.netloc.lower()
 
     # Dropbox share links: ensure dl=1
-    if "dropbox.com" in host:
+    if 'dropbox.com' in host:
         qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        qs["dl"] = ["1"]
+        qs['dl'] = ['1']
         new_query = urllib.parse.urlencode(qs, doseq=True)
         return urllib.parse.urlunsplit(parsed._replace(query=new_query))
 
     # Google Drive share links: convert to export/download endpoint
-    if "drive.google.com" in host:
+    if 'drive.google.com' in host:
         file_id = None
-        match = re.search(r"/file/d/([a-zA-Z0-9_-]+)", parsed.path)
+        match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', parsed.path)
         if match:
             file_id = match.group(1)
-        elif "id" in urllib.parse.parse_qs(parsed.query):
-            file_id = urllib.parse.parse_qs(parsed.query)["id"][0]
+        elif 'id' in urllib.parse.parse_qs(parsed.query):
+            file_id = urllib.parse.parse_qs(parsed.query)['id'][0]
 
         if file_id:
-            return f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+            return f'https://drive.google.com/uc?export=download&id={file_id}&confirm=t'
 
     # Nextcloud / ownCloud share links (e.g. /s/<token> -> /s/<token>/download)
-    if re.search(r"/s/[a-zA-Z0-9_-]+/?$", parsed.path):
-        clean_path = parsed.path.rstrip("/") + "/download"
+    if re.search(r'/s/[a-zA-Z0-9_-]+/?$', parsed.path):
+        clean_path = parsed.path.rstrip('/') + '/download'
         return urllib.parse.urlunsplit(parsed._replace(path=clean_path))
 
     return clean_url
@@ -229,25 +230,25 @@ class _DriveFormParser(HTMLParser):
         self.download_link: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr_dict = {k: v or "" for k, v in attrs}
-        if tag == "form":
-            action = attr_dict.get("action", "")
-            form_id = attr_dict.get("id", "")
-            if "download" in action or form_id == "download-form":
+        attr_dict = {k: v or '' for k, v in attrs}
+        if tag == 'form':
+            action = attr_dict.get('action', '')
+            form_id = attr_dict.get('id', '')
+            if 'download' in action or form_id == 'download-form':
                 self.action = action
                 self.in_form = True
-        elif tag == "input" and self.in_form:
-            name = attr_dict.get("name")
-            val = attr_dict.get("value", "")
+        elif tag == 'input' and self.in_form:
+            name = attr_dict.get('name')
+            val = attr_dict.get('value', '')
             if name:
                 self.inputs[name] = val
-        elif tag == "a":
-            href = attr_dict.get("href", "")
-            if "export=download" in href or "confirm=" in href:
+        elif tag == 'a':
+            href = attr_dict.get('href', '')
+            if 'export=download' in href or 'confirm=' in href:
                 self.download_link = href
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == "form":
+        if tag == 'form':
             self.in_form = False
 
 
@@ -266,7 +267,7 @@ def download_media_url(url: str, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     temp_target = output_path.with_suffix(
-        output_path.suffix + f".part_{uuid.uuid4().hex[:8]}"
+        output_path.suffix + f'.part_{uuid.uuid4().hex[:8]}'
     )
     max_bytes = settings.max_url_download_bytes
 
@@ -274,13 +275,13 @@ def download_media_url(url: str, output_path: Path) -> Path:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/123.0.0.0 Safari/537.36'
         ),
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
     }
 
     req = Request(resolved_url, headers=headers)
@@ -289,24 +290,24 @@ def download_media_url(url: str, output_path: Path) -> Path:
         resp = opener.open(req, timeout=120)
 
         # Handle Google Drive large-file virus scan confirmation page
-        content_type = resp.headers.get("Content-Type", "").lower()
-        if "text/html" in content_type:
+        content_type = resp.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type:
             resp_url = resp.geturl().lower()
             if (
-                "drive.google.com" in resolved_url
-                or "drive.google.com" in resp_url
-                or "drive.usercontent.google.com" in resp_url
+                'drive.google.com' in resolved_url
+                or 'drive.google.com' in resp_url
+                or 'drive.usercontent.google.com' in resp_url
             ):
-                body = resp.read().decode("utf-8", errors="ignore")
+                body = resp.read().decode('utf-8', errors='ignore')
                 parser = _DriveFormParser()
                 parser.feed(body)
                 confirm_url = None
                 if parser.action:
                     query = urllib.parse.urlencode(parser.inputs)
-                    confirm_url = f"{parser.action}?{query}" if query else parser.action
+                    confirm_url = f'{parser.action}?{query}' if query else parser.action
                 elif parser.download_link:
                     confirm_url = urllib.parse.urljoin(
-                        "https://drive.google.com", parser.download_link
+                        'https://drive.google.com', parser.download_link
                     )
 
                 if confirm_url:
@@ -314,25 +315,25 @@ def download_media_url(url: str, output_path: Path) -> Path:
                     resp = opener.open(req_confirm, timeout=120)
                 else:
                     raise ValueError(
-                        "Google Drive returned an HTML page without a valid download confirmation action."
+                        'Google Drive returned an HTML page without a valid download confirmation action.'
                     )
             else:
                 parsed_netloc = urllib.parse.urlsplit(url).netloc.lower()
-                if "youtube.com" in parsed_netloc or "youtu.be" in parsed_netloc:
+                if 'youtube.com' in parsed_netloc or 'youtu.be' in parsed_netloc:
                     raise ValueError(
-                        "YouTube watch/stream links are web pages, not direct video files. "
-                        "Please provide a direct video URL (.mp4), Google Drive, or Dropbox link."
+                        'YouTube watch/stream links are web pages, not direct video files. '
+                        'Please provide a direct video URL (.mp4), Google Drive, or Dropbox link.'
                     )
                 raise ValueError(
-                    f"The provided URL returned a web page ({content_type}) instead of a direct video stream. "
-                    "Please ensure the link points directly to a video file, Google Drive, or Dropbox."
+                    f'The provided URL returned a web page ({content_type}) instead of a direct video stream. '
+                    'Please ensure the link points directly to a video file, Google Drive, or Dropbox.'
                 )
 
         downloaded_bytes = 0
         chunk_size = 64 * 1024  # 64 KB chunk
 
         # storage-boundary-exempt: write downloaded media stream to staging file
-        with open(temp_target, "wb") as f_out:
+        with open(temp_target, 'wb') as f_out:
             first_chunk = True
             while True:
                 chunk = resp.read(chunk_size)
@@ -342,17 +343,17 @@ def download_media_url(url: str, output_path: Path) -> Path:
                     first_chunk = False
                     stripped = chunk.lstrip()
                     if stripped.startswith(
-                        (b"<!DOCTYPE", b"<html", b"<HTML", b"<?xml")
+                        (b'<!DOCTYPE', b'<html', b'<HTML', b'<?xml')
                     ):
                         raise ValueError(
-                            "URL response contains HTML web markup rather than a video file. "
-                            "Please provide a direct media file URL, Google Drive, or Dropbox link."
+                            'URL response contains HTML web markup rather than a video file. '
+                            'Please provide a direct media file URL, Google Drive, or Dropbox link.'
                         )
                 f_out.write(chunk)
                 downloaded_bytes += len(chunk)
                 if downloaded_bytes > max_bytes:
                     raise ValueError(
-                        f"Download exceeded maximum allowed size of {max_bytes} bytes"
+                        f'Download exceeded maximum allowed size of {max_bytes} bytes'
                     )
 
         if downloaded_bytes == 0:

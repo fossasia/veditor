@@ -30,17 +30,18 @@ from app.main import app
 from app.pipeline.detect import container_duration_seconds
 from app.storage import StorageBackend, StorageKeyNotFoundError, get_storage_backend
 
+
 logger = logging.getLogger(__name__)
 
 _test_engine = create_engine(settings.testing_database_url)
 TestSessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
-    join_transaction_mode="create_savepoint",
+    join_transaction_mode='create_savepoint',
 )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
 def setup_test_database() -> Generator[None]:
     Base.metadata.create_all(bind=_test_engine)
     yield
@@ -76,7 +77,7 @@ def out_of_band_sessions(db_session: Session) -> Generator[None]:
     """Redirect new_session() callers (RQ workers, CLI, template fallbacks)
     to the test database inside the per-test transaction."""
     with patch(
-        "app.db.SessionLocal",
+        'app.db.SessionLocal',
         side_effect=lambda: TestSessionLocal(bind=db_session.get_bind()),
     ):
         yield
@@ -93,7 +94,7 @@ class FakePath:
         self._data = data
 
     def __fspath__(self) -> str:
-        return f"/fake/{self.key}"
+        return f'/fake/{self.key}'
 
     def read_bytes(self) -> bytes:
         return self._data
@@ -105,7 +106,7 @@ class FakePath:
         return False
 
     def as_uri(self) -> str:
-        return f"memory://{self.key}"
+        return f'memory://{self.key}'
 
     def exists(self) -> bool:
         return True
@@ -135,7 +136,7 @@ class FakeStorageBackend(StorageBackend):
     def put(self, key: str, source: Path | bytes) -> None:
         if isinstance(source, bytes):
             self.storage[key] = source
-        elif hasattr(source, "read_bytes"):
+        elif hasattr(source, 'read_bytes'):
             self.storage[key] = source.read_bytes()
         else:
             self.storage[key] = Path(source).read_bytes()
@@ -149,13 +150,13 @@ class FakeStorageBackend(StorageBackend):
         return FakePath(key, self.storage[key])  # type: ignore
 
     def url(self, key: str) -> str:
-        return f"memory://{key}"
+        return f'memory://{key}'
 
     def delete(self, key: str) -> None:
         # Idempotent delete of exact match
         self.storage.pop(key, None)
         # Delete prefixes (e.g. 'talk_1/raw')
-        prefix = key if key.endswith("/") else f"{key}/"
+        prefix = key if key.endswith('/') else f'{key}/'
         keys_to_delete = [k for k in self.storage if k.startswith(prefix)]
         for k in keys_to_delete:
             del self.storage[k]
@@ -163,7 +164,7 @@ class FakeStorageBackend(StorageBackend):
     def exists(self, key: str) -> bool:
         return key in self.storage
 
-    def list_keys(self, prefix: str = "") -> list[str]:
+    def list_keys(self, prefix: str = '') -> list[str]:
         return [k for k in sorted(self.storage.keys()) if k.startswith(prefix)]
 
     def free_bytes(self) -> int:
@@ -191,19 +192,19 @@ def override_storage_backend(app: FastAPI, fake_backend: FakeStorageBackend) -> 
         app.dependency_overrides[get_storage_backend] = lambda: fake_backend
     except ImportError as e:
         logger.warning(
-            "Could not override get_storage_backend. It may not be implemented yet. Error: %s",
+            'Could not override get_storage_backend. It may not be implemented yet. Error: %s',
             e,
         )
 
 
 # --- Synthetic Media Generator & Inspection Fixtures ---
 
-DEFAULT_CONTAINER_SUFFIX = ".mp4"
+DEFAULT_CONTAINER_SUFFIX = '.mp4'
 VIDEO_CODEC_ALIASES = {
-    "h264": "libx264",
+    'h264': 'libx264',
 }
-AUDIO_CODEC = "aac"
-_FALLBACK_TEMP_DIR = tempfile.TemporaryDirectory(prefix="veditor-media-")
+AUDIO_CODEC = 'aac'
+_FALLBACK_TEMP_DIR = tempfile.TemporaryDirectory(prefix='veditor-media-')
 
 
 @dataclass(frozen=True)
@@ -221,21 +222,21 @@ def generate_clip(
     has_video: bool = True,
     has_audio: bool = True,
     resolution: tuple[int, int] = (320, 240),
-    codec: str = "h264",
-    pattern: str = "solid",
+    codec: str = 'h264',
+    pattern: str = 'solid',
     fps: int = 24,
     sample_rate: int = 44100,
-    audio_waveform: str = "tone",
+    audio_waveform: str = 'tone',
     output_dir: Path | str | None = None,
 ) -> Path:
     """Generate a short synthetic test clip with video and/or audio streams."""
     if not has_video and not has_audio:
-        raise ValueError("generate_clip requires at least one stream")
+        raise ValueError('generate_clip requires at least one stream')
     if duration_s <= 0:
-        raise ValueError("duration_s must be greater than zero")
+        raise ValueError('duration_s must be greater than zero')
 
     target = _target_path(output_dir)
-    with av.open(target, mode="w") as container:
+    with av.open(target, mode='w') as container:
         video_stream: av.VideoStream | None = None
         audio_stream: av.AudioStream | None = None
 
@@ -246,20 +247,20 @@ def generate_clip(
             )
             video_stream.width = width
             video_stream.height = height
-            video_stream.pix_fmt = "yuv420p"
+            video_stream.pix_fmt = 'yuv420p'
 
         if has_audio:
             audio_stream = cast(
                 av.AudioStream, container.add_stream(AUDIO_CODEC, rate=sample_rate)
             )
-            audio_stream.layout = "mono"
+            audio_stream.layout = 'mono'
 
         if video_stream is not None:
             frame_count = max(1, math.ceil(duration_s * fps))
             for frame_index in range(frame_count):
                 video_frame = av.VideoFrame.from_ndarray(
                     _video_array(frame_index, frame_count, resolution, pattern),
-                    format="rgb24",
+                    format='rgb24',
                 )
                 for packet in video_stream.encode(video_frame):
                     container.mux(packet)
@@ -280,7 +281,7 @@ def generate_corrupt_clip(output_dir: Path | str | None = None) -> Path:
     """Generate an unreadable/corrupt media file for testing error paths."""
     target = _target_path(output_dir)
     target.write_bytes(
-        b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom\x00\x00\x00\x08mdatbroken"
+        b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom\x00\x00\x00\x08mdatbroken'
     )
     return target
 
@@ -330,8 +331,8 @@ def assert_duration_close(
     duration_a = open_and_inspect(path_a).duration
     duration_b = open_and_inspect(path_b).duration
 
-    assert duration_a is not None, f"{path_a} has no readable duration"
-    assert duration_b is not None, f"{path_b} has no readable duration"
+    assert duration_a is not None, f'{path_a} has no readable duration'
+    assert duration_b is not None, f'{path_b} has no readable duration'
     assert abs(duration_a - duration_b) <= tolerance_seconds
 
 
@@ -339,7 +340,7 @@ def assert_playable(path: Path | str) -> None:
     """Assert that container streams can be decoded successfully."""
     with av.open(path) as container:
         streams = [*container.streams.video, *container.streams.audio]
-        assert streams, f"{path} has no media streams"
+        assert streams, f'{path} has no media streams'
 
         decoded_indices = set()
         for packet in container.demux(*streams):
@@ -350,7 +351,7 @@ def assert_playable(path: Path | str) -> None:
 
         for stream in streams:
             assert stream.index in decoded_indices, (
-                f"{path} has no decodable {stream.type} frame"
+                f'{path} has no decodable {stream.type} frame'
             )
 
 
@@ -359,7 +360,7 @@ def _target_path(output_dir: Path | str | None) -> Path:
         output_dir = _FALLBACK_TEMP_DIR.name
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    return directory / f"{uuid4().hex}{DEFAULT_CONTAINER_SUFFIX}"
+    return directory / f'{uuid4().hex}{DEFAULT_CONTAINER_SUFFIX}'
 
 
 def _video_codec(codec: str) -> str:
@@ -373,11 +374,11 @@ def _video_array(
     pattern: str,
 ) -> np.ndarray:
     width, height = resolution
-    if pattern == "solid":
+    if pattern == 'solid':
         value = int(255 * frame_index / max(frame_count - 1, 1))
         return np.full((height, width, 3), (value, 80, 180), dtype=np.uint8)
 
-    if pattern == "gradient":
+    if pattern == 'gradient':
         x = np.linspace(0, 255, width, dtype=np.uint8)
         y = np.linspace(0, 255, height, dtype=np.uint8)[:, None]
         return np.stack(
@@ -389,11 +390,11 @@ def _video_array(
             axis=2,
         )
 
-    if pattern == "noise":
+    if pattern == 'noise':
         rng = np.random.default_rng(seed=frame_index)
         return rng.integers(0, 256, size=(height, width, 3), dtype=np.uint8)
 
-    raise ValueError(f"Unsupported video pattern: {pattern}")
+    raise ValueError(f'Unsupported video pattern: {pattern}')
 
 
 def _audio_frames(
@@ -404,16 +405,16 @@ def _audio_frames(
 
     for start in range(0, total_samples, chunk_size):
         stop = min(start + chunk_size, total_samples)
-        if waveform == "tone":
+        if waveform == 'tone':
             t = np.arange(start, stop, dtype=np.float64) / sample_rate
             samples = 0.25 * np.sin(2 * np.pi * 440 * t)
-        elif waveform == "silence":
+        elif waveform == 'silence':
             samples = np.zeros(stop - start, dtype=np.float64)
         else:
-            raise ValueError(f"Unsupported audio waveform: {waveform}")
+            raise ValueError(f'Unsupported audio waveform: {waveform}')
 
         data = (samples * np.iinfo(np.int16).max).astype(np.int16).reshape(1, -1)
-        frame = av.AudioFrame.from_ndarray(data, format="s16", layout="mono")
+        frame = av.AudioFrame.from_ndarray(data, format='s16', layout='mono')
         frame.sample_rate = sample_rate
         yield frame
 
