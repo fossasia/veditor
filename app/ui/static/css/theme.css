@@ -9,6 +9,7 @@ html[data-theme="light"] {
   /* ── Canvas & Surface Backgrounds ── */
   --v-bg-canvas:        #f6f8fa;
   --v-bg-surface:       #ffffff;
+  --v-bg-card: var(--v-bg-surface);
   --v-bg-surface-hover: #f1f5f9;
   --v-bg-subtle:        #f3f4f6;
   --v-bg-overlay:       rgba(255, 255, 255, 0.9);
@@ -76,6 +77,7 @@ html[data-theme="dark"] {
   /* ── Canvas & Surface Backgrounds ── */
   --v-bg-canvas:        #0c0e14;
   --v-bg-surface:       #151922;
+  --v-bg-card: var(--v-bg-surface);
   --v-bg-surface-hover: #1c2230;
   --v-bg-subtle:        #12151e;
   --v-bg-overlay:       rgba(12, 14, 20, 0.85);
