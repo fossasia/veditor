@@ -756,7 +756,7 @@ def test_submit_cut_bounds_multiple_segments_accepted(
             job_cut_multi,
             talk.id,
             f'{talk.id}/raw/video.mp4',
-            job_timeout=STAGE_CONFIG['cut']['job_timeout'],
+            job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
         )
 
 

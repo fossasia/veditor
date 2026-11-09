@@ -437,7 +437,7 @@ def test_concat_compatible_segments_different_time_bases(tmp_path: Path) -> None
             if s.type == 'video':
                 outs.time_base = Fraction(1, 24000)
         for p in inc.demux():
-            if p.dts is None:
+            if p.dts is None or p.pts is None:
                 continue
             out_s = (
                 outc.streams.video[0]
