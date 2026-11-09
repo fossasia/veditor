@@ -17,7 +17,8 @@ from typing import Any
 import av
 import numpy as np
 
-from app.storage import LocalDiskBackend, StorageBackend
+from ..storage import LocalDiskBackend, StorageBackend
+
 
 logger = logging.getLogger(__name__)
 
@@ -51,21 +52,21 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                             ctx.height,
                             ctx.pix_fmt,
                             fps_val,
-                            bytes(ctx.extradata or b""),
+                            bytes(ctx.extradata or b''),
                         )
                     )
 
                 audio_props: list[tuple[Any, ...]] = []
                 for a in audio_streams:
-                    ctx = a.codec_context
-                    fmt_name = ctx.format.name if ctx.format else None
+                    a_ctx = a.codec_context
+                    fmt_name = a_ctx.format.name if a_ctx.format else None
                     audio_props.append(
                         (
-                            ctx.name,
-                            ctx.sample_rate,
-                            ctx.channels,
+                            a_ctx.name,
+                            a_ctx.sample_rate,
+                            a_ctx.channels,
                             fmt_name,
-                            bytes(ctx.extradata or b""),
+                            bytes(a_ctx.extradata or b''),
                         )
                     )
 
@@ -92,16 +93,16 @@ def _concat_stream_copy(
         streams_to_copy = [*template_c.streams.video, *template_c.streams.audio]
         if not streams_to_copy:
             raise ValueError(
-                f"No audio or video streams found in template {template_path}"
+                f'No audio or video streams found in template {template_path}'
             )
 
         container_options: dict[str, str] = {}
-        if output_path.suffix.lower() in (".mp4", ".m4v", ".mov"):
-            container_options["movflags"] = "faststart"
+        if output_path.suffix.lower() in ('.mp4', '.m4v', '.mov'):
+            container_options['movflags'] = 'faststart'
 
         with av.open(
             str(output_path),
-            mode="w",
+            mode='w',
             options=container_options if container_options else None,
         ) as out_container:
             out_streams: dict[tuple[str, int], av.stream.Stream] = {}
@@ -187,7 +188,7 @@ def _concat_reencode(
 
         if not video_streams and not audio_streams:
             raise ValueError(
-                f"No audio or video streams found in canonical cut {canonical_cut_path}"
+                f'No audio or video streams found in canonical cut {canonical_cut_path}'
             )
 
         has_video = bool(video_streams)
@@ -202,47 +203,51 @@ def _concat_reencode(
             raw_h = ref_v.codec_context.height or 1080
             can_w = (raw_w // 2) * 2
             can_h = (raw_h // 2) * 2
-            fps_val = ref_v.average_rate or ref_v.guessed_rate or 24
-            can_fps = Fraction(fps_val) if fps_val else Fraction(24, 1)
+            fps_val = ref_v.average_rate or ref_v.guessed_rate
+            can_fps = (
+                Fraction(fps_val.numerator, fps_val.denominator)
+                if fps_val
+                else Fraction(24, 1)
+            )
 
         can_sr = 44100
-        can_layout = "stereo"
+        can_layout = 'stereo'
         if has_audio:
             ref_a = audio_streams[0]
             can_sr = ref_a.codec_context.sample_rate or 44100
             if ref_a.codec_context.layout and ref_a.codec_context.layout.name:
                 can_layout = ref_a.codec_context.layout.name
             elif ref_a.codec_context.channels == 1:
-                can_layout = "mono"
+                can_layout = 'mono'
             elif ref_a.codec_context.channels == 2:
-                can_layout = "stereo"
+                can_layout = 'stereo'
 
     container_options: dict[str, str] = {}
-    if output_path.suffix.lower() in (".mp4", ".m4v", ".mov"):
-        container_options["movflags"] = "faststart"
+    if output_path.suffix.lower() in ('.mp4', '.m4v', '.mov'):
+        container_options['movflags'] = 'faststart'
 
     with av.open(
         str(output_path),
-        mode="w",
+        mode='w',
         options=container_options if container_options else None,
     ) as out_container:
         out_video = None
         if has_video:
-            video_options: dict[str, str] = {"crf": "22", "preset": "ultrafast"}
+            video_options: dict[str, str] = {'crf': '22', 'preset': 'ultrafast'}
             if threads is not None:
-                video_options["threads"] = str(threads)
+                video_options['threads'] = str(threads)
             out_video = out_container.add_stream(
-                "libx264",
+                'libx264',
                 rate=can_fps,
                 options=video_options,
             )
             out_video.width = can_w
             out_video.height = can_h
-            out_video.pix_fmt = "yuv420p"
+            out_video.pix_fmt = 'yuv420p'
 
         out_audio = None
         if has_audio:
-            out_audio = out_container.add_stream("aac", rate=can_sr)
+            out_audio = out_container.add_stream('aac', rate=can_sr)
             out_audio.layout = can_layout
 
         v_pts = 0
@@ -250,7 +255,7 @@ def _concat_reencode(
 
         def emit_video_frame(f: av.VideoFrame) -> None:
             nonlocal v_pts
-            rf = f.reformat(width=can_w, height=can_h, format="yuv420p")
+            rf = f.reformat(width=can_w, height=can_h, format='yuv420p')
             rf.pts = v_pts
             rf.time_base = Fraction(1, can_fps)
             v_pts += 1
@@ -276,7 +281,7 @@ def _concat_reencode(
             resampler = None
             if out_audio is not None:
                 resampler = av.AudioResampler(
-                    format="fltp",
+                    format='fltp',
                     layout=can_layout,
                     rate=can_sr,
                 )
@@ -291,8 +296,8 @@ def _concat_reencode(
                     if in_rate and abs(float(in_rate) - float(can_fps)) > 0.05:
                         fps_graph = av.filter.Graph()
                         buffer = fps_graph.add_buffer(template=v_stream)
-                        fps_filter = fps_graph.add("fps", f"fps={float(can_fps)}")
-                        sink = fps_graph.add("buffersink")
+                        fps_filter = fps_graph.add('fps', f'fps={float(can_fps)}')
+                        sink = fps_graph.add('buffersink')
                         buffer.link_to(fps_filter)
                         fps_filter.link_to(sink)
                         fps_graph.configure()
@@ -302,7 +307,7 @@ def _concat_reencode(
                     try:
                         decoded_frames = packet.decode()
                     except (av.error.InvalidDataError, av.FFmpegError) as exc:
-                        logger.warning("Skipping unparseable packet in concat: %s", exc)
+                        logger.warning('Skipping unparseable packet in concat: %s', exc)
                         continue
                     for frame in decoded_frames:
                         if isinstance(frame, av.VideoFrame) and out_video is not None:
@@ -311,9 +316,11 @@ def _concat_reencode(
                                 fps_graph.push(frame)
                                 while True:
                                     try:
-                                        emit_video_frame(fps_graph.pull())
+                                        pulled = fps_graph.pull()
                                     except (av.BlockingIOError, av.EOFError) as _:
                                         break
+                                    if isinstance(pulled, av.VideoFrame):
+                                        emit_video_frame(pulled)
                             else:
                                 emit_video_frame(frame)
 
@@ -330,9 +337,11 @@ def _concat_reencode(
                     fps_graph.push(None)
                     while True:
                         try:
-                            emit_video_frame(fps_graph.pull())
+                            pulled = fps_graph.pull()
                         except (av.BlockingIOError, av.EOFError) as _:
                             break
+                        if isinstance(pulled, av.VideoFrame):
+                            emit_video_frame(pulled)
 
             if resampler is not None:
                 for r_frame in resampler.resample(None):
@@ -344,7 +353,7 @@ def _concat_reencode(
                 seg_duration_s = (v_pts - seg_v_start) / float(can_fps)
                 needed_samples = round(seg_duration_s * can_sr)
                 num_channels = out_audio.codec_context.channels or (
-                    2 if can_layout == "stereo" else 1
+                    2 if can_layout == 'stereo' else 1
                 )
                 samples_left = needed_samples
                 chunk_size = 1024
@@ -352,7 +361,7 @@ def _concat_reencode(
                     cur_chunk = min(chunk_size, samples_left)
                     silence_arr = np.zeros((num_channels, cur_chunk), dtype=np.float32)
                     silence_frame = av.AudioFrame.from_ndarray(
-                        silence_arr, format="fltp", layout=can_layout
+                        silence_arr, format='fltp', layout=can_layout
                     )
                     silence_frame.sample_rate = can_sr
                     emit_audio_frame(silence_frame)
@@ -364,9 +373,9 @@ def _concat_reencode(
                 needed_frames = round(seg_duration_s * float(can_fps))
                 if needed_frames > 0:
                     black_frame = av.VideoFrame.from_ndarray(
-                        np.zeros((can_h, can_w, 3), dtype=np.uint8), format="rgb24"
-                    ).reformat(format="yuv420p")
-                    for _ in range(needed_frames):
+                        np.zeros((can_h, can_w, 3), dtype=np.uint8), format='rgb24'
+                    ).reformat(format='yuv420p')
+                    for i in range(needed_frames):
                         emit_video_frame(black_frame)
 
         if out_video is not None:
@@ -419,23 +428,23 @@ def concat(
     storage_backend = backend or storage
 
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be positive, got {threads}")
+        raise ValueError(f'threads must be positive, got {threads}')
 
     cut_p = Path(cut_path)
     if not cut_p.is_file():
-        raise FileNotFoundError(f"Cut file not found: {cut_p}")
+        raise FileNotFoundError(f'Cut file not found: {cut_p}')
 
     intro_p: Path | None = None
     if intro_path is not None:
         intro_p = Path(intro_path)
         if not intro_p.is_file():
-            raise FileNotFoundError(f"Intro file not found: {intro_p}")
+            raise FileNotFoundError(f'Intro file not found: {intro_p}')
 
     outro_p: Path | None = None
     if outro_path is not None:
         outro_p = Path(outro_path)
         if not outro_p.is_file():
-            raise FileNotFoundError(f"Outro file not found: {outro_p}")
+            raise FileNotFoundError(f'Outro file not found: {outro_p}')
 
     # Instant zero-cost passthrough if only cut is provided without custom output destination
     if (
@@ -446,7 +455,7 @@ def concat(
         return str(cut_p)
 
     if output_path is None:
-        out_p = cut_p.parent / f"{cut_p.stem}_concat{cut_p.suffix}"
+        out_p = cut_p.parent / f'{cut_p.stem}_concat{cut_p.suffix}'
         output_key = out_p.name
     else:
         out_p = Path(output_path)
@@ -454,13 +463,13 @@ def concat(
 
     input_paths = [p for p in (intro_p, cut_p, outro_p) if p is not None]
     if any(out_p.resolve() == p.resolve() for p in input_paths):
-        raise ValueError(f"Output path matches input path: {out_p}")
+        raise ValueError(f'Output path matches input path: {out_p}')
 
     def _persist(src: Path) -> str:
         if storage_backend is not None:
             storage_backend.put(output_key, src)
             stored = storage_backend.get(output_key)
-            return getattr(stored, "key", str(stored))
+            return str(stored)
         LocalDiskBackend(out_p.parent).put(out_p.name, src)
         return str(out_p)
 
@@ -470,23 +479,19 @@ def concat(
     segments = [p for p in (intro_p, cut_p, outro_p) if p is not None]
 
     # Render into a temporary file, then persist via StorageBackend
-    out_suffix = out_p.suffix or cut_p.suffix or ".mp4"
-    scratch_dir = (
-        getattr(storage_backend, "get_temp_dir", lambda: None)()
-        if storage_backend
-        else None
-    )
+    out_suffix = out_p.suffix or cut_p.suffix or '.mp4'
+    scratch_dir = storage_backend.get_temp_dir() if storage_backend else None
     with tempfile.TemporaryDirectory(
-        prefix="veditor-concat-", dir=scratch_dir
+        prefix='veditor-concat-', dir=scratch_dir
     ) as tmpdir:
-        tmp_target = Path(tmpdir) / f"concat_tmp{out_suffix}"
+        tmp_target = Path(tmpdir) / f'concat_tmp{out_suffix}'
 
         if not force_reencode and _can_stream_copy(segments):
             try:
                 _concat_stream_copy(segments, tmp_target, canonical_cut_path=cut_p)
             except (av.FFmpegError, ValueError, RuntimeError, OSError) as exc:
                 logger.warning(
-                    "Stream-copy concat failed (%s); falling back to full re-encode.",
+                    'Stream-copy concat failed (%s); falling back to full re-encode.',
                     exc,
                 )
                 _concat_reencode(segments, cut_p, tmp_target, threads=threads)

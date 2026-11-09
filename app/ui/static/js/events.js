@@ -33,7 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
       details.innerHTML = `<strong></strong><span></span>`;
       details.querySelector('strong').textContent = room.name;
       const created = room.created_at ? new Date(room.created_at).toLocaleDateString() : 'Unknown date';
-      details.querySelector('span').textContent = `${room.description || 'No description'} · ${room.talks_count} talk(s) · Created ${created}`;
+      details.querySelector('span').textContent = `${
+        room.description || 'No description'
+      } · ${room.talks_count} talk(s) · Created ${created}`;
       const edit = document.createElement('button');
       edit.type = 'button';
       edit.className = 'btn btn-ghost btn-sm';
@@ -50,9 +52,18 @@ document.addEventListener('DOMContentLoaded', () => {
       remove.className = 'btn btn-danger btn-sm';
       remove.textContent = 'Delete';
       remove.addEventListener('click', async () => {
-        if (!await Modal.confirm({ title: 'Delete room', message: `Delete “${room.name}”? Talks will keep their records but lose this room assignment.`, confirmText: 'Delete', variant: 'danger' })) return;
+        if (
+          !await Modal.confirm({
+            title: 'Delete room',
+            message: `Delete “${room.name}”? Talks will keep their records but lose this room assignment.`,
+            confirmText: 'Delete',
+            variant: 'danger',
+          })
+        ) return;
         try {
-          const result = await (window.authFetch || fetch)(`/events/${roomsEventId}/rooms/${room.id}`, { method: 'DELETE' });
+          const result = await (window.authFetch || fetch)(`/events/${roomsEventId}/rooms/${room.id}`, {
+            method: 'DELETE',
+          });
           if (!result.ok) throw new Error('Unable to delete room.');
           await loadRooms();
         } catch (error) {
@@ -73,7 +84,11 @@ document.addEventListener('DOMContentLoaded', () => {
       roomsEventName.textContent = button.dataset.eventName || '';
       resetRoomForm();
       Modal.open(roomsModal);
-      try { await loadRooms(); } catch (error) { roomsList.textContent = error.message; }
+      try {
+        await loadRooms();
+      } catch (error) {
+        roomsList.textContent = error.message;
+      }
     });
   });
 
@@ -81,13 +96,22 @@ document.addEventListener('DOMContentLoaded', () => {
     event.preventDefault();
     try {
       const editingRoomId = roomForm.dataset.editingRoomId;
-      const response = await (window.authFetch || fetch)(editingRoomId ? `/events/${roomsEventId}/rooms/${editingRoomId}` : `/events/${roomsEventId}/rooms`, {
-        method: editingRoomId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: document.getElementById('room-name-input').value, description: document.getElementById('room-description-input').value || null }),
-      });
+      const response = await (window.authFetch || fetch)(
+        editingRoomId ? `/events/${roomsEventId}/rooms/${editingRoomId}` : `/events/${roomsEventId}/rooms`,
+        {
+          method: editingRoomId ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('room-name-input').value,
+            description: document.getElementById('room-description-input').value || null,
+          }),
+        },
+      );
       if (!response.ok) {
         let body = {};
-        try { body = await response.json(); } catch (_) { /* empty response */ }
+        try {
+          body = await response.json();
+        } catch (_) { /* empty response */ }
         const detail = Array.isArray(body.detail) ? body.detail.map(item => item.msg || item).join(', ') : body.detail;
         return Modal.alert({ title: 'Add room', message: detail || 'Unable to add room.', variant: 'danger' });
       }
@@ -125,10 +149,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const id = btn.getAttribute('data-event-id');
       const name = btn.getAttribute('data-event-name');
       const expireHours = btn.getAttribute('data-event-expire-hours') || '';
+      const startDate = btn.getAttribute('data-event-start-date') || '';
+      const endDate = btn.getAttribute('data-event-end-date') || '';
+      const timezone = btn.getAttribute('data-event-timezone') || '';
       const editExpire = document.getElementById('edit-event-review-window');
+      const editTimezone = document.getElementById('edit-event-timezone');
+      const editStart = document.getElementById('edit-event-start-date');
+      const editEnd = document.getElementById('edit-event-end-date');
       if (editForm && editInput) {
         editForm.action = `/studio/events/${id}/edit`;
         editInput.value = name || '';
+      }
+      if (editStart) editStart.value = startDate;
+      if (editEnd) {
+        editEnd.value = endDate;
+        if (startDate) {
+          editEnd.min = startDate;
+        } else {
+          editEnd.removeAttribute('min');
+        }
+      }
+      if (editTimezone) {
+        if (timezone && !editTimezone.querySelector(`option[value="${timezone}"]`)) {
+          const opt = document.createElement('option');
+          opt.value = timezone;
+          opt.textContent = timezone;
+          editTimezone.appendChild(opt);
+        }
+        editTimezone.value = timezone;
       }
       if (editExpire) {
         if (expireHours && !editExpire.querySelector(`option[value="${expireHours}"]`)) {
@@ -175,6 +223,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // ── Date Range Sync ─────────────────────────────────────────────────
+  function wireDateRangeSync(startId, endId) {
+    const startInput = document.getElementById(startId);
+    const endInput = document.getElementById(endId);
+    if (!startInput || !endInput) return;
+
+    function syncMinMax() {
+      if (startInput.value) {
+        endInput.min = startInput.value;
+        if (endInput.value && endInput.value < startInput.value) {
+          endInput.value = startInput.value;
+        }
+      } else {
+        endInput.removeAttribute('min');
+      }
+    }
+
+    startInput.addEventListener('change', syncMinMax);
+    endInput.addEventListener('change', () => {
+      if (endInput.value && startInput.value && endInput.value < startInput.value) {
+        startInput.value = endInput.value;
+        endInput.min = startInput.value;
+      }
+    });
+
+    syncMinMax();
+  }
+
+  wireDateRangeSync('event-start-date', 'event-end-date');
+  wireDateRangeSync('edit-event-start-date', 'edit-event-end-date');
+
   // ── API Keys Modal Handling ─────────────────────────────────────
   const apiKeysModal = document.getElementById('modal-api-keys');
   const apiKeysEventName = document.getElementById('api-keys-event-name-display');
@@ -205,11 +284,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderApiKeysStatus(text, isDanger = false) {
     if (!apiKeysTbody) return;
-    apiKeysTbody.innerHTML = "";
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
+    apiKeysTbody.innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
     td.colSpan = 6;
-    td.className = `${isDanger ? "text-danger" : "text-muted"} text-center api-keys-empty-msg`;
+    td.className = `${isDanger ? 'text-danger' : 'text-muted'} text-center api-keys-empty-msg`;
     td.textContent = text;
     tr.appendChild(td);
     apiKeysTbody.appendChild(tr);
@@ -217,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadApiKeys(eventId) {
     if (!apiKeysTbody) return;
-    renderApiKeysStatus("Loading API keys...");
+    renderApiKeysStatus('Loading API keys...');
     if (apiKeysEmpty) apiKeysEmpty.classList.add('api-key-alert-hidden');
 
     try {
@@ -245,8 +324,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       keys.forEach(k => {
-        const createdStr = k.created_at ? new Date(k.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
-        const lastUsedStr = k.last_used_at ? new Date(k.last_used_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Never';
+        const createdStr = k.created_at
+          ? new Date(k.created_at).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+          : '—';
+        const lastUsedStr = k.last_used_at
+          ? new Date(k.last_used_at).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+          : 'Never';
         const tr = document.createElement('tr');
 
         const tdId = document.createElement('td');
@@ -296,9 +389,10 @@ document.addEventListener('DOMContentLoaded', () => {
           const keyId = b.getAttribute('data-key-id');
           const confirmed = await Modal.confirm({
             title: 'Revoke API Key',
-            message: 'Are you sure you want to revoke this API key? External integrations using this key will stop working.',
+            message:
+              'Are you sure you want to revoke this API key? External integrations using this key will stop working.',
             confirmText: 'Revoke',
-            variant: 'danger'
+            variant: 'danger',
           });
           if (!confirmed) {
             return;
@@ -323,13 +417,10 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       });
-
     } catch (err) {
       renderApiKeysStatus(`Error loading keys: ${err.message}`, true);
     }
   }
-
-
 
   function showWebhookAlert(message, type = 'info') {
     if (!webhookTestAlert || !webhookTestMessage) return;
@@ -371,9 +462,13 @@ document.addEventListener('DOMContentLoaded', () => {
         webhookUrlInput.value = data.url;
         if (data.has_secret) {
           webhookSecretInput.value = '';
-          webhookSecretInput.placeholder = data.masked_secret ? `Configured (${data.masked_secret})` : '••••••••••••••••';
+          webhookSecretInput.placeholder = data.masked_secret
+            ? `Configured (${data.masked_secret})`
+            : '••••••••••••••••';
           if (webhookSecretHint) {
-            webhookSecretHint.textContent = `Secret is configured (${data.masked_secret || 'masked'}). Enter a new secret to rotate it.`;
+            webhookSecretHint.textContent = `Secret is configured (${
+              data.masked_secret || 'masked'
+            }). Enter a new secret to rotate it.`;
           }
         } else {
           webhookSecretInput.value = '';
@@ -450,9 +545,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (hasKey) {
         const confirmed = await Modal.confirm({
           title: 'Regenerate API Key',
-          message: 'An active API key already exists for this event. Regenerating will revoke the current key immediately. Are you sure you want to proceed?',
+          message:
+            'An active API key already exists for this event. Regenerating will revoke the current key immediately. Are you sure you want to proceed?',
           confirmText: 'Regenerate',
-          variant: 'danger'
+          variant: 'danger',
         });
         if (!confirmed) {
           return;
@@ -465,7 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const resp = await fetch(`/events/${currentActiveEventId}/api-keys`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'Platform Integration Key' })
+          body: JSON.stringify({ name: 'Platform Integration Key' }),
         });
         if (resp.ok) {
           const data = await resp.json();
@@ -479,7 +575,9 @@ document.addEventListener('DOMContentLoaded', () => {
         await Modal.alert({ title: 'Generate API Key', message: 'Error generating key: ' + err, variant: 'danger' });
       } finally {
         btnGenerateKey.disabled = false;
-        btnGenerateKey.textContent = btnGenerateKey.getAttribute('data-has-key') === 'true' ? '↻ Regenerate Key' : '+ Generate API Key';
+        btnGenerateKey.textContent = btnGenerateKey.getAttribute('data-has-key') === 'true'
+          ? '↻ Regenerate Key'
+          : '+ Generate API Key';
       }
     });
   }
@@ -489,7 +587,9 @@ document.addEventListener('DOMContentLoaded', () => {
       navigator.clipboard.writeText(newKeyInput.value).then(() => {
         const orig = btnCopyNewKey.textContent;
         btnCopyNewKey.textContent = 'Copied!';
-        setTimeout(() => { btnCopyNewKey.textContent = orig; }, 2000);
+        setTimeout(() => {
+          btnCopyNewKey.textContent = orig;
+        }, 2000);
       });
     });
   }
@@ -500,7 +600,9 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.clipboard.writeText(currentActiveEventId).then(() => {
           const orig = btnCopyEventId.textContent;
           btnCopyEventId.textContent = 'Copied!';
-          setTimeout(() => { btnCopyEventId.textContent = orig; }, 2000);
+          setTimeout(() => {
+            btnCopyEventId.textContent = orig;
+          }, 2000);
         });
       }
     });
@@ -532,13 +634,18 @@ document.addEventListener('DOMContentLoaded', () => {
     btnCopySecret.addEventListener('click', () => {
       const val = webhookSecretInput.value;
       if (!val) {
-        showWebhookAlert('No visible secret to copy. If already configured, generate or type a new secret to view/copy.', 'info');
+        showWebhookAlert(
+          'No visible secret to copy. If already configured, generate or type a new secret to view/copy.',
+          'info',
+        );
         return;
       }
       navigator.clipboard.writeText(val).then(() => {
         const orig = btnCopySecret.textContent;
         btnCopySecret.textContent = 'Copied!';
-        setTimeout(() => { btnCopySecret.textContent = orig; }, 2000);
+        setTimeout(() => {
+          btnCopySecret.textContent = orig;
+        }, 2000);
       }).catch(() => {
         showWebhookAlert('Failed to copy secret to clipboard. Please copy it manually.', 'danger');
       });
@@ -639,7 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
         title: 'Remove Webhook',
         message: 'Are you sure you want to remove the outbound webhook configuration for this event?',
         confirmText: 'Remove',
-        variant: 'danger'
+        variant: 'danger',
       });
       if (!confirmed) {
         return;
@@ -666,5 +773,4 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
 });

@@ -12,7 +12,8 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
-from app.config import settings
+from .config import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +27,16 @@ def send_speaker_handoff_email(
 ) -> bool:
     """Notify an assigned speaker that a talk is ready for bounds review."""
     clean_email = recipient.strip().lower()
-    greeting = f"Hello {html.escape(speaker_name)}," if speaker_name else "Hello,"
+    greeting = f'Hello {html.escape(speaker_name)},' if speaker_name else 'Hello,'
     if not settings.smtp_host:
         if settings.is_production:
             logger.error(
-                "SMTP host is unconfigured in production; refusing handoff email to %s",
+                'SMTP host is unconfigured in production; refusing handoff email to %s',
                 clean_email,
             )
             return False
         logger.info(
-            "SMTP host is unconfigured. Speaker handoff email for %s: %s",
+            'SMTP host is unconfigured. Speaker handoff email for %s: %s',
             clean_email,
             studio_url,
         )
@@ -43,18 +44,18 @@ def send_speaker_handoff_email(
 
     if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
         logger.error(
-            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
         )
         return False
 
     msg = EmailMessage()
-    msg["Subject"] = f"Review your talk in VEditor - {talk_title}"
-    msg["From"] = settings.smtp_from
-    msg["To"] = clean_email
+    msg['Subject'] = f'Review your talk in VEditor - {talk_title}'
+    msg['From'] = settings.smtp_from
+    msg['To'] = clean_email
     msg.set_content(
-        f"{'Hello ' + speaker_name + ',' if speaker_name else 'Hello,'}\n\n"
-        f"Your talk, {talk_title}, at {event_name}, is ready for review.\n"
-        f"Click here to review and adjust the cut bounds in Studio:\n{studio_url}\n"
+        f'{"Hello " + speaker_name + "," if speaker_name else "Hello,"}\n\n'
+        f'Your talk, {talk_title}, at {event_name}, is ready for review.\n'
+        f'Click here to review and adjust the cut bounds in Studio:\n{studio_url}\n'
     )
     escaped_url = html.escape(studio_url, quote=True)
     escaped_title = html.escape(talk_title)
@@ -72,7 +73,7 @@ def send_speaker_handoff_email(
     <p>If the button does not work, <a href="{escaped_url}">click here to review your talk</a>.</p>
   </div>
 </body></html>"""
-    msg.add_alternative(html_body, subtype="html")
+    msg.add_alternative(html_body, subtype='html')
     ssl_context = ssl.create_default_context()
     try:
         if settings.smtp_ssl:
@@ -96,10 +97,10 @@ def send_speaker_handoff_email(
                 if settings.smtp_user:
                     server.login(settings.smtp_user, settings.smtp_password)
                 server.send_message(msg)
-        logger.info("Speaker handoff email sent successfully to %s", clean_email)
+        logger.info('Speaker handoff email sent successfully to %s', clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to send speaker handoff email to %s: %s", clean_email, exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error('Failed to send speaker handoff email to %s: %s', clean_email, exc)
         return False
 
 
@@ -118,12 +119,12 @@ def send_verification_email(
     if not settings.smtp_host:
         if settings.is_production:
             logger.error(
-                "SMTP host is unconfigured in production; refusing verification email delivery to %s",
+                'SMTP host is unconfigured in production; refusing verification email delivery to %s',
                 clean_email,
             )
             return False
         logger.info(
-            "SMTP host is unconfigured. Verification email for %s: %s",
+            'SMTP host is unconfigured. Verification email for %s: %s',
             clean_email,
             verify_url,
         )
@@ -131,21 +132,21 @@ def send_verification_email(
 
     if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
         logger.error(
-            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
         )
         return False
 
     msg = EmailMessage()
-    msg["Subject"] = "Verify your email address - VEditor"
-    msg["From"] = settings.smtp_from
-    msg["To"] = clean_email
+    msg['Subject'] = 'Verify your email address - VEditor'
+    msg['From'] = settings.smtp_from
+    msg['To'] = clean_email
 
     text_body = (
-        f"Welcome to VEditor!\n\n"
-        f"Please verify your email address by clicking the link below:\n"
-        f"{verify_url}\n\n"
-        f"This link will expire in {expire_hours} hours.\n\n"
-        f"If you did not create an account on VEditor, you can safely ignore this email."
+        f'Welcome to VEditor!\n\n'
+        f'Please verify your email address by clicking the link below:\n'
+        f'{verify_url}\n\n'
+        f'This link will expire in {expire_hours} hours.\n\n'
+        f'If you did not create an account on VEditor, you can safely ignore this email.'
     )
     msg.set_content(text_body)
 
@@ -169,7 +170,7 @@ def send_verification_email(
   </div>
 </body>
 </html>"""
-    msg.add_alternative(html_body, subtype="html")
+    msg.add_alternative(html_body, subtype='html')
 
     ssl_context = ssl.create_default_context()
     try:
@@ -194,10 +195,10 @@ def send_verification_email(
                 if settings.smtp_user:
                     server.login(settings.smtp_user, settings.smtp_password)
                 server.send_message(msg)
-        logger.info("Verification email sent successfully to %s", clean_email)
+        logger.info('Verification email sent successfully to %s', clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to send verification email to %s: %s", clean_email, exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error('Failed to send verification email to %s: %s', clean_email, exc)
         return False
 
 
@@ -216,12 +217,12 @@ def send_password_reset_email(
     if not settings.smtp_host:
         if settings.is_production:
             logger.error(
-                "SMTP host is unconfigured in production; refusing password reset email delivery to %s",
+                'SMTP host is unconfigured in production; refusing password reset email delivery to %s',
                 clean_email,
             )
             return False
         logger.info(
-            "SMTP host is unconfigured. Password reset email for %s: %s",
+            'SMTP host is unconfigured. Password reset email for %s: %s',
             clean_email,
             reset_url,
         )
@@ -229,24 +230,24 @@ def send_password_reset_email(
 
     if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
         logger.error(
-            "Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls",
+            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
         )
         return False
 
     msg = EmailMessage()
-    msg["Subject"] = "Reset your password - VEditor"
-    msg["From"] = settings.smtp_from
-    msg["To"] = clean_email
+    msg['Subject'] = 'Reset your password - VEditor'
+    msg['From'] = settings.smtp_from
+    msg['To'] = clean_email
 
-    hour_str = f"{expire_hours} hour" if expire_hours == 1 else f"{expire_hours} hours"
+    hour_str = f'{expire_hours} hour' if expire_hours == 1 else f'{expire_hours} hours'
     text_body = (
-        f"Hello,\n\n"
-        f"We received a request to reset the password for your VEditor account.\n\n"
-        f"Please click the link below to set a new password:\n"
-        f"{reset_url}\n\n"
-        f"This link will expire in {hour_str}.\n\n"
-        f"If you did not request a password reset, you can safely ignore this email.\n"
-        f"Your password will remain unchanged."
+        f'Hello,\n\n'
+        f'We received a request to reset the password for your VEditor account.\n\n'
+        f'Please click the link below to set a new password:\n'
+        f'{reset_url}\n\n'
+        f'This link will expire in {hour_str}.\n\n'
+        f'If you did not request a password reset, you can safely ignore this email.\n'
+        f'Your password will remain unchanged.'
     )
     msg.set_content(text_body)
 
@@ -270,7 +271,7 @@ def send_password_reset_email(
   </div>
 </body>
 </html>"""
-    msg.add_alternative(html_body, subtype="html")
+    msg.add_alternative(html_body, subtype='html')
 
     ssl_context = ssl.create_default_context()
     try:
@@ -295,8 +296,8 @@ def send_password_reset_email(
                 if settings.smtp_user:
                     server.login(settings.smtp_user, settings.smtp_password)
                 server.send_message(msg)
-        logger.info("Password reset email sent successfully to %s", clean_email)
+        logger.info('Password reset email sent successfully to %s', clean_email)
         return True
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to send password reset email to %s: %s", clean_email, exc)
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error('Failed to send password reset email to %s: %s', clean_email, exc)
         return False

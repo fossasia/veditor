@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import re
@@ -19,35 +20,42 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
+from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, TypedDict
+from urllib.request import Request
 
 import av
+from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import PREVIEW_PRESETS, get_setting, settings
-from app.db import SessionLocal
-from app.ingest import (
+from . import email as app_email
+from .config import PREVIEW_PRESETS, get_setting, settings
+from .consts import JobKind, JobStatus, TalkStatus
+from .db import new_session
+from .ingest import (
     InsufficientStorageError,
     download_media_url,
     get_upload_staging_dir,
     validate_media_file,
 )
-from app.models import Job, Talk
-from app.pipeline.concat import concat
-from app.pipeline.cut import cut
-from app.pipeline.detect import (
+from .models import Event, Job, Talk, User
+from .pipeline.concat import concat
+from .pipeline.cut import CutStrategy, cut
+from .pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
     container_duration_seconds,
     detect,
 )
-from app.pipeline.intro import generate_intro_clip
-from app.pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
-from app.pipeline.outro import generate_outro_clip
-from app.pipeline.preview import generate_preview
-from app.pipeline.publish import publish
-from app.pipeline.transcode import (
+from .pipeline.intro import generate_intro_clip
+from .pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
+from .pipeline.outro import generate_outro_clip
+from .pipeline.preview import generate_preview
+from .pipeline.publish import publish
+from .pipeline.transcode import (
     # PRESET_4K_MASTER,
     PRESET_480P,
     PRESET_720P,
@@ -55,85 +63,98 @@ from app.pipeline.transcode import (
     PRESET_1440P,
     transcode,
 )
-from app.pipeline.waveform import extract_waveform_peaks
-from app.queue import heavy_queue, light_queue
-from app.retention import (
+from .pipeline.waveform import extract_waveform_peaks
+from .queue import heavy_queue, light_queue
+from .retention import (
     enqueue_retention_sweep,  # noqa: F401
     register_periodic_retention_sweep,  # noqa: F401
     run_retention_sweep,  # noqa: F401
 )
-from app.states import advance
-from app.storage import (
+from .security import create_password_reset_token
+from .states import advance
+from .storage import (
+    StorageBackend,
     StorageKeyNotFoundError,
     cleanup_bumpers,
     cleanup_intermediates,
     get_storage_backend,
 )
 
+
 TRANSCODE_PRESETS = {
-    "480p": PRESET_480P,
-    "720p": PRESET_720P,
-    "1080p_default": PRESET_1080P_DEFAULT,
-    "1440p": PRESET_1440P,
+    '480p': PRESET_480P,
+    '720p': PRESET_720P,
+    '1080p_default': PRESET_1080P_DEFAULT,
+    '1440p': PRESET_1440P,
     # "4k_master": PRESET_4K_MASTER,
 }
 
 
 logger = logging.getLogger(__name__)
 
-STAGE_CONFIG: dict[str, dict[str, str | int]] = {
-    "ingest": {"queue": "light", "job_timeout": 600},
-    "detect": {"queue": "light", "job_timeout": 300},
-    "cut": {"queue": "light", "job_timeout": 900},
-    "intro": {"queue": "light", "job_timeout": 300},
-    "outro": {"queue": "light", "job_timeout": 300},
-    "concat": {"queue": "light", "job_timeout": 1800},
-    "preview": {"queue": "light", "job_timeout": 1800},
-    "loudness": {"queue": "light", "job_timeout": 900},
-    "transcode": {"queue": "heavy", "job_timeout": 14400},
-    "publish": {"queue": "light", "job_timeout": 300},
+
+class StageConfig(TypedDict):
+    """Queue and timeout settings applied when a pipeline stage is enqueued."""
+
+    queue: str
+    job_timeout: int
+
+
+STAGE_CONFIG: dict[JobKind, StageConfig] = {
+    JobKind.INGEST: {'queue': 'light', 'job_timeout': 600},
+    JobKind.DETECT: {'queue': 'light', 'job_timeout': 300},
+    JobKind.CUT: {'queue': 'light', 'job_timeout': 900},
+    JobKind.INTRO: {'queue': 'light', 'job_timeout': 300},
+    JobKind.OUTRO: {'queue': 'light', 'job_timeout': 300},
+    JobKind.CONCAT: {'queue': 'light', 'job_timeout': 1800},
+    JobKind.PREVIEW: {'queue': 'light', 'job_timeout': 1800},
+    JobKind.LOUDNESS: {'queue': 'light', 'job_timeout': 900},
+    JobKind.TRANSCODE: {'queue': 'heavy', 'job_timeout': 14400},
+    JobKind.PUBLISH: {'queue': 'light', 'job_timeout': 300},
 }
 
 
-def _cache_waveform(storage, media_key: str, media_path: Path) -> None:
+def _cache_waveform(storage: StorageBackend, media_key: str, media_path: Path) -> None:
     """Generate waveform data before a newly created media asset is exposed."""
     try:
         storage.put(
-            f"{media_key}.waveform.json",
-            json.dumps({"peaks": extract_waveform_peaks(media_path)}).encode("utf-8"),
+            f'{media_key}.waveform.json',
+            json.dumps({'peaks': extract_waveform_peaks(media_path)}).encode('utf-8'),
         )
     except (OSError, ValueError, RuntimeError) as exc:
-        logger.warning("Failed to generate waveform for %s: %s", media_key, exc)
+        logger.warning('Failed to generate waveform for %s: %s', media_key, exc)
 
 
-def _handle_failure(talk_id: int, job_id: int | None, exc: Exception, storage) -> None:
+def _handle_failure(
+    talk_id: int, job_id: int | None, exc: Exception, storage: StorageBackend
+) -> None:
     log_text = traceback.format_exc()
-    log_key = f"{talk_id}/logs/job_{job_id if job_id is not None else 'unknown'}.log"
+    log_key = f'{talk_id}/logs/job_{job_id if job_id is not None else "unknown"}.log'
     try:
-        storage.put(log_key, log_text.encode("utf-8"))
-    except Exception as log_err:  # noqa: BLE001
-        logger.warning("Failed to persist job log to storage: %s", log_err)
+        storage.put(log_key, log_text.encode('utf-8'))
+    except (OSError, ValueError, TypeError) as log_err:
+        logger.warning('Failed to persist job log to storage: %s', log_err)
 
-    with SessionLocal() as db:
+    with new_session() as db:
         if job_id is not None:
             job = db.get(Job, job_id)
             if not job:
                 return
-            job.status = "failed"
+            job.status = JobStatus.FAILED
             job.log_path = log_key
             job.updated_at = datetime.now(UTC)
         talk = db.get(Talk, talk_id)
         if talk and talk.status not in (
-            "waiting_for_files",
-            "broken",
-            "done",
-            "rejected",
+            TalkStatus.WAITING_FILES,
+            TalkStatus.BROKEN,
+            TalkStatus.DONE,
+            TalkStatus.REJECTED,
         ):
-            advance(talk, "broken")
+            advance(talk, TalkStatus.BROKEN)
         db.commit()
 
 
-def _get_scratch_dir(storage) -> Path | None:
+def _get_scratch_dir(storage: StorageBackend) -> Path | None:
     try:
         d = storage.get_temp_dir()
         if isinstance(d, Path) and d.is_dir():
@@ -149,49 +170,50 @@ def job_ingest(
     raw_key: str | None = None,
     recording_start: datetime | None = None,
 ) -> None:
-    raw_key = raw_key or f"{talk_id}/raw/raw.mp4"
+    raw_key = raw_key or f'{talk_id}/raw/raw.mp4'
     job_id = None
     storage = get_storage_backend()
     staged = Path(staged_path)
     claimed = False
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
-            if not talk or talk.status != "waiting_for_files":
+            if not talk or talk.status != TalkStatus.WAITING_FILES:
                 logger.info(
-                    "Talk %s ingest job was aborted or state changed prior to start; discarding",
+                    'Talk %s ingest job was aborted or state changed prior to start; discarding',
                     talk_id,
                 )
                 return
 
             # Atomically claim the talk by transitioning from waiting_for_files to detecting
-            updated = (
-                db.query(Talk)
-                .filter(Talk.id == talk_id, Talk.status == "waiting_for_files")
-                .update({"status": "detecting"})
-            )
-            if not updated:
+            claimed_id = db.execute(
+                update(Talk)
+                .where(Talk.id == talk_id, Talk.status == TalkStatus.WAITING_FILES)
+                .values(status=TalkStatus.DETECTING)
+                .returning(Talk.id)
+            ).scalar_one_or_none()
+            if claimed_id is None:
                 logger.info(
-                    "Talk %s was already claimed by another ingest job; discarding",
+                    'Talk %s was already claimed by another ingest job; discarding',
                     talk_id,
                 )
                 return
 
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
-                kind="ingest",
-                status="running",
+                kind=JobKind.INGEST,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             claimed = True
 
         if not staged.is_file():
-            raise FileNotFoundError(f"Staged upload file not found: {staged_path}")
+            raise FileNotFoundError(f'Staged upload file not found: {staged_path}')
 
         # In-worker PyAV container & stream inspection
         validate_media_file(staged)
@@ -199,22 +221,22 @@ def job_ingest(
         # Persist to destination storage backend
         storage.put(raw_key, staged)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "detecting":
+            if not talk or not job or talk.status != TalkStatus.DETECTING:
                 logger.info(
-                    "Talk %s ingest job %s was aborted or state changed; discarding",
+                    'Talk %s ingest job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
 
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
@@ -223,14 +245,14 @@ def job_ingest(
             talk_id,
             raw_key,
             recording_start,
-            job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.DETECT]['job_timeout'],
         )
     except Exception as exc:
         if claimed:
-            with SessionLocal() as db:
+            with new_session() as db:
                 talk = db.get(Talk, talk_id)
-                if talk and talk.status == "detecting":
-                    talk.status = "waiting_for_files"
+                if talk and talk.status == TalkStatus.DETECTING:
+                    talk.status = TalkStatus.WAITING_FILES
                     db.commit()
             _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -250,33 +272,36 @@ def job_ingest_room_url(
 
     validate and probe duration, and attach to matching talks in the room.
     """
-    import uuid
 
     storage = get_storage_backend()
-    staged_target = get_upload_staging_dir() / f"room_url_{uuid.uuid4().hex}.mp4"
+    staged_target = get_upload_staging_dir() / f'room_url_{uuid.uuid4().hex}.mp4'
     staged_path: Path | None = None
     job_ids: dict[int, int] = {}
     enqueued_talk_ids: set[int] = set()
     try:
         # Create ingest jobs for tracked talks so status and progress are recorded
-        with SessionLocal() as db:
-            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+        with new_session() as db:
+            stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
             if talk_ids:
-                query = query.filter(Talk.id.in_(talk_ids))
-            room_talks = query.order_by(Talk.start).all()
+                stmt = stmt.where(Talk.id.in_(talk_ids))
+            room_talks = db.scalars(stmt.order_by(Talk.start)).all()
             for talk in room_talks:
-                if talk.status in ("waiting_for_files", "detecting", "broken"):
-                    job = Job(
+                if talk.status in (
+                    TalkStatus.WAITING_FILES,
+                    TalkStatus.DETECTING,
+                    TalkStatus.BROKEN,
+                ):
+                    new_job = Job(
                         talk_id=talk.id,
-                        kind="ingest",
-                        status="running",
+                        kind=JobKind.INGEST,
+                        status=JobStatus.RUNNING,
                         started_at=datetime.now(UTC),
                         updated_at=datetime.now(UTC),
                     )
-                    db.add(job)
-                    talk.status = "detecting"
+                    db.add(new_job)
+                    talk.status = TalkStatus.DETECTING
                     db.flush()
-                    job_ids[talk.id] = job.id
+                    job_ids[talk.id] = new_job.id
             db.commit()
 
         # Download media directly from URL
@@ -286,12 +311,12 @@ def job_ingest_room_url(
         validate_media_file(staged_path)
         with av.open(str(staged_path)) as container:
             duration = container_duration_seconds(container)
-            c_time = container.metadata.get("creation_time")
+            c_time = container.metadata.get('creation_time')
             if not c_time and container.streams.video:
-                c_time = container.streams.video[0].metadata.get("creation_time")
+                c_time = container.streams.video[0].metadata.get('creation_time')
 
         if duration is None or duration <= 0:
-            raise ValueError("Could not determine video duration from downloaded URL")
+            raise ValueError('Could not determine video duration from downloaded URL')
 
         # Storage space check
         file_size = staged_path.stat().st_size
@@ -309,17 +334,17 @@ def job_ingest_room_url(
         if recording_start_iso:
             try:
                 recording_start = datetime.fromisoformat(recording_start_iso)
-            except (ValueError, TypeError):  # fmt: skip
+            except ValueError, TypeError:
                 pass
 
-        with SessionLocal() as db:
-            query = db.query(Talk).filter(Talk.event_id == event_id, Talk.room == room)
+        with new_session() as db:
+            stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
             if talk_ids:
-                query = query.filter(Talk.id.in_(talk_ids))
+                stmt = stmt.where(Talk.id.in_(talk_ids))
             eligible_talks = [
                 t
-                for t in query.order_by(Talk.start).all()
-                if t.id in job_ids and t.status == "detecting"
+                for t in db.scalars(stmt.order_by(Talk.start)).all()
+                if t.id in job_ids and t.status == TalkStatus.DETECTING
             ]
             if not eligible_talks:
                 logger.warning(
@@ -328,12 +353,12 @@ def job_ingest_room_url(
                 for jid in job_ids.values():
                     job = db.get(Job, jid)
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
                 for tid in job_ids:
-                    talk = db.get(Talk, tid)
-                    if talk and talk.status == "detecting":
-                        talk.status = "waiting_for_files"
+                    db_talk = db.get(Talk, tid)
+                    if db_talk and db_talk.status == TalkStatus.DETECTING:
+                        db_talk.status = TalkStatus.WAITING_FILES
                 db.commit()
                 return
 
@@ -358,7 +383,7 @@ def job_ingest_room_url(
                         for t in eligible_talks
                     ):
                         rec_start = parsed_dt
-                except (ValueError, TypeError):  # fmt: skip
+                except ValueError, TypeError:
                     pass
 
             if rec_start is None:
@@ -385,15 +410,15 @@ def job_ingest_room_url(
                 if untalk.id in job_ids:
                     job = db.get(Job, job_ids[untalk.id])
                     if job:
-                        job.status = "cancelled"
+                        job.status = JobStatus.CANCELLED
                         job.updated_at = datetime.now(UTC)
-                untalk.status = "waiting_for_files"
+                untalk.status = TalkStatus.WAITING_FILES
 
             matched_ids = []
             for talk in matched_talks:
-                raw_key = f"{talk.id}/raw/raw.mp4"
+                raw_key = f'{talk.id}/raw/raw.mp4'
                 storage.link_or_copy(raw_key, staged_path)
-                talk.status = "detecting"
+                talk.status = TalkStatus.DETECTING
                 talk.raw_duration_seconds = duration
 
                 talk_start_utc = (
@@ -415,7 +440,7 @@ def job_ingest_room_url(
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
                     if job:
-                        job.status = "done"
+                        job.status = JobStatus.DONE
                         job.updated_at = datetime.now(UTC)
 
                 matched_ids.append(talk.id)
@@ -427,9 +452,9 @@ def job_ingest_room_url(
             light_queue.enqueue(
                 job_detect,
                 tid,
-                f"{tid}/raw/raw.mp4",
-                tolerance_seconds=float("inf"),
-                job_timeout=STAGE_CONFIG["detect"]["job_timeout"],
+                f'{tid}/raw/raw.mp4',
+                tolerance_seconds=float('inf'),
+                job_timeout=STAGE_CONFIG[JobKind.DETECT]['job_timeout'],
             )
             enqueued_talk_ids.add(tid)
 
@@ -437,17 +462,17 @@ def job_ingest_room_url(
         logger.exception(
             "Failed job_ingest_room_url for %s in room '%s'", video_url, room
         )
-        with SessionLocal() as db:
+        with new_session() as db:
             for tid, jid in job_ids.items():
                 if tid in enqueued_talk_ids:
                     continue
                 job = db.get(Job, jid)
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.updated_at = datetime.now(UTC)
-                talk = db.get(Talk, tid)
-                if talk and talk.status == "detecting":
-                    talk.status = "broken"
+                db_talk = db.get(Talk, tid)
+                if db_talk and db_talk.status == TalkStatus.DETECTING:
+                    db_talk.status = TalkStatus.BROKEN
             db.commit()
         raise
     finally:
@@ -459,7 +484,7 @@ def job_ingest_room_url(
 def job_detect(
     talk_id: int,
     raw_key: str,
-    recording_start: datetime | None = None,
+    recording_start: datetime | str | None = None,
     *,
     tolerance_seconds: float | None = None,
     is_room_recording: bool = False,
@@ -467,43 +492,43 @@ def job_detect(
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
-            if not talk or talk.status != "detecting":
+            if not talk or talk.status != TalkStatus.DETECTING:
                 logger.info(
-                    "Talk %s detect job was aborted or state changed prior to start; discarding",
+                    'Talk %s detect job was aborted or state changed prior to start; discarding',
                     talk_id,
                 )
                 return
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
-                kind="detect",
-                status="running",
+                kind=JobKind.DETECT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             scheduled_start = talk.start
             scheduled_end = talk.end
             if tolerance_seconds is None:
                 if is_room_recording:
-                    tolerance_seconds = float("inf")
+                    tolerance_seconds = float('inf')
                 else:
                     tolerance_seconds = float(
-                        get_setting("detect_duration_tolerance_seconds", 300.0, db=db)
+                        get_setting('detect_duration_tolerance_seconds', 300.0, db=db)
                     )
 
         # Omit parameter when default to preserve pipeline default and mock compatibility
-        detect_kwargs = (
-            {"tolerance_seconds": tolerance_seconds}
+        detect_kwargs: dict[str, Any] = (
+            {'tolerance_seconds': tolerance_seconds}
             if tolerance_seconds != DETECT_DURATION_TOLERANCE_SECONDS
             else {}
         )
         if is_room_recording:
-            detect_kwargs["is_room_recording"] = True
+            detect_kwargs['is_room_recording'] = True
         raw_path = storage.get(raw_key)
         result = detect(
             raw_path,
@@ -512,19 +537,19 @@ def job_detect(
             **detect_kwargs,
         )
         if not result.passed:
-            raise ValueError(f"Detection failed: {result.reason}")
+            raise ValueError(f'Detection failed: {result.reason}')
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "detecting":
+            if not talk or not job or talk.status != TalkStatus.DETECTING:
                 logger.info(
-                    "Talk %s detect job %s was aborted or state changed; discarding",
+                    'Talk %s detect job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
@@ -566,8 +591,8 @@ def job_detect(
                     talk.cut_start = offset_s
                     talk.cut_end = offset_e
 
-            advance(talk, "pending_approval")
-            job.status = "done"
+            advance(talk, TalkStatus.PENDING_APPROVAL)
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
     except Exception as exc:
@@ -576,36 +601,36 @@ def job_detect(
 
 
 def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
-    cut_key = cut_key or f"{talk_id}/cut/cut.mp4"
+    cut_key = cut_key or f'{talk_id}/cut/cut.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
+                raise ValueError(f'Talk {talk_id} not found')
             if talk.cut_start is None or talk.cut_end is None:
-                raise ValueError(f"Talk {talk_id} has no cut bounds set")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} has no cut bounds set')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="cut",
-                status="running",
+                kind=JobKind.CUT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             start_seconds = talk.cut_start
             end_seconds = talk.cut_end
 
         raw_path = storage.get(raw_key)
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "cut.mp4"
+            tmp_out = Path(tmpdir) / 'cut.mp4'
             cut_kwargs = (
-                {"threads": settings.encoder_threads}
+                {'threads': settings.encoder_threads}
                 if settings.encoder_threads is not None
                 else {}
             )
@@ -617,9 +642,9 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
                 **cut_kwargs,
             )
             strat_label = (
-                getattr(cut_strategy, "value", str(cut_strategy))
-                if cut_strategy is not None
-                else "unknown"
+                cut_strategy.value
+                if isinstance(cut_strategy, CutStrategy)
+                else str(cut_strategy)
             )
             logger.info(
                 "Talk %s cut complete using strategy '%s' (bounds: %.2fs - %.2fs)",
@@ -631,32 +656,32 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             _cache_waveform(storage, cut_key, tmp_out)
             storage.put(cut_key, tmp_out)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "cutting":
+            if not talk or not job or talk.status != TalkStatus.CUTTING:
                 logger.info(
-                    "Talk %s cut job %s was aborted or state changed; discarding",
+                    'Talk %s cut job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "generating_previews")
-            job.status = "done"
+            advance(talk, TalkStatus.GENERATING_PREVIEWS)
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        preview_key = f"{talk_id}/preview/preview.mp4"
+        preview_key = f'{talk_id}/preview/preview.mp4'
         light_queue.enqueue(
             job_preview,
             talk_id,
             cut_key,
             preview_key,
-            job_timeout=STAGE_CONFIG["preview"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PREVIEW]['job_timeout'],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -665,17 +690,24 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
 
 def dispatch_assembly(talk_id: int, cut_key: str) -> None:
     """Dispatches the next background stage in the assembly workflow."""
-    with SessionLocal() as db:
+    with new_session() as db:
         talk = db.get(Talk, talk_id)
-        if not talk or talk.status not in ("assembling", "generating_previews"):
+        if not talk or talk.status not in (
+            TalkStatus.ASSEMBLING,
+            TalkStatus.GENERATING_PREVIEWS,
+        ):
             return
 
         # 1. Check if generated intro is required and not yet completed
-        intro_needed = talk.include_intro and talk.intro_source == "generated"
+        intro_needed = talk.include_intro and talk.intro_source == 'generated'
         intro_done = (
-            db.query(Job)
-            .filter(Job.talk_id == talk_id, Job.kind == "intro", Job.status == "done")
-            .first()
+            db.scalar(
+                select(Job.id).where(
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.INTRO,
+                    Job.status == JobStatus.DONE,
+                )
+            )
             is not None
         )
         if intro_needed and not intro_done:
@@ -683,17 +715,21 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 job_intro,
                 talk_id,
                 cut_key,
-                f"{talk_id}/intro/intro.mp4",
-                job_timeout=STAGE_CONFIG["intro"]["job_timeout"],
+                f'{talk_id}/intro/intro.mp4',
+                job_timeout=STAGE_CONFIG[JobKind.INTRO]['job_timeout'],
             )
             return
 
         # 2. Check if generated outro is required and not yet completed
-        outro_needed = talk.include_outro and talk.outro_source == "generated"
+        outro_needed = talk.include_outro and talk.outro_source == 'generated'
         outro_done = (
-            db.query(Job)
-            .filter(Job.talk_id == talk_id, Job.kind == "outro", Job.status == "done")
-            .first()
+            db.scalar(
+                select(Job.id).where(
+                    Job.talk_id == talk_id,
+                    Job.kind == JobKind.OUTRO,
+                    Job.status == JobStatus.DONE,
+                )
+            )
             is not None
         )
         if outro_needed and not outro_done:
@@ -701,15 +737,15 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
                 job_outro,
                 talk_id,
                 cut_key,
-                f"{talk_id}/outro/outro.mp4",
-                job_timeout=STAGE_CONFIG["outro"]["job_timeout"],
+                f'{talk_id}/outro/outro.mp4',
+                job_timeout=STAGE_CONFIG[JobKind.OUTRO]['job_timeout'],
             )
             return
 
         # 3. All input slates are ready (or skipped) -> enqueue concat
-        intro_key = f"{talk_id}/intro/intro.mp4" if talk.include_intro else None
-        outro_key = f"{talk_id}/outro/outro.mp4" if talk.include_outro else None
-        concat_key = f"{talk_id}/assemble/assemble.mp4"
+        intro_key = f'{talk_id}/intro/intro.mp4' if talk.include_intro else None
+        outro_key = f'{talk_id}/outro/outro.mp4' if talk.include_outro else None
+        concat_key = f'{talk_id}/assemble/assemble.mp4'
         light_queue.enqueue(
             job_concat,
             talk_id,
@@ -717,11 +753,13 @@ def dispatch_assembly(talk_id: int, cut_key: str) -> None:
             intro_key,
             outro_key,
             concat_key,
-            job_timeout=STAGE_CONFIG["concat"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.CONCAT]['job_timeout'],
         )
 
 
-def _probe_media_params(storage, media_key: str | None) -> dict[str, Any]:
+def _probe_media_params(
+    storage: StorageBackend, media_key: str | None
+) -> dict[str, Any]:
     params: dict[str, Any] = {}
     if not media_key:
         return params
@@ -734,16 +772,16 @@ def _probe_media_params(storage, media_key: str | None) -> dict[str, Any]:
                 v = c.streams.video[0]
                 w, h = v.codec_context.width, v.codec_context.height
                 if w and h:
-                    params["resolution"] = ((w // 2) * 2, (h // 2) * 2)
+                    params['resolution'] = ((w // 2) * 2, (h // 2) * 2)
                 fps = v.average_rate or v.guessed_rate
                 if fps and float(fps) > 0:
-                    params["fps"] = max(1, round(float(fps)))
+                    params['fps'] = max(1, round(float(fps)))
             if c.streams.audio:
                 a = c.streams.audio[0]
                 if a.codec_context.sample_rate:
-                    params["audio_sample_rate"] = a.codec_context.sample_rate
+                    params['audio_sample_rate'] = a.codec_context.sample_rate
     except (av.FFmpegError, OSError, ValueError) as exc:
-        logger.warning("Failed to probe %s for media parameters: %s", media_key, exc)
+        logger.warning('Failed to probe %s for media parameters: %s', media_key, exc)
     return params
 
 
@@ -752,79 +790,80 @@ def job_intro(
     cut_key: str | None = None,
     intro_key: str | None = None,
 ) -> None:
-    if cut_key and "/intro/" in cut_key and intro_key is None:
+    if cut_key and '/intro/' in cut_key and intro_key is None:
         intro_key = cut_key
         cut_key = None
-    cut_key = cut_key or f"{talk_id}/cut/cut.mp4"
-    intro_key = intro_key or f"{talk_id}/intro/intro.mp4"
+    cut_key = cut_key or f'{talk_id}/cut/cut.mp4'
+    intro_key = intro_key or f'{talk_id}/intro/intro.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="intro",
-                status="running",
+                kind=JobKind.INTRO,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             title = talk.title
-            event_name = talk.event.name if talk.event else ""
+            event_name = talk.event.name if talk.event else ''
             if talk.room and talk.start:
-                room_date = f"{talk.room} • {talk.start.strftime('%Y-%m-%d')}"
+                room_date = f'{talk.room} • {talk.start.strftime("%Y-%m-%d")}'
             elif talk.start:
-                room_date = talk.start.strftime("%Y-%m-%d")
+                room_date = talk.start.strftime('%Y-%m-%d')
             elif talk.room:
                 room_date = talk.room
             else:
-                room_date = ""
+                room_date = ''
 
         probe_params = _probe_media_params(storage, cut_key)
         intro_kwargs: dict[str, Any] = {
-            "title": title,
-            "event_name": event_name,
-            "room_date": room_date,
+            'title': title,
+            'event_name': event_name,
+            'room_date': room_date,
             **probe_params,
         }
         if settings.encoder_threads is not None:
-            intro_kwargs["threads"] = settings.encoder_threads
+            intro_kwargs['threads'] = settings.encoder_threads
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "intro.mp4"
+            tmp_out = Path(tmpdir) / 'intro.mp4'
             generate_intro_clip(tmp_out, **intro_kwargs)
             storage.put(intro_key, tmp_out)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
             if (
                 not talk
                 or not job
-                or talk.status not in ("assembling", "generating_previews")
+                or talk.status
+                not in (TalkStatus.ASSEMBLING, TalkStatus.GENERATING_PREVIEWS)
             ):
                 logger.info(
-                    "Talk %s intro job %s was aborted or state changed; discarding",
+                    'Talk %s intro job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -836,68 +875,69 @@ def job_outro(
     cut_key: str | None = None,
     outro_key: str | None = None,
 ) -> None:
-    if cut_key and "/outro/" in cut_key and outro_key is None:
+    if cut_key and '/outro/' in cut_key and outro_key is None:
         outro_key = cut_key
         cut_key = None
-    cut_key = cut_key or f"{talk_id}/cut/cut.mp4"
-    outro_key = outro_key or f"{talk_id}/outro/outro.mp4"
+    cut_key = cut_key or f'{talk_id}/cut/cut.mp4'
+    outro_key = outro_key or f'{talk_id}/outro/outro.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="outro",
-                status="running",
+                kind=JobKind.OUTRO,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
-            event_name = talk.event.name if talk.event else ""
+            db.refresh(new_job)
+            job_id = new_job.id
+            event_name = talk.event.name if talk.event else ''
 
         probe_params = _probe_media_params(storage, cut_key)
         outro_kwargs: dict[str, Any] = {
-            "event_name": event_name,
+            'event_name': event_name,
             **probe_params,
         }
         if settings.encoder_threads is not None:
-            outro_kwargs["threads"] = settings.encoder_threads
+            outro_kwargs['threads'] = settings.encoder_threads
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "outro.mp4"
+            tmp_out = Path(tmpdir) / 'outro.mp4'
             generate_outro_clip(tmp_out, **outro_kwargs)
             storage.put(outro_key, tmp_out)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
             if (
                 not talk
                 or not job
-                or talk.status not in ("assembling", "generating_previews")
+                or talk.status
+                not in (TalkStatus.ASSEMBLING, TalkStatus.GENERATING_PREVIEWS)
             ):
                 logger.info(
-                    "Talk %s outro job %s was aborted or state changed; discarding",
+                    'Talk %s outro job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
             talk_status = talk.status
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        if talk_status == "assembling":
+        if talk_status == TalkStatus.ASSEMBLING:
             dispatch_assembly(talk_id, cut_key)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -911,39 +951,39 @@ def job_concat(
     outro_key: str | None = None,
     concat_key: str | None = None,
 ) -> None:
-    concat_key = concat_key or f"{talk_id}/assemble/assemble.mp4"
+    concat_key = concat_key or f'{talk_id}/assemble/assemble.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="concat",
-                status="running",
+                kind=JobKind.CONCAT,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
 
         cut_path = storage.get(cut_key)
         intro_path = storage.get(intro_key) if intro_key else None
         outro_path = storage.get(outro_key) if outro_key else None
 
-        concat_kwargs = (
-            {"threads": settings.encoder_threads}
+        concat_kwargs: dict[str, Any] = (
+            {'threads': settings.encoder_threads}
             if settings.encoder_threads is not None
             else {}
         )
         if intro_path or outro_path:
             logger.info(
-                "Talk %s: intro/outro slates staged; deferring slate stitching to transcode "
-                "to unify encoding into a single pass and avoid duplicate re-encode.",
+                'Talk %s: intro/outro slates staged; deferring slate stitching to transcode '
+                'to unify encoding into a single pass and avoid duplicate re-encode.',
                 talk_id,
             )
         concat(
@@ -955,31 +995,31 @@ def job_concat(
             **concat_kwargs,
         )
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "assembling":
+            if not talk or not job or talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
-                    "Talk %s concat job %s was aborted or state changed; discarding",
+                    'Talk %s concat job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            job.status = "done"
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        loud_key = f"{talk_id}/assemble/assemble_loud.mp4"
+        loud_key = f'{talk_id}/assemble/assemble_loud.mp4'
         light_queue.enqueue(
             job_loudness,
             talk_id,
             concat_key,
             loud_key,
-            job_timeout=STAGE_CONFIG["loudness"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.LOUDNESS]['job_timeout'],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -987,40 +1027,40 @@ def job_concat(
 
 
 def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> None:
-    preview_key = preview_key or f"{talk_id}/preview/preview.mp4"
+    preview_key = preview_key or f'{talk_id}/preview/preview.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="preview",
-                status="running",
+                kind=JobKind.PREVIEW,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             preset_name = str(
-                get_setting("default_preview_preset", "small_video", db=db)
+                get_setting('default_preview_preset', 'small_video', db=db)
             )
 
         cut_path = storage.get(cut_key)
         preset = (
             settings.preview_presets.get(preset_name)
             or PREVIEW_PRESETS.get(preset_name)
-            or PREVIEW_PRESETS["small_video"]
+            or PREVIEW_PRESETS['small_video']
         )
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "preview.mp4"
+            tmp_out = Path(tmpdir) / 'preview.mp4'
             preview_kwargs = (
-                {"threads": settings.encoder_threads}
+                {'threads': settings.encoder_threads}
                 if settings.encoder_threads is not None
                 else {}
             )
@@ -1031,16 +1071,16 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
                 **preview_kwargs,
             )
             storage.put(preview_key, tmp_out)
-            cut_wf_key = f"{cut_key}.waveform.json"
+            cut_wf_key = f'{cut_key}.waveform.json'
             if storage.exists(cut_wf_key):
                 try:
                     cut_wf_path = storage.get(cut_wf_key)
                     # storage-boundary-exempt: copy cached waveform bytes to preview
                     wf_data = cut_wf_path.read_bytes()
-                    storage.put(f"{preview_key}.waveform.json", wf_data)
+                    storage.put(f'{preview_key}.waveform.json', wf_data)
                 except (OSError, ValueError, RuntimeError) as exc:
                     logger.warning(
-                        "Failed to reuse cut waveform for preview %s: %s",
+                        'Failed to reuse cut waveform for preview %s: %s',
                         preview_key,
                         exc,
                     )
@@ -1048,29 +1088,29 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
             else:
                 _cache_waveform(storage, preview_key, storage.get(preview_key))
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "generating_previews":
+            if not talk or not job or talk.status != TalkStatus.GENERATING_PREVIEWS:
                 logger.info(
-                    "Talk %s preview job %s was aborted or state changed; discarding",
+                    'Talk %s preview job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "preview")
-            job.status = "done"
+            advance(talk, TalkStatus.PREVIEW)
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
-            dispatch_talk_webhook("talk.preview_ready", talk, db)
+            dispatch_talk_webhook('talk.preview_ready', talk, db)
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
@@ -1079,13 +1119,13 @@ def job_preview(talk_id: int, cut_key: str, preview_key: str | None = None) -> N
 def job_waveform(talk_id: int, media_key: str) -> None:
     """Generate and cache waveform peaks without blocking a studio request."""
     storage = get_storage_backend()
-    waveform_key = f"{media_key}.waveform.json"
+    waveform_key = f'{media_key}.waveform.json'
     if storage.exists(waveform_key):
         return
 
     if not storage.exists(media_key):
         logger.info(
-            "Media key %s not found for talk %s; skipping waveform generation",
+            'Media key %s not found for talk %s; skipping waveform generation',
             media_key,
             talk_id,
         )
@@ -1096,7 +1136,7 @@ def job_waveform(talk_id: int, media_key: str) -> None:
         _cache_waveform(storage, media_key, media_path)
     except StorageKeyNotFoundError:
         logger.info(
-            "Media key %s disappeared for talk %s; skipping waveform generation",
+            'Media key %s disappeared for talk %s; skipping waveform generation',
             media_key,
             talk_id,
         )
@@ -1105,67 +1145,67 @@ def job_waveform(talk_id: int, media_key: str) -> None:
 def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> None:
     if loud_key is None:
         loud_key = (
-            f"{talk_id}/cut/cut_loud.mp4"
-            if "/cut/" in cut_key
-            else f"{talk_id}/assemble/assemble_loud.mp4"
+            f'{talk_id}/cut/cut_loud.mp4'
+            if '/cut/' in cut_key
+            else f'{talk_id}/assemble/assemble_loud.mp4'
         )
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            if talk.status != "assembling":
+                raise ValueError(f'Talk {talk_id} not found')
+            if talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
-                    "Talk %s loudness job: talk status %s != assembling; discarding",
+                    'Talk %s loudness job: talk status %s != assembling; discarding',
                     talk_id,
                     talk.status,
                 )
                 return
-            job = Job(
+            new_job = Job(
                 talk_id=talk_id,
-                kind="loudness",
-                status="running",
+                kind=JobKind.LOUDNESS,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
-            target_lufs = float(get_setting("loudness_target_lufs", -16.0, db=db))
+            db.refresh(new_job)
+            job_id = new_job.id
+            target_lufs = float(get_setting('loudness_target_lufs', -16.0, db=db))
 
         # Omit parameter when default to preserve pipeline default and mock compatibility
         loud_kwargs = (
-            {"target_lufs": target_lufs} if target_lufs != DEFAULT_TARGET_LUFS else {}
+            {'target_lufs': target_lufs} if target_lufs != DEFAULT_TARGET_LUFS else {}
         )
         cut_path = storage.get(cut_key)
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "loudness.mp4"
+            tmp_out = Path(tmpdir) / 'loudness.mp4'
             try:
                 normalize(cut_path, tmp_out, **loud_kwargs)
             except ValueError as val_err:
-                if "No audio stream found" in str(val_err):
+                if 'No audio stream found' in str(val_err):
                     logger.warning(
-                        "Talk %s has no audio stream; synthesizing silent audio track",
+                        'Talk %s has no audio stream; synthesizing silent audio track',
                         talk_id,
                     )
                     cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
+                        'ffmpeg',
+                        '-y',
+                        '-i',
                         str(cut_path),
-                        "-f",
-                        "lavfi",
-                        "-i",
-                        "anullsrc=channel_layout=stereo:sample_rate=44100",
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        "aac",
-                        "-shortest",
+                        '-f',
+                        'lavfi',
+                        '-i',
+                        'anullsrc=channel_layout=stereo:sample_rate=44100',
+                        '-c:v',
+                        'copy',
+                        '-c:a',
+                        'aac',
+                        '-shortest',
                         str(tmp_out),
                     ]
                     # storage-boundary-exempt: silent audio track synthesis
@@ -1174,7 +1214,7 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     )
                     if res.returncode != 0:
                         logger.warning(
-                            "ffmpeg silent audio synthesis failed (%s); falling back to direct copy: %s",
+                            'ffmpeg silent audio synthesis failed (%s); falling back to direct copy: %s',
                             res.returncode,
                             res.stderr,
                         )
@@ -1184,32 +1224,32 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
                     raise
             storage.put(loud_key, tmp_out)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "assembling":
+            if not talk or not job or talk.status != TalkStatus.ASSEMBLING:
                 logger.info(
-                    "Talk %s loudness job %s was aborted or state changed; discarding",
+                    'Talk %s loudness job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "transcoding")
-            job.status = "done"
+            advance(talk, TalkStatus.TRANSCODING)
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
 
-        final_key = f"{talk_id}/final/final.mp4"
+        final_key = f'{talk_id}/final/final.mp4'
         heavy_queue.enqueue(
             job_transcode,
             talk_id,
             loud_key,
             final_key,
-            job_timeout=STAGE_CONFIG["transcode"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.TRANSCODE]['job_timeout'],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1224,43 +1264,43 @@ def job_transcode(
     intro_key: str | None = None,
     outro_key: str | None = None,
 ) -> None:
-    final_key = final_key or f"{talk_id}/final/final.mp4"
+    final_key = final_key or f'{talk_id}/final/final.mp4'
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="transcode",
-                status="running",
+                kind=JobKind.TRANSCODE,
+                status=JobStatus.RUNNING,
                 progress_pct=None,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
             include_intro = talk.include_intro
             include_outro = talk.include_outro
             preset_name = str(
-                get_setting("default_transcode_preset", "1080p_default", db=db)
+                get_setting('default_transcode_preset', '1080p_default', db=db)
             )
 
         loud_path = storage.get(loud_key)
         transcode_preset = TRANSCODE_PRESETS.get(preset_name, PRESET_1080P_DEFAULT)
         resolved_intro_key = intro_key
         if resolved_intro_key is None and include_intro:
-            candidate = f"{talk_id}/intro/intro.mp4"
+            candidate = f'{talk_id}/intro/intro.mp4'
             if storage.exists(candidate):
                 resolved_intro_key = candidate
 
         resolved_outro_key = outro_key
         if resolved_outro_key is None and include_outro:
-            candidate = f"{talk_id}/outro/outro.mp4"
+            candidate = f'{talk_id}/outro/outro.mp4'
             if storage.exists(candidate):
                 resolved_outro_key = candidate
 
@@ -1274,7 +1314,7 @@ def job_transcode(
             if resolved_outro_key and storage.exists(resolved_outro_key)
             else None
         )
-        target_lufs = None if "_loud" in loud_key else -16.0
+        target_lufs = None if '_loud' in loud_key else -16.0
         last_update_time = [0.0]
 
         def _on_progress(pct: float) -> None:
@@ -1282,26 +1322,26 @@ def job_transcode(
             if 0.0 <= pct < 1.0 and (now - last_update_time[0]) >= progress_throttle_s:
                 last_update_time[0] = now
                 try:
-                    with SessionLocal() as progress_db:
+                    with new_session() as progress_db:
                         j = progress_db.get(Job, job_id)
-                        if j and j.status == "running":
+                        if j and j.status == JobStatus.RUNNING:
                             j.progress_pct = round(pct * 100.0, 2)
                             j.updated_at = datetime.now(UTC)
                             progress_db.commit()
-                except Exception as progress_err:  # noqa: BLE001
+                except SQLAlchemyError as progress_err:
                     logger.warning(
-                        "Failed to update transcode progress in DB: %s",
+                        'Failed to update transcode progress in DB: %s',
                         progress_err,
                     )
 
         transcode_kwargs: dict[str, Any] = {}
-        if preset_name != "1080p_default":
-            transcode_kwargs["preset"] = transcode_preset
+        if preset_name != '1080p_default':
+            transcode_kwargs['preset'] = transcode_preset
         if settings.encoder_threads is not None:
-            transcode_kwargs["threads"] = settings.encoder_threads
+            transcode_kwargs['threads'] = settings.encoder_threads
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
-            tmp_out = Path(tmpdir) / "final.mp4"
+            tmp_out = Path(tmpdir) / 'final.mp4'
             transcode(
                 loud_path,
                 tmp_out,
@@ -1313,22 +1353,22 @@ def job_transcode(
             )
             storage.put(final_key, tmp_out)
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "transcoding":
+            if not talk or not job or talk.status != TalkStatus.TRANSCODING:
                 logger.info(
-                    "Talk %s transcode job %s was aborted or state changed; discarding",
+                    'Talk %s transcode job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "uploading")
-            job.status = "done"
+            advance(talk, TalkStatus.UPLOADING)
+            job.status = JobStatus.DONE
             job.progress_pct = 100.0
             job.updated_at = datetime.now(UTC)
             custom_paths = (talk.custom_intro_path, talk.custom_outro_path)
@@ -1340,7 +1380,7 @@ def job_transcode(
             job_publish,
             talk_id,
             final_key,
-            job_timeout=STAGE_CONFIG["publish"]["job_timeout"],
+            job_timeout=STAGE_CONFIG[JobKind.PUBLISH]['job_timeout'],
         )
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
@@ -1351,54 +1391,50 @@ def job_publish(talk_id: int, final_key: str) -> None:
     job_id = None
     storage = get_storage_backend()
     try:
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             if not talk:
-                raise ValueError(f"Talk {talk_id} not found")
-            job = Job(
+                raise ValueError(f'Talk {talk_id} not found')
+            new_job = Job(
                 talk_id=talk_id,
-                kind="publish",
-                status="running",
+                kind=JobKind.PUBLISH,
+                status=JobStatus.RUNNING,
                 started_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-            db.add(job)
+            db.add(new_job)
             db.commit()
-            db.refresh(job)
-            job_id = job.id
+            db.refresh(new_job)
+            job_id = new_job.id
 
         final_path = storage.get(final_key)
         publish(final_path, talk_id=talk_id, backend=storage)
 
         duration_seconds: float | None = None
         try:
-            import av
-
-            from app.pipeline.detect import container_duration_seconds
-
             with av.open(str(final_path)) as container:
                 duration_seconds = container_duration_seconds(container)
-        except Exception as exc:  # noqa: BLE001
+        except (av.FFmpegError, OSError, ValueError) as exc:
             logger.debug(
-                "Could not probe container duration for %s: %s", final_path, exc
+                'Could not probe container duration for %s: %s', final_path, exc
             )
 
-        with SessionLocal() as db:
+        with new_session() as db:
             talk = db.get(Talk, talk_id)
             job = db.get(Job, job_id)
-            if not talk or not job or talk.status != "uploading":
+            if not talk or not job or talk.status != TalkStatus.UPLOADING:
                 logger.info(
-                    "Talk %s publish job %s was aborted or state changed; discarding",
+                    'Talk %s publish job %s was aborted or state changed; discarding',
                     talk_id,
                     job_id,
                 )
                 if job:
-                    job.status = "cancelled"
+                    job.status = JobStatus.CANCELLED
                     job.updated_at = datetime.now(UTC)
                     db.commit()
                 return
-            advance(talk, "done")
-            job.status = "done"
+            advance(talk, TalkStatus.DONE)
+            job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
@@ -1415,22 +1451,22 @@ def job_publish(talk_id: int, final_key: str) -> None:
 
             if not settings.base_url:
                 logger.warning(
-                    "settings.base_url is not configured; published video_url in webhook payload will be a relative path."
+                    'settings.base_url is not configured; published video_url in webhook payload will be a relative path.'
                 )
 
-            base = settings.base_url.rstrip("/") if settings.base_url else ""
+            base = settings.base_url.rstrip('/') if settings.base_url else ''
             filename = Path(final_key).name
-            video_url = f"{base}/studio/media/{talk.id}/final/{filename}"
+            video_url = f'{base}/studio/media/{talk.id}/final/{filename}'
 
-            from app.webhook import dispatch_talk_webhook
+            from .webhook import dispatch_talk_webhook
 
             dispatch_talk_webhook(
-                "talk.published",
+                'talk.published',
                 talk,
                 db,
                 extra_payload={
-                    "video_url": video_url,
-                    "duration_seconds": duration_seconds,
+                    'video_url': video_url,
+                    'duration_seconds': duration_seconds,
                 },
             )
 
@@ -1443,7 +1479,15 @@ def job_publish(talk_id: int, final_key: str) -> None:
 class _DisallowRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Prohibit automatic redirect following for webhook requests."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> Request | None:
         return None
 
 
@@ -1452,32 +1496,32 @@ _webhook_opener = urllib.request.build_opener(_DisallowRedirectHandler)
 
 # A host name (letters, digits, "-", "_", ".") or an IPv6 literal with an
 # optional zone ID.
-_LOG_SAFE_HOST = re.compile(r"[\w.-]+|[0-9a-fA-F:.]+(%[\w.-]+)?")
+_LOG_SAFE_HOST = re.compile(r'[\w.-]+|[0-9a-fA-F:.]+(%[\w.-]+)?')
 
 
-def _redact_url(url: str) -> str:
+def _redact_url(url: object) -> str:
     """Return the scheme and host of *url* for logging.
 
     Credentials, path, query string and fragment are dropped: services such as
     Slack and Discord put the webhook token in the path.
     """
     if not isinstance(url, str):
-        return "<invalid url>"
+        return '<invalid url>'
     try:
         parts = urllib.parse.urlsplit(url)
-        host = parts.hostname or ""
+        host = parts.hostname or ''
         if not _LOG_SAFE_HOST.fullmatch(host):
             # urlsplit does not validate the host, which can then hold a
             # backslash, whitespace or percent-encoded data.
-            return "<invalid url>"
-        if ":" in host:
+            return '<invalid url>'
+        if ':' in host:
             # hostname drops the brackets around IPv6 literals.
-            host = f"[{host}]"
+            host = f'[{host}]'
         if parts.port is not None:
-            host = f"{host}:{parts.port}"
+            host = f'{host}:{parts.port}'
     except ValueError:
-        return "<invalid url>"
-    return urllib.parse.urlunsplit((parts.scheme, host, "", "", ""))
+        return '<invalid url>'
+    return urllib.parse.urlunsplit((parts.scheme, host, '', '', ''))
 
 
 def _describe_webhook_error(exc: Exception) -> str:
@@ -1488,9 +1532,9 @@ def _describe_webhook_error(exc: Exception) -> str:
     """
     name = type(exc).__name__
     if isinstance(exc, urllib.error.HTTPError):
-        return f"{name} (HTTP {exc.code})"
+        return f'{name} (HTTP {exc.code})'
     if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
-        return f"{name} ({type(exc.reason).__name__})"
+        return f'{name} ({type(exc.reason).__name__})'
     return name
 
 
@@ -1507,59 +1551,55 @@ def job_deliver_webhook(
     """
     if not webhook_url or not webhook_secret:
         logger.warning(
-            "Webhook delivery aborted: missing webhook_url or webhook_secret"
+            'Webhook delivery aborted: missing webhook_url or webhook_secret'
         )
         return False
 
     try:
         payload_bytes = json.dumps(
-            payload, separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")
+            payload, separators=(',', ':'), sort_keys=True
+        ).encode('utf-8')
         signature = hmac.new(
-            webhook_secret.encode("utf-8"), payload_bytes, hashlib.sha256
+            webhook_secret.encode('utf-8'), payload_bytes, hashlib.sha256
         ).hexdigest()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to prepare webhook payload/signature: %s", exc)
+    except (TypeError, ValueError) as exc:
+        logger.error('Failed to prepare webhook payload/signature: %s', exc)
         return False
 
     redacted_url = _redact_url(webhook_url)
     headers = {
-        "Content-Type": "application/json",
-        "X-VEditor-Signature": f"sha256={signature}",
-        "User-Agent": "VEditor-Webhook/1.0",
+        'Content-Type': 'application/json',
+        'X-VEditor-Signature': f'sha256={signature}',
+        'User-Agent': 'VEditor-Webhook/1.0',
     }
 
     for attempt in (1, 2):
         try:
-            req = urllib.request.Request(
+            req = Request(
                 webhook_url,
                 data=payload_bytes,
                 headers=headers,
-                method="POST",
+                method='POST',
             )
             with _webhook_opener.open(req, timeout=10) as resp:
-                resp_status = getattr(resp, "status", None)
-                if resp_status is None:
-                    resp_status = getattr(resp, "code", None)
-                if resp_status is None and hasattr(resp, "getcode"):
-                    resp_status = resp.getcode()
+                resp_status = resp.status
 
                 if resp_status is not None and 200 <= resp_status < 300:
                     logger.info(
-                        "Webhook delivered successfully to %s on attempt %d",
+                        'Webhook delivered successfully to %s on attempt %d',
                         redacted_url,
                         attempt,
                     )
                     return True
                 logger.warning(
-                    "Webhook delivery to %s returned HTTP %s on attempt %d",
+                    'Webhook delivery to %s returned HTTP %s on attempt %d',
                     redacted_url,
                     resp_status,
                     attempt,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except (urllib.error.URLError, http.client.HTTPException, ValueError) as exc:
             logger.warning(
-                "Webhook delivery to %s failed on attempt %d: %s",
+                'Webhook delivery to %s failed on attempt %d: %s',
                 redacted_url,
                 attempt,
                 _describe_webhook_error(exc),
@@ -1569,98 +1609,88 @@ def job_deliver_webhook(
             time.sleep(1)
 
     logger.info(
-        "Webhook delivery to %s failed after 2 attempts. Abandoning quietly.",
+        'Webhook delivery to %s failed after 2 attempts. Abandoning quietly.',
         redacted_url,
     )
     return False
 
 
 def job_send_verification_email(
-    user_id: int, email: str, token: str, next: str = ""
+    user_id: int, email: str, token: str, next: str = ''
 ) -> bool:
     """Send an account verification email via RQ background worker.
 
     Checks user state in DB, generates the verification URL, dispatches via
     send_verification_email, and exits.
     """
-    from app.email import send_verification_email
-    from app.models import User
 
-    with SessionLocal() as db:
+    with new_session() as db:
         user = db.get(User, user_id)
         if not user or user.is_verified:
             logger.info(
-                "Skipping verification email: user %s not found or already verified",
+                'Skipping verification email: user %s not found or already verified',
                 user_id,
             )
             return True
 
     if settings.smtp_host and not settings.base_url:
         raise RuntimeError(
-            "BASE_URL must be configured when SMTP is enabled for email delivery"
+            'BASE_URL must be configured when SMTP is enabled for email delivery'
         )
 
     base = (
-        settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
+        settings.base_url.rstrip('/') if settings.base_url else 'http://localhost:8000'
     )
-    verify_url = f"{base}/verify-email?token={token}"
+    verify_url = f'{base}/verify-email?token={token}'
     if next:
-        verify_url += f"&next={urllib.parse.quote(next, safe='/')}"
-    success = send_verification_email(
+        verify_url += f'&next={urllib.parse.quote(next, safe="/")}'
+    success = app_email.send_verification_email(
         recipient=email,
         verify_url=verify_url,
         expire_hours=settings.email_verification_expire_hours,
     )
     if not success:
-        raise RuntimeError(f"Failed to deliver verification email to {email}")
+        raise RuntimeError(f'Failed to deliver verification email to {email}')
     return True
 
 
 def job_send_speaker_handoff_email(talk_id: int) -> bool:
     """Send the review link for a handed-off talk."""
-    from app.email import send_speaker_handoff_email
-    from app.models import Event
 
-    with SessionLocal() as db:
-        talk = db.query(Talk).filter(Talk.id == talk_id).first()
+    with new_session() as db:
+        talk = db.get(Talk, talk_id)
         if not talk or not talk.speaker_email:
             logger.info(
-                "Skipping handoff email: talk %s has no assigned speaker", talk_id
+                'Skipping handoff email: talk %s has no assigned speaker', talk_id
             )
             return True
-        event = db.query(Event).filter(Event.id == talk.event_id).first()
-        event_synced = False
-        if event is not None and isinstance(event, Event):
-            event_synced = event.is_eventyay_synced
-        elif event is not None:
-            src = getattr(event, "source", None)
-            if isinstance(src, str) and src.strip():
-                event_synced = src.strip().lower() in ("eventyay", "platform")
+        event = db.scalar(select(Event).where(Event.id == talk.event_id))
+        event_synced = event.is_eventyay_synced if event is not None else False
 
         if event_synced:
             logger.info(
-                "Skipping handoff email: talk %s is synced from Eventyay/SSO", talk_id
+                'Skipping handoff email: talk %s is synced from Eventyay/SSO', talk_id
             )
             return True
-        event_name = event.name if event else "VEditor"
+        event_name = event.name if event else 'VEditor'
         recipient = talk.speaker_email
         title = talk.title
 
     if settings.smtp_host and not settings.base_url:
         raise RuntimeError(
-            "BASE_URL must be configured when SMTP is enabled for email delivery"
+            'BASE_URL must be configured when SMTP is enabled for email delivery'
         )
     base = (
-        settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
+        settings.base_url.rstrip('/') if settings.base_url else 'http://localhost:8000'
     )
-    success = send_speaker_handoff_email(
+    success = app_email.send_speaker_handoff_email(
         recipient=recipient,
         talk_title=title,
         event_name=event_name,
-        studio_url=f"{base}/studio/talks/{talk_id}",
+        studio_url=f'{base}/studio/talks/{talk_id}',
     )
     if not success:
-        raise RuntimeError(f"Failed to deliver handoff email to {recipient}")
+        raise RuntimeError(f'Failed to deliver handoff email to {recipient}')
     return True
 
 
@@ -1670,16 +1700,13 @@ def job_send_password_reset_email(email: str) -> bool:
     Looks up active user by email, creates a fresh reset token, generates the
     reset URL, dispatches via send_password_reset_email, and exits.
     """
-    from app.email import send_password_reset_email
-    from app.models import User
-    from app.security import create_password_reset_token
 
     clean_email = email.strip().lower()
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.email == clean_email).first()
+    with new_session() as db:
+        user = db.scalar(select(User).where(User.email == clean_email))
         if not user or not user.is_active:
             logger.info(
-                "Skipping password reset email: user %s not found or inactive",
+                'Skipping password reset email: user %s not found or inactive',
                 clean_email,
             )
             return True
@@ -1688,15 +1715,15 @@ def job_send_password_reset_email(email: str) -> bool:
 
     if settings.smtp_host and not settings.base_url:
         raise RuntimeError(
-            "BASE_URL must be configured when SMTP is enabled for email delivery"
+            'BASE_URL must be configured when SMTP is enabled for email delivery'
         )
 
     base = (
-        settings.base_url.rstrip("/") if settings.base_url else "http://localhost:8000"
+        settings.base_url.rstrip('/') if settings.base_url else 'http://localhost:8000'
     )
-    if settings.is_production and not base.startswith("https://"):
+    if settings.is_production and not base.startswith('https://'):
         raise RuntimeError(
-            "BASE_URL must use HTTPS in production for password reset delivery"
+            'BASE_URL must use HTTPS in production for password reset delivery'
         )
 
     expire_hours = settings.password_reset_expire_hours
@@ -1707,12 +1734,12 @@ def job_send_password_reset_email(email: str) -> bool:
         expires_in_hours=expire_hours,
     )
 
-    reset_url = f"{base}/reset-password?token={token}"
-    success = send_password_reset_email(
+    reset_url = f'{base}/reset-password?token={token}'
+    success = app_email.send_password_reset_email(
         recipient=clean_email,
         reset_url=reset_url,
         expire_hours=expire_hours,
     )
     if not success:
-        raise RuntimeError(f"Failed to deliver password reset email to {clean_email}")
+        raise RuntimeError(f'Failed to deliver password reset email to {clean_email}')
     return True

@@ -1,34 +1,37 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.consts import AuthRole, JobKind, JobStatus
 from app.db import Base
 from app.models import Client, Event, Job, Review, Talk, User
+
 
 # Use the postgres instance from docker-compose, but we will wrap tests in a transaction
 engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-@pytest.fixture(scope="module")
-def setup_database():
+@pytest.fixture(scope='module')
+def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
 
 
-def test_create_event_and_talk_relationships(db_session):
-    event = Event(name="FOSSASIA 2026")
+def test_create_event_and_talk_relationships(db_session: Session) -> None:
+    event = Event(name='FOSSASIA 2026')
     db_session.add(event)
     db_session.flush()
 
     talk = Talk(
         event_id=event.id,
-        title="Keynote",
-        room="Main Hall",
+        title='Keynote',
+        room='Main Hall',
         start=datetime(2026, 3, 20, 9, 0, tzinfo=UTC),
         end=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
     )
@@ -48,10 +51,10 @@ def test_create_event_and_talk_relationships(db_session):
     assert talk.custom_outro_path is None
     assert talk.updated_at is not None
 
-    job = Job(talk_id=talk.id, kind="cut", status="running")
+    job = Job(talk_id=talk.id, kind=JobKind.CUT, status=JobStatus.RUNNING)
     db_session.add(job)
 
-    review = Review(talk_id=talk.id, decision="approved", note="Looks good")
+    review = Review(talk_id=talk.id, decision='approved', note='Looks good')
     db_session.add(review)
     db_session.flush()
 
@@ -64,7 +67,7 @@ def test_create_event_and_talk_relationships(db_session):
     assert review.created_at is not None
 
 
-def test_required_fields_enforced(db_session):
+def test_required_fields_enforced(db_session: Session) -> None:
     # Event missing name
     with pytest.raises(IntegrityError):
         event = Event()
@@ -72,7 +75,7 @@ def test_required_fields_enforced(db_session):
         db_session.flush()
     db_session.rollback()
 
-    event = Event(name="Test")
+    event = Event(name='Test')
     db_session.add(event)
     db_session.flush()
 
@@ -88,18 +91,18 @@ def test_required_fields_enforced(db_session):
     db_session.rollback()
 
 
-def test_client_model(db_session):
-    client = Client(hashed_key="hash123", event_ids=[1, 2, 3])
+def test_client_model(db_session: Session) -> None:
+    client = Client(hashed_key='hash123', event_ids=[1, 2, 3])
     db_session.add(client)
     db_session.flush()
 
     assert client.id is not None
-    assert client.hashed_key == "hash123"
+    assert client.hashed_key == 'hash123'
     assert client.event_ids == [1, 2, 3]
 
 
-def test_talk_unique_constraint_enforced(db_session):
-    event = Event(name="Unique Test Event")
+def test_talk_unique_constraint_enforced(db_session: Session) -> None:
+    event = Event(name='Unique Test Event')
     db_session.add(event)
     db_session.flush()
 
@@ -108,8 +111,8 @@ def test_talk_unique_constraint_enforced(db_session):
 
     talk1 = Talk(
         event_id=event.id,
-        title="Duplicate Check",
-        room="Room 1",
+        title='Duplicate Check',
+        room='Room 1',
         start=start_time,
         end=end_time,
     )
@@ -118,8 +121,8 @@ def test_talk_unique_constraint_enforced(db_session):
 
     talk2 = Talk(
         event_id=event.id,
-        title="Duplicate Check",
-        room="Room 2",
+        title='Duplicate Check',
+        room='Room 2',
         start=start_time,
         end=end_time,
     )
@@ -129,77 +132,77 @@ def test_talk_unique_constraint_enforced(db_session):
     db_session.rollback()
 
 
-def test_event_retention_overrides_persistence(db_session):
+def test_event_retention_overrides_persistence(db_session: Session) -> None:
     event = Event(
-        name="Retention Test Event",
-        retention_overrides={"final_retention_days": 45, "extra": "data"},
+        name='Retention Test Event',
+        retention_overrides={'final_retention_days': 45, 'extra': 'data'},
     )
     db_session.add(event)
     db_session.flush()
 
     assert event.id is not None
-    assert event.retention_overrides == {"final_retention_days": 45, "extra": "data"}
+    assert event.retention_overrides == {'final_retention_days': 45, 'extra': 'data'}
 
     db_session.expire_all()
-    reloaded = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded is not None
-    assert reloaded.retention_overrides == {"final_retention_days": 45, "extra": "data"}
+    assert reloaded.retention_overrides == {'final_retention_days': 45, 'extra': 'data'}
 
-    reloaded.retention_overrides["final_retention_days"] = 60
-    reloaded.retention_overrides["new_key"] = "persisted"
+    reloaded.retention_overrides['final_retention_days'] = 60
+    reloaded.retention_overrides['new_key'] = 'persisted'
     db_session.flush()
 
     db_session.expire_all()
-    reloaded_again = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded_again = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded_again is not None
     assert reloaded_again.retention_overrides == {
-        "final_retention_days": 60,
-        "extra": "data",
-        "new_key": "persisted",
+        'final_retention_days': 60,
+        'extra': 'data',
+        'new_key': 'persisted',
     }
 
     reloaded_again.retention_overrides |= {
-        "final_retention_days": 90,
-        "ior_key": "persisted_ior",
+        'final_retention_days': 90,
+        'ior_key': 'persisted_ior',
     }
     db_session.flush()
 
     db_session.expire_all()
-    reloaded_third = db_session.query(Event).filter(Event.id == event.id).first()
+    reloaded_third = db_session.scalar(select(Event).where(Event.id == event.id))
     assert reloaded_third is not None
     assert reloaded_third.retention_overrides == {
-        "final_retention_days": 90,
-        "extra": "data",
-        "new_key": "persisted",
-        "ior_key": "persisted_ior",
+        'final_retention_days': 90,
+        'extra': 'data',
+        'new_key': 'persisted',
+        'ior_key': 'persisted_ior',
     }
 
 
-def test_user_model_and_relationships(db_session):
-    user = User(email="testuser@example.com", hashed_password="argon2_hash_val")
+def test_user_model_and_relationships(db_session: Session) -> None:
+    user = User(email='testuser@example.com', hashed_password='argon2_hash_val')
     db_session.add(user)
     db_session.flush()
 
     assert user.id is not None
-    assert user.role == "user"
+    assert user.role == AuthRole.USER
     assert user.is_active is True
     assert user.created_at is not None
     assert user.updated_at is not None
 
-    event = Event(name="User Event", created_by_user=user)
+    event = Event(name='User Event', created_by_user=user)
     db_session.add(event)
     db_session.flush()
 
     talk = Talk(
         event_id=event.id,
-        title="User Talk",
+        title='User Talk',
         start=datetime(2026, 6, 1, 9, 0, tzinfo=UTC),
         end=datetime(2026, 6, 1, 10, 0, tzinfo=UTC),
     )
     db_session.add(talk)
     db_session.flush()
 
-    review = Review(talk_id=talk.id, decision="approved", user=user)
+    review = Review(talk_id=talk.id, decision='approved', user=user)
     db_session.add(review)
     db_session.flush()
 
@@ -212,26 +215,26 @@ def test_user_model_and_relationships(db_session):
     assert review in user.reviews
 
 
-def test_user_email_unique_enforced(db_session):
-    u1 = User(email="duplicate@example.com", hashed_password="hash1")
+def test_user_email_unique_enforced(db_session: Session) -> None:
+    u1 = User(email='duplicate@example.com', hashed_password='hash1')
     db_session.add(u1)
     db_session.flush()
 
-    u2 = User(email="duplicate@example.com", hashed_password="hash2")
+    u2 = User(email='duplicate@example.com', hashed_password='hash2')
     db_session.add(u2)
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()
 
 
-def test_user_role_constraint_enforced(db_session):
-    for role in ("user", "organizer", "admin", "speaker"):
-        u = User(email=f"{role}@example.com", hashed_password="pw", role=role)
+def test_user_role_constraint_enforced(db_session: Session) -> None:
+    for role in ('user', 'organizer', 'admin', 'speaker'):
+        u = User(email=f'{role}@example.com', hashed_password='pw', role=role)
         db_session.add(u)
         db_session.flush()
 
     invalid_user = User(
-        email="invalid_role@example.com", hashed_password="pw", role="superadmin"
+        email='invalid_role@example.com', hashed_password='pw', role='superadmin'
     )
     db_session.add(invalid_user)
     with pytest.raises(IntegrityError):
@@ -239,12 +242,13 @@ def test_user_role_constraint_enforced(db_session):
     db_session.rollback()
 
 
-def test_talk_speaker_email_normalization():
-    talk = Talk(speaker_email="  Speaker.Name@Example.COM  ")
-    assert talk.speaker_email == "speaker.name@example.com"
+def test_talk_speaker_email_normalization() -> None:
+    talk = Talk(speaker_email='  Speaker.Name@Example.COM  ')
+    assert talk.speaker_email == 'speaker.name@example.com'
 
-    talk.speaker_email = "   "
-    assert talk.speaker_email is None
+    talk.speaker_email = '   '
+    stripped_email: str | None = talk.speaker_email
+    assert stripped_email is None
 
     talk.speaker_email = None
     assert talk.speaker_email is None
