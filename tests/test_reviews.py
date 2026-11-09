@@ -1178,3 +1178,32 @@ def test_reopening_completed_talk_clears_stale_assembly_jobs(
         select(models.Job.kind).where(models.Job.talk_id == preview_talk.id)
     ).all()
     assert not any(k in remaining_jobs for k in ["intro", "outro", "concat", "publish"])
+
+
+def test_reopening_completed_talk_resets_final_cleaned_at(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Reopening a completed talk clears final_cleaned_at so the retention sweep processes the new video."""
+    admin = _create_user(db_session, "admin_clean@example.com", role=AuthRole.ADMIN)
+    preview_talk.status = TalkStatus.DONE
+    preview_talk.final_cleaned_at = datetime.now(UTC)
+    db_session.commit()
+
+    admin_user = CurrentUser(
+        user_id=admin.id,
+        email=admin.email,
+        role=admin.role,
+        source="cookie",
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = client.post(
+        f"/talks/{preview_talk.id}/review",
+        json={"decision": "needs_work"},
+    )
+    assert response.status_code == 200
+
+    db_session.refresh(preview_talk)
+    assert preview_talk.status == TalkStatus.PENDING_BOUNDS
+    assert preview_talk.final_cleaned_at is None

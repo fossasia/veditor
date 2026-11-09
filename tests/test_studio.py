@@ -4072,10 +4072,10 @@ def test_admin_can_edit_completed_talk_ui(
     client.cookies.clear()
 
 
-def test_admin_viewing_other_organizer_completed_talk_omits_edit_button(
+def test_admin_viewing_other_organizer_completed_talk_renders_edit_control_in_view_only(
     client: TestClient, db_session: Session
 ) -> None:
-    """Admin viewing another organizer's completed talk does not see 'Edit Video' button."""
+    """Admin viewing another organizer's completed talk sees 'Edit Video' with view-only protection."""
     now = datetime.now(UTC)
     other_org = models.User(
         email="other_org@example.com",
@@ -4114,7 +4114,11 @@ def test_admin_viewing_other_organizer_completed_talk_omits_edit_button(
     response = client.get(f"/studio/talks/{talk.id}")
     assert response.status_code == 200
     assert "Download Master Video" in response.text
-    assert "btn-edit-done" not in response.text
+    assert "btn-needs-work" in response.text
+    assert "Edit Video" in response.text
+    assert 'data-edit-control="true"' in response.text
+    assert "studio-shell is-view-only" in response.text
+    assert "Enable Edit Mode" in response.text
     client.cookies.clear()
 
 

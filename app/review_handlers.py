@@ -123,6 +123,7 @@ def handle_needs_work(
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
     if talk.status == TalkStatus.DONE:
+        talk.final_cleaned_at = None
         db.execute(
             delete(models.Job).where(
                 models.Job.talk_id == talk.id,

@@ -1420,6 +1420,7 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     db.commit()
                 return
             advance(talk, TalkStatus.DONE)
+            talk.final_cleaned_at = None
             job.status = "done"
             job.updated_at = datetime.now(UTC)
             db.commit()

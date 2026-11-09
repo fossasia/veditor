@@ -736,6 +736,8 @@ def test_job_publish_dispatches_talk_published_webhook(
         cut_start=10.0,
         cut_end=1834.5,
     )
+    talk.final_cleaned_at = datetime.now(UTC)
+    db_session.commit()
 
     fake_storage = FakeStorageBackend()
     fake_storage.put(f"{talk.id}/transcode/master.mp4", b"final master video bytes")
@@ -768,6 +770,7 @@ def test_job_publish_dispatches_talk_published_webhook(
     reloaded_talk = db_session.get(models.Talk, talk.id)
     assert reloaded_talk is not None
     assert reloaded_talk.status == TalkStatus.DONE
+    assert reloaded_talk.final_cleaned_at is None
 
 
 def test_job_publish_uses_custom_base_url(
