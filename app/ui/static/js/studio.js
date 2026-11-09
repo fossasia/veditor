@@ -510,8 +510,16 @@ function updateCutMarkersUI() {
   const inPct  = Math.max(0, Math.min(100, (inPointSec / dur) * 100));
   const outPct = Math.max(0, Math.min(100, ((outPointSec || dur) / dur) * 100));
 
-  if (tlStartMarker) tlStartMarker.style.left = `${inPct}%`;
-  if (tlEndMarker)   tlEndMarker.style.left   = `${outPct}%`;
+  if (tlStartMarker) {
+    tlStartMarker.style.left = `${inPct}%`;
+    tlStartMarker.title = `Drag Start Point (Cut ${activeSegmentIndex + 1}) (or press I)`;
+  }
+  if (tlEndMarker) {
+    tlEndMarker.style.left   = `${outPct}%`;
+    tlEndMarker.title = `Drag End Point (Cut ${activeSegmentIndex + 1}) (or press O)`;
+  }
+  if (btnSetIn)  btnSetIn.title  = `Set In-Point for Cut ${activeSegmentIndex + 1} (I)`;
+  if (btnSetOut) btnSetOut.title = `Set Out-Point for Cut ${activeSegmentIndex + 1} (O)`;
 
   const tlContent = document.getElementById('tl-content');
   if (tlContent) {
@@ -530,12 +538,8 @@ function updateCutMarkersUI() {
         segDiv.style.left = `${sPct}%`;
         segDiv.style.width = `${Math.max(0, ePct - sPct)}%`;
         segDiv.title = `Cut ${idx + 1}: ${formatTimecode(seg.start)} - ${formatTimecode(seg.end)}`;
-        segDiv.addEventListener('pointerdown', (e) => {
-          e.stopPropagation();
+        segDiv.addEventListener('pointerdown', () => {
           selectActiveSegment(idx);
-          if (video && isFinite(video.duration)) {
-            video.currentTime = seg.start;
-          }
         });
         return segDiv;
       })
@@ -596,6 +600,12 @@ function updateCutMarkersUI() {
         return tab;
       })
     );
+    if (cutSegments.length === 1) {
+      const hint = document.createElement('span');
+      hint.className = 'segment-hint';
+      hint.textContent = 'Use "Add Cut" or press S to split cuts';
+      segmentsList.appendChild(hint);
+    }
   }
 
   const subList = document.getElementById('submission-timestamps-list');
@@ -645,6 +655,13 @@ function updateCutMarkersUI() {
   const reviewDur = document.getElementById('review-duration');
   const totalDuration = cutSegments.reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
   if (reviewDur) reviewDur.textContent = formatTimecode(totalDuration);
+
+  const reviewDurLabel = document.getElementById('review-duration-label');
+  if (reviewDurLabel) {
+    reviewDurLabel.textContent = cutSegments.length > 1
+      ? `Total Cut Duration (${cutSegments.length} cuts):`
+      : 'Cut Duration:';
+  }
 
   const cutDurationBadge = document.getElementById('cut-duration-badge');
   if (cutDurationBadge) {
@@ -792,8 +809,8 @@ function deleteSegment(idx) {
   if (isStudioViewOnly()) return;
   if (cutSegments.length <= 1) return;
   cutSegments.splice(idx, 1);
-  if (activeSegmentIndex >= cutSegments.length) {
-    activeSegmentIndex = cutSegments.length - 1;
+  if (activeSegmentIndex > idx || activeSegmentIndex >= cutSegments.length) {
+    activeSegmentIndex = Math.max(0, activeSegmentIndex - 1);
   }
   boundsEdited = true;
   updateCutMarkersUI();

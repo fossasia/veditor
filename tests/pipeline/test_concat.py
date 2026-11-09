@@ -1,6 +1,7 @@
 """Unit and integration tests for talk concatenation pipeline module."""
 
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 from unittest import mock
 
@@ -420,3 +421,46 @@ def test_concat_segments_rejects_output_matching_input(tmp_path: Path) -> None:
     seg2.touch()
     with pytest.raises(ValueError, match="Output path matches input segment"):
         concat_segments([seg1, seg2], seg1)
+
+
+def test_concat_compatible_segments_different_time_bases(tmp_path: Path) -> None:
+    """Verify stream copy concat handles compatible segments with different time bases."""
+    from app.pipeline.concat import _concat_stream_copy
+
+    clip1 = generate_clip(1.0, fps=24, output_dir=tmp_path)
+    clip2_orig = generate_clip(1.0, fps=24, output_dir=tmp_path)
+
+    clip2 = tmp_path / "clip2_tb.mp4"
+    with av.open(str(clip2_orig)) as inc, av.open(str(clip2), "w") as outc:
+        for s in inc.streams:
+            outs = outc.add_stream_from_template(s)
+            if s.type == "video":
+                outs.time_base = Fraction(1, 24000)
+        for p in inc.demux():
+            if p.dts is None:
+                continue
+            out_s = (
+                outc.streams.video[0]
+                if p.stream.type == "video"
+                else outc.streams.audio[0]
+            )
+            if p.stream.type == "video":
+                factor = (
+                    Fraction(24000, p.time_base.denominator)
+                    if p.time_base
+                    else Fraction(24000, 12288)
+                )
+                p.pts = int(p.pts * factor)
+                p.dts = int(p.dts * factor)
+                if p.duration:
+                    p.duration = int(p.duration * factor)
+            p.stream = out_s
+            outc.mux(p)
+
+    out_dest = tmp_path / "concat_diff_tb.mp4"
+    _concat_stream_copy([clip1, clip2], out_dest)
+    assert out_dest.is_file()
+
+    with av.open(str(out_dest)) as container:
+        frames = sum(1 for _ in container.decode(video=0))
+        assert frames == 48

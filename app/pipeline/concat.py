@@ -17,6 +17,7 @@ from typing import Any
 import av
 import numpy as np
 
+from app.pipeline.loudness import rescale_pts
 from app.storage import LocalDiskBackend, StorageBackend
 
 logger = logging.getLogger(__name__)
@@ -143,15 +144,18 @@ def _concat_stream_copy(
                         if packet.pts is None:
                             packet.pts = packet.dts
 
+                        out_tb = out_s.time_base or Fraction(1, 90000)
+                        rescale_pts(
+                            packet,
+                            packet.time_base or packet.stream.time_base,
+                            out_tb,
+                        )
+
                         if out_s.index not in seg_offset:
                             if seg_idx == 0:
                                 seg_offset[out_s.index] = -packet.dts
                             else:
-                                tb = (
-                                    float(out_s.time_base)
-                                    if out_s.time_base
-                                    else 1.0 / 90000.0
-                                )
+                                tb = float(out_tb)
                                 target_pts = round(shared_end_seconds / tb)
                                 prev_dts_end = last_dts_end.get(out_s.index, 0)
                                 prev_pts_end = last_pts_end.get(out_s.index, 0)

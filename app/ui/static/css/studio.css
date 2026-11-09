@@ -527,11 +527,7 @@ a.breadcrumb-event:hover {
 }
 
 #tl-content {
-  left: 0;
-  width: 100%;
-  background: var(--v-primary-subtle);
-  color: var(--v-primary);
-  z-index: 1;
+  display: none;
 }
 
 #tl-start-marker {
@@ -643,6 +639,13 @@ a.breadcrumb-event:hover {
   overflow-x: auto;
   padding: 2px 0;
   max-width: 100%;
+}
+
+.segment-hint {
+  font-size: 0.72rem;
+  color: var(--v-text-muted);
+  align-self: center;
+  padding: 0 4px;
 }
 
 .segment-tab {
