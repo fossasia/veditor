@@ -31,8 +31,9 @@ from app.consts import TalkStatus
 from app.db import SessionLocal
 from app.states import advance
 
+
 # Determine API base URL from environment or defaults
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:8000')
 
 
 def ensure_wipe_allowed(db_name: str) -> None:
@@ -44,7 +45,7 @@ def ensure_wipe_allowed(db_name: str) -> None:
     Settings.testing_db_name, which is derived and therefore always starts with
     "test_" regardless of what is being wiped.
     """
-    if not (db_name.startswith("test_") or os.getenv("ALLOW_SMOKE_DB_WIPE") == "1"):
+    if not (db_name.startswith('test_') or os.getenv('ALLOW_SMOKE_DB_WIPE') == '1'):
         pytest.fail(
             f"Refusing to wipe database '{db_name}'. Set ALLOW_SMOKE_DB_WIPE=1 or use a test_* database."
         )
@@ -66,7 +67,7 @@ def wipe_all_records() -> None:
         session.close()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def clean_db() -> None:
     """Starts from a clean DB by deleting existing records."""
     wipe_all_records()
@@ -78,12 +79,12 @@ def run_bootstrap_cli() -> tuple[str, int]:
     result = subprocess.run(
         [
             sys.executable,
-            "-m",
-            "app.cli",
-            "admin",
-            "create-client",
-            "--event-name",
-            "SmokeEvent",
+            '-m',
+            'app.cli',
+            'admin',
+            'create-client',
+            '--event-name',
+            'SmokeEvent',
         ],
         capture_output=True,
         text=True,
@@ -92,19 +93,19 @@ def run_bootstrap_cli() -> tuple[str, int]:
 
     output = result.stdout
 
-    api_key_match = re.search(r"API Key: (\S+)", output)
+    api_key_match = re.search(r'API Key: (\S+)', output)
     event_id_match = re.search(r"Created Event '.*' with ID (\d+)", output)
 
-    assert api_key_match, "Failed to parse API Key from CLI output"
-    assert event_id_match, "Failed to parse Event ID from CLI output"
+    assert api_key_match, 'Failed to parse API Key from CLI output'
+    assert event_id_match, 'Failed to parse Event ID from CLI output'
 
     return api_key_match.group(1), int(event_id_match.group(1))
 
 
 @pytest.mark.skipif(
-    os.getenv("ALLOW_SMOKE_DB_WIPE") != "1",
-    reason="This test wipes the database; run only against a disposable DB "
-    "(see smoke-test.yml, which sets ALLOW_SMOKE_DB_WIPE=1).",
+    os.getenv('ALLOW_SMOKE_DB_WIPE') != '1',
+    reason='This test wipes the database; run only against a disposable DB '
+    '(see smoke-test.yml, which sets ALLOW_SMOKE_DB_WIPE=1).',
 )
 def test_end_to_end_smoke(clean_db: None) -> None:
     # 1. Clean DB is handled by the fixture
@@ -115,9 +116,9 @@ def test_end_to_end_smoke(clean_db: None) -> None:
     assert event_id > 0
 
     # 3. Hit GET /health
-    health_resp = httpx2.get(f"{API_BASE_URL}/health", timeout=10.0)
-    assert health_resp.status_code == 200, f"Health check failed: {health_resp.text}"
-    assert health_resp.json().get("status") == "ok"
+    health_resp = httpx2.get(f'{API_BASE_URL}/health', timeout=10.0)
+    assert health_resp.status_code == 200, f'Health check failed: {health_resp.text}'
+    assert health_resp.json().get('status') == 'ok'
 
     # 4. Create a Talk via direct DB fixture
     session = SessionLocal()
@@ -127,11 +128,11 @@ def test_end_to_end_smoke(clean_db: None) -> None:
 
         talk = models.Talk(
             event_id=event_id,
-            title="Smoke Test Talk",
-            room="Main Hall",
+            title='Smoke Test Talk',
+            room='Main Hall',
             start=start_time,
             end=end_time,
-            status="waiting_for_files",
+            status=TalkStatus.WAITING_FILES,
         )
         session.add(talk)
         session.commit()
@@ -143,14 +144,14 @@ def test_end_to_end_smoke(clean_db: None) -> None:
         session.close()
 
     # 5. Call the ops endpoints with the API key and confirm the Talk is visible
-    headers = {"X-API-Key": api_key}
-    talks_resp = httpx2.get(f"{API_BASE_URL}/ops/talks", headers=headers)
-    assert talks_resp.status_code == 200, f"Ops talks failed: {talks_resp.text}"
+    headers = {'X-API-Key': api_key}
+    talks_resp = httpx2.get(f'{API_BASE_URL}/ops/talks', headers=headers)
+    assert talks_resp.status_code == 200, f'Ops talks failed: {talks_resp.text}'
 
     talks_data = talks_resp.json()
     assert len(talks_data) == 1
-    assert talks_data[0]["id"] == talk_id
-    assert talks_data[0]["title"] == "Smoke Test Talk"
+    assert talks_data[0]['id'] == talk_id
+    assert talks_data[0]['title'] == 'Smoke Test Talk'
 
     # 6. Exercise advance() through a happy-path sequence of transitions
     states = [
@@ -182,6 +183,6 @@ def test_end_to_end_smoke(clean_db: None) -> None:
             session.close()
 
         # Verify via ops endpoint
-        talk_resp = httpx2.get(f"{API_BASE_URL}/ops/talks/{talk_id}", headers=headers)
-        assert talk_resp.status_code == 200, f"Ops talk fetch failed: {talk_resp.text}"
-        assert talk_resp.json()["status"] == state
+        talk_resp = httpx2.get(f'{API_BASE_URL}/ops/talks/{talk_id}', headers=headers)
+        assert talk_resp.status_code == 200, f'Ops talk fetch failed: {talk_resp.text}'
+        assert talk_resp.json()['status'] == state

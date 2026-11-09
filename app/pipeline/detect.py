@@ -9,6 +9,7 @@ from pathlib import Path
 import av
 from av.error import FFmpegError
 
+
 DETECT_DURATION_TOLERANCE_SECONDS = 300.0
 
 
@@ -36,10 +37,10 @@ def detect(
     """
 
     if not file_path.exists():
-        return _failed("file not found")
+        return _failed('file not found')
 
     if file_path.stat().st_size == 0:
-        return _failed("file is empty (0 bytes)")
+        return _failed('file is empty (0 bytes)')
 
     try:
         with av.open(str(file_path)) as container:
@@ -48,7 +49,7 @@ def detect(
             has_video = bool(container.streams.video)
             has_audio = bool(container.streams.audio)
     except FFmpegError, OSError, ValueError:
-        return _failed("unreadable container")
+        return _failed('unreadable container')
 
     if actual_duration <= 0:
         return DetectResult(
@@ -56,7 +57,7 @@ def detect(
             actual_duration_seconds=actual_duration,
             has_video=has_video,
             has_audio=has_audio,
-            reason="no duration metadata found",
+            reason='no duration metadata found',
         )
 
     if not has_video:
@@ -65,7 +66,7 @@ def detect(
             actual_duration_seconds=actual_duration,
             has_video=has_video,
             has_audio=has_audio,
-            reason="missing video stream",
+            reason='missing video stream',
         )
 
     scheduled_duration = (scheduled_end - scheduled_start).total_seconds()
@@ -77,8 +78,8 @@ def detect(
             has_video=has_video,
             has_audio=has_audio,
             reason=(
-                "duration outside scheduled window "
-                f"(expected {scheduled_duration:.3f}s, got {actual_duration:.3f}s)"
+                'duration outside scheduled window '
+                f'(expected {scheduled_duration:.3f}s, got {actual_duration:.3f}s)'
             ),
         )
 

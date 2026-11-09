@@ -8,7 +8,7 @@ class InvalidTransitionError(Exception):
     def __init__(self, current_state: str, new_state: str):
         self.current_state = current_state
         self.new_state = new_state
-        super().__init__(f"Invalid transition from {current_state} to {new_state}")
+        super().__init__(f'Invalid transition from {current_state} to {new_state}')
 
 
 TRANSITIONS: dict[TalkStatus, list[TalkStatus]] = {
