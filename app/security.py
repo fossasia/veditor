@@ -12,11 +12,12 @@ from typing import Literal, Protocol
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import ALLOWED_JWT_ALGORITHMS, settings
-from app.consts import AuthRole, SSOScopeType
-from app.db import new_session
-from app.models import User
+from .config import ALLOWED_JWT_ALGORITHMS, settings
+from .consts import AuthRole, SSOScopeType
+from .db import new_session
+from .models import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,22 +61,22 @@ def get_session_secret() -> str:
     """
     global _session_secret
     if settings.session_secret:
-        if len(settings.session_secret.encode("utf-8")) < 32:
-            raise ValueError("SESSION_SECRET must be at least 32 bytes long")
+        if len(settings.session_secret.encode('utf-8')) < 32:
+            raise ValueError('SESSION_SECRET must be at least 32 bytes long')
         return settings.session_secret
 
-    if settings.environment.lower() in ("production", "prod"):
+    if settings.environment.lower() in ('production', 'prod'):
         raise RuntimeError(
-            "SESSION_SECRET must be explicitly set in production environment"
+            'SESSION_SECRET must be explicitly set in production environment'
         )
 
     if _session_secret:
         return _session_secret
 
-    secret_file = Path(settings.data_dir) / ".session_secret"
+    secret_file = Path(settings.data_dir) / '.session_secret'
     if secret_file.exists():
         # storage-boundary-exempt: read local session secret for dev reload
-        secret = secret_file.read_text(encoding="utf-8").strip()
+        secret = secret_file.read_text(encoding='utf-8').strip()
         if secret:
             _session_secret = secret
             return _session_secret
@@ -87,21 +88,21 @@ def get_session_secret() -> str:
         # storage-boundary-exempt: exclusive create with 0600 mode to avoid exposure race
         fd = os.open(secret_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         # storage-boundary-exempt: write secret through open file descriptor
-        with open(fd, "w", encoding="utf-8") as f:
+        with open(fd, 'w', encoding='utf-8') as f:
             f.write(generated)
         _session_secret = generated
     except FileExistsError:
         # storage-boundary-exempt: read winning secret created concurrently
-        _session_secret = secret_file.read_text(encoding="utf-8").strip()
+        _session_secret = secret_file.read_text(encoding='utf-8').strip()
     return _session_secret
 
 
 def hash_password(plain: str) -> str:
     """Hashes a plaintext password using Argon2id."""
     if not isinstance(plain, str):
-        raise TypeError("Password must be a string")
+        raise TypeError('Password must be a string')
     if not plain:
-        raise ValueError("Password cannot be empty")
+        raise ValueError('Password cannot be empty')
     return _hasher.hash(plain)
 
 
@@ -130,7 +131,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_session_token(
     user_id: int,
-    role: str,
+    role: AuthRole,
     expires_in_hours: int | None = None,
     password_hash: str | None = None,
 ) -> str:
@@ -145,15 +146,15 @@ def create_session_token(
         else settings.session_token_expire_hours
     )
     payload = {
-        "sub": str(user_id),
-        "user_id": user_id,
-        "role": role,
-        "type": "session",
-        "iat": now,
-        "exp": now + timedelta(hours=expiry),
+        'sub': str(user_id),
+        'user_id': user_id,
+        'role': role,
+        'type': 'session',
+        'iat': now,
+        'exp': now + timedelta(hours=expiry),
     }
     if password_hash:
-        payload["pwh"] = get_password_fingerprint(password_hash)
+        payload['pwh'] = get_password_fingerprint(password_hash)
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
@@ -177,7 +178,7 @@ def verify_session_token_not_revoked(
     if not payload or not isinstance(payload, dict):
         return False
 
-    token_pwh = payload.get("pwh")
+    token_pwh = payload.get('pwh')
     if token_pwh:
         if not current_password_hash and user is not None:
             current_password_hash = user.hashed_password
@@ -191,14 +192,14 @@ def verify_session_token_not_revoked(
         session_revoked_at = user.session_revoked_at
 
     if session_revoked_at is None:
-        user_id = payload.get("user_id")
+        user_id = payload.get('user_id')
         if user_id:
             try:
                 with new_session() as db:
                     db_user = db.get(User, user_id)
                     if db_user:
                         session_revoked_at = db_user.session_revoked_at
-            except Exception:  # noqa: BLE001, S110
+            except SQLAlchemyError:
                 pass
 
     # Ensure fingerprint-free tokens are rejected when their revocation status
@@ -206,7 +207,7 @@ def verify_session_token_not_revoked(
     if session_revoked_at is None:
         return False
 
-    iat = payload.get("iat")
+    iat = payload.get('iat')
     if iat is None:
         return False
 
@@ -225,7 +226,7 @@ def verify_session_token_not_revoked(
 
         if token_ts <= revoked_ts:
             return False
-    except Exception:  # noqa: BLE001
+    except (TypeError, ValueError, OverflowError) as _exc:
         return False
 
     return True
@@ -243,12 +244,12 @@ def decode_session_token(token: str) -> dict | None:
         payload = jwt.decode(
             token, get_session_secret(), algorithms=list(ALLOWED_JWT_ALGORITHMS)
         )
-        if payload.get("type") != "session":
+        if payload.get('type') != 'session':
             return None
         if (
-            not isinstance(payload.get("user_id"), int)
-            or not isinstance(payload.get("role"), str)
-            or not isinstance(payload.get("sub"), str)
+            not isinstance(payload.get('user_id'), int)
+            or not isinstance(payload.get('role'), str)
+            or not isinstance(payload.get('sub'), str)
         ):
             return None
         return payload
@@ -259,7 +260,7 @@ def decode_session_token(token: str) -> dict | None:
 def create_access_token(
     user_id: int,
     email: str,
-    role: str,
+    role: AuthRole,
     expires_in_seconds: int | None = None,
     password_hash: str | None = None,
 ) -> str:
@@ -274,16 +275,16 @@ def create_access_token(
         else settings.access_token_expire_seconds
     )
     payload = {
-        "sub": str(user_id),
-        "user_id": user_id,
-        "email": email,
-        "role": role,
-        "type": "access",
-        "iat": now,
-        "exp": now + timedelta(seconds=expiry),
+        'sub': str(user_id),
+        'user_id': user_id,
+        'email': email,
+        'role': role,
+        'type': 'access',
+        'iat': now,
+        'exp': now + timedelta(seconds=expiry),
     }
     if password_hash:
-        payload["pwh"] = get_password_fingerprint(password_hash)
+        payload['pwh'] = get_password_fingerprint(password_hash)
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
@@ -299,13 +300,13 @@ def decode_access_token(token: str) -> dict | None:
         payload = jwt.decode(
             token, get_session_secret(), algorithms=list(ALLOWED_JWT_ALGORITHMS)
         )
-        if payload.get("type") != "access":
+        if payload.get('type') != 'access':
             return None
         if (
-            not isinstance(payload.get("user_id"), int)
-            or not isinstance(payload.get("email"), str)
-            or not isinstance(payload.get("role"), str)
-            or not isinstance(payload.get("sub"), str)
+            not isinstance(payload.get('user_id'), int)
+            or not isinstance(payload.get('email'), str)
+            or not isinstance(payload.get('role'), str)
+            or not isinstance(payload.get('sub'), str)
         ):
             return None
         return payload
@@ -323,12 +324,12 @@ def create_email_verification_token(
     """
     now = datetime.now(UTC)
     payload = {
-        "sub": str(user_id),
-        "user_id": user_id,
-        "email": email.strip().lower(),
-        "type": "email_verification",
-        "iat": now,
-        "exp": now + timedelta(hours=expires_in_hours),
+        'sub': str(user_id),
+        'user_id': user_id,
+        'email': email.strip().lower(),
+        'type': 'email_verification',
+        'iat': now,
+        'exp': now + timedelta(hours=expires_in_hours),
     }
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
@@ -346,13 +347,13 @@ def decode_email_verification_token(token: str) -> dict | None:
             token,
             get_session_secret(),
             algorithms=list(ALLOWED_JWT_ALGORITHMS),
-            options={"require": ["exp", "iat", "sub"]},
+            options={'require': ['exp', 'iat', 'sub']},
         )
-        if payload.get("type") != "email_verification":
+        if payload.get('type') != 'email_verification':
             return None
-        user_id = payload.get("user_id")
-        email = payload.get("email")
-        sub = payload.get("sub")
+        user_id = payload.get('user_id')
+        email = payload.get('email')
+        sub = payload.get('sub')
         if (
             not isinstance(user_id, int)
             or isinstance(user_id, bool)
@@ -371,10 +372,10 @@ def decode_email_verification_token(token: str) -> dict | None:
 def get_password_fingerprint(password_hash: str) -> str:
     """Calculates a keyed HMAC-SHA256 fingerprint over the user's password hash."""
     if not password_hash or not isinstance(password_hash, str):
-        return ""
+        return ''
     return hmac.new(
-        get_session_secret().encode("utf-8"),
-        password_hash.encode("utf-8"),
+        get_session_secret().encode('utf-8'),
+        password_hash.encode('utf-8'),
         hashlib.sha256,
     ).hexdigest()
 
@@ -390,13 +391,13 @@ def create_password_reset_token(
         expires_in_hours = settings.password_reset_expire_hours
     now = datetime.now(UTC)
     payload = {
-        "sub": str(user_id),
-        "user_id": user_id,
-        "email": email.strip().lower(),
-        "pwh": get_password_fingerprint(password_hash),
-        "type": "password_reset",
-        "iat": now,
-        "exp": now + timedelta(hours=expires_in_hours),
+        'sub': str(user_id),
+        'user_id': user_id,
+        'email': email.strip().lower(),
+        'pwh': get_password_fingerprint(password_hash),
+        'type': 'password_reset',
+        'iat': now,
+        'exp': now + timedelta(hours=expires_in_hours),
     }
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
@@ -414,14 +415,14 @@ def decode_password_reset_token(token: str) -> dict | None:
             token,
             get_session_secret(),
             algorithms=list(ALLOWED_JWT_ALGORITHMS),
-            options={"require": ["exp", "iat", "sub"]},
+            options={'require': ['exp', 'iat', 'sub']},
         )
-        if payload.get("type") != "password_reset":
+        if payload.get('type') != 'password_reset':
             return None
-        user_id = payload.get("user_id")
-        email = payload.get("email")
-        pwh = payload.get("pwh")
-        sub = payload.get("sub")
+        user_id = payload.get('user_id')
+        email = payload.get('email')
+        pwh = payload.get('pwh')
+        sub = payload.get('sub')
         if (
             not isinstance(user_id, int)
             or isinstance(user_id, bool)
@@ -443,7 +444,7 @@ def verify_password_reset_token(payload: dict, current_password_hash: str) -> bo
     """Verifies that the token's password fingerprint matches the user's current password hash."""
     if not payload or not isinstance(payload, dict):
         return False
-    token_pwh = payload.get("pwh")
+    token_pwh = payload.get('pwh')
     if not token_pwh or not isinstance(token_pwh, str):
         return False
     current_pwh = get_password_fingerprint(current_password_hash)
@@ -454,7 +455,7 @@ def verify_password_reset_token(payload: dict, current_password_hash: str) -> bo
 
 def is_valid_email(email: str) -> bool:
     """Validates an email address against RFC 5322 using the Python standard library."""
-    if not email or not isinstance(email, str) or "@" not in email:
+    if not email or not isinstance(email, str) or '@' not in email:
         return False
     try:
         clean = email.strip()
@@ -462,17 +463,17 @@ def is_valid_email(email: str) -> bool:
         return bool(
             addr.username
             and addr.domain
-            and not addr.domain.startswith(".")
-            and not addr.domain.endswith(".")
+            and not addr.domain.startswith('.')
+            and not addr.domain.endswith('.')
         )
     except (HeaderParseError, ValueError, IndexError, TypeError) as _exc:
         return False
 
 
 def create_sso_token(
-    scope_type: SSOScopeType | Literal["event", "talk"],
+    scope_type: SSOScopeType | Literal['event', 'talk'],
     scope_id: int,
-    role: str,
+    role: AuthRole,
     expires_in_seconds: int | None = None,
     email: str | None = None,
     display_name: str | None = None,
@@ -486,21 +487,21 @@ def create_sso_token(
     except ValueError, TypeError:
         raise ValueError("scope_type must be 'event' or 'talk'")
     if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
-        raise ValueError("scope_id must be a positive integer")
-    if role not in ("organizer", "speaker"):
+        raise ValueError('scope_id must be a positive integer')
+    if role not in SSO_VALID_ROLES:
         raise ValueError("role must be 'organizer' or 'speaker'")
     if (
         scope_type_enum is SSOScopeType.EVENT
-        and role == "speaker"
+        and role is AuthRole.SPEAKER
         and (not isinstance(email, str) or not email.strip())
     ):
-        raise ValueError("email is required for event-scoped speaker tokens")
+        raise ValueError('email is required for event-scoped speaker tokens')
     if expires_in_seconds is not None and (
         not isinstance(expires_in_seconds, int)
         or isinstance(expires_in_seconds, bool)
         or expires_in_seconds <= 0
     ):
-        raise ValueError("expires_in_seconds must be a positive integer")
+        raise ValueError('expires_in_seconds must be a positive integer')
 
     now = datetime.now(UTC)
     expiry = (
@@ -509,17 +510,17 @@ def create_sso_token(
         else settings.sso_token_expire_seconds
     )
     payload = {
-        "scope_type": scope_type_enum.value,
-        "scope_id": scope_id,
-        "role": role,
-        "type": "sso",
-        "iat": now,
-        "exp": now + timedelta(seconds=expiry),
+        'scope_type': scope_type_enum.value,
+        'scope_id': scope_id,
+        'role': role,
+        'type': 'sso',
+        'iat': now,
+        'exp': now + timedelta(seconds=expiry),
     }
     if email and isinstance(email, str) and email.strip():
-        payload["email"] = email.strip()
+        payload['email'] = email.strip()
     if display_name and isinstance(display_name, str) and display_name.strip():
-        payload["display_name"] = display_name.strip()
+        payload['display_name'] = display_name.strip()
     return jwt.encode(payload, get_session_secret(), algorithm=settings.jwt_algorithm)
 
 
@@ -541,23 +542,23 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             token,
             get_session_secret(),
             algorithms=list(ALLOWED_JWT_ALGORITHMS),
-            options={"require": ["exp"]},
+            options={'require': ['exp']},
         )
-        if payload.get("type") != "sso":
+        if payload.get('type') != 'sso':
             return None
-        if "user_id" in payload or "sub" in payload:
+        if 'user_id' in payload or 'sub' in payload:
             return None
-        raw_scope_type = payload.get("scope_type")
+        raw_scope_type = payload.get('scope_type')
         if not isinstance(raw_scope_type, str):
             return None
         try:
             scope_type_enum = SSOScopeType(raw_scope_type)
         except ValueError, TypeError:
             return None
-        scope_id = payload.get("scope_id")
+        scope_id = payload.get('scope_id')
         if not isinstance(scope_id, int) or isinstance(scope_id, bool) or scope_id <= 0:
             return None
-        raw_role = payload.get("role")
+        raw_role = payload.get('role')
         if not isinstance(raw_role, str):
             return None
         try:
@@ -570,14 +571,14 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
             scope_type_enum is SSOScopeType.EVENT
             and role is AuthRole.SPEAKER
             and (
-                not isinstance(payload.get("email"), str)
-                or not payload["email"].strip()
+                not isinstance(payload.get('email'), str)
+                or not payload['email'].strip()
             )
         ):
             return None
 
-        exp = payload.get("exp")
-        iat = payload.get("iat")
+        exp = payload.get('exp')
+        iat = payload.get('iat')
         # PyJWT returns numeric-date claims as Python ints (or floats when
         # the source carried fractional seconds); defensive checks keep the
         # dataclass honest if a future JWT lib changes that.
@@ -591,8 +592,8 @@ def decode_sso_token(token: str) -> SSOTokenPayload | None:
         ):
             return None
 
-        email_raw = payload.get("email")
-        display_name_raw = payload.get("display_name")
+        email_raw = payload.get('email')
+        display_name_raw = payload.get('display_name')
         email = (
             email_raw.strip()
             if isinstance(email_raw, str) and email_raw.strip()

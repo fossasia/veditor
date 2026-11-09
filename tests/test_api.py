@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import hash_api_key
 from app.config import settings
-from app.consts import TalkStatus
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.db import get_db
 from app.ingest import InsufficientStorageError
 from app.main import app
@@ -33,9 +33,10 @@ from app.tasks import (
     job_transcode,
 )
 
+
 client = TestClient(app)
 
-API_KEY = "valid"
+API_KEY = 'valid'
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ def _make_storage_override(mock_storage: MagicMock) -> Callable[[], MagicMock]:
     return _override
 
 
-def _create_event(db: Session, name: str = "Test Event") -> models.Event:
+def _create_event(db: Session, name: str = 'Test Event') -> models.Event:
     event = models.Event(name=name)
     db.add(event)
     db.commit()
@@ -72,7 +73,7 @@ def _create_talk(
     db: Session,
     event_id: int,
     *,
-    title: str = "Test Talk",
+    title: str = 'Test Talk',
     status: TalkStatus = TalkStatus.WAITING_FILES,
     raw_duration_seconds: float | None = None,
     cut_start: float | None = None,
@@ -111,25 +112,25 @@ def _talk_jobs(db: Session, talk_id: int) -> list[models.Job]:
 
 
 def test_health_check() -> None:
-    response = client.get("/health")
+    response = client.get('/health')
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {'status': 'ok'}
 
 
 def test_health_check_redis_failure() -> None:
     fail_client = TestClient(app, raise_server_exceptions=False)
-    with patch("app.main.redis_conn.ping", side_effect=Exception("Redis down")):
-        response = fail_client.get("/health")
+    with patch('app.main.redis_conn.ping', side_effect=Exception('Redis down')):
+        response = fail_client.get('/health')
         assert 500 <= response.status_code < 600
 
 
 def test_health_check_database_failure() -> None:
     fail_client = TestClient(app, raise_server_exceptions=False)
     mock_db = MagicMock()
-    mock_db.execute.side_effect = Exception("DB connection failed")
+    mock_db.execute.side_effect = Exception('DB connection failed')
     app.dependency_overrides[get_db] = lambda: mock_db
     try:
-        response = fail_client.get("/health")
+        response = fail_client.get('/health')
         assert 500 <= response.status_code < 600
         mock_db.execute.assert_called_once()
     finally:
@@ -142,7 +143,7 @@ def test_health_check_database_failure() -> None:
 
 
 @pytest.mark.parametrize(
-    "blocked_status",
+    'blocked_status',
     [
         TalkStatus.WAITING_FILES,
         TalkStatus.DETECTING,
@@ -156,12 +157,12 @@ def test_raw_preview_gated_before_pending_bounds(
     talk = _create_talk(db_session, event.id, status=blocked_status)
     _create_api_client(db_session, event_ids=[event.id])
 
-    resp = client.get(f"/talks/{talk.id}/raw-preview", headers={"X-API-Key": API_KEY})
+    resp = client.get(f'/talks/{talk.id}/raw-preview', headers={'X-API-Key': API_KEY})
     assert resp.status_code == 403
 
 
 @pytest.mark.parametrize(
-    "allowed_status",
+    'allowed_status',
     [
         TalkStatus.PENDING_BOUNDS,
         TalkStatus.CUTTING,
@@ -182,17 +183,17 @@ def test_raw_preview_accessible_from_pending_bounds_onwards(
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    raw_key = f"{talk.id}/raw/recording.mp4"
+    raw_key = f'{talk.id}/raw/recording.mp4'
     mock_storage.list_keys.return_value = [raw_key]
-    mock_storage.url.return_value = f"file:///data/{raw_key}"
+    mock_storage.url.return_value = f'file:///data/{raw_key}'
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
         resp = client.get(
-            f"/talks/{talk.id}/raw-preview", headers={"X-API-Key": API_KEY}
+            f'/talks/{talk.id}/raw-preview', headers={'X-API-Key': API_KEY}
         )
         assert resp.status_code == 200
-        assert resp.json()["url"] == f"file:///data/{raw_key}"
+        assert resp.json()['url'] == f'file:///data/{raw_key}'
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -208,7 +209,7 @@ def test_raw_preview_no_file(db_session: Session) -> None:
 
     try:
         resp = client.get(
-            f"/talks/{talk.id}/raw-preview", headers={"X-API-Key": API_KEY}
+            f'/talks/{talk.id}/raw-preview', headers={'X-API-Key': API_KEY}
         )
         assert resp.status_code == 404
     finally:
@@ -225,7 +226,7 @@ def test_approve_wrong_state(db_session: Session) -> None:
     talk = _create_talk(db_session, event.id, status=TalkStatus.PENDING_BOUNDS)
     _create_api_client(db_session, event_ids=[event.id])
 
-    resp = client.post(f"/talks/{talk.id}/approve", headers={"X-API-Key": API_KEY})
+    resp = client.post(f'/talks/{talk.id}/approve', headers={'X-API-Key': API_KEY})
     assert resp.status_code == 409
 
 
@@ -236,12 +237,12 @@ def test_rejected_talk_has_no_raw_preview_access(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    mock_storage.list_keys.return_value = [f"{talk.id}/raw/recording.mp4"]
+    mock_storage.list_keys.return_value = [f'{talk.id}/raw/recording.mp4']
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
         resp = client.get(
-            f"/talks/{talk.id}/raw-preview", headers={"X-API-Key": API_KEY}
+            f'/talks/{talk.id}/raw-preview', headers={'X-API-Key': API_KEY}
         )
         assert resp.status_code == 403
     finally:
@@ -264,16 +265,16 @@ def test_cut_bounds_happy_path(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    raw_key = f"{talk.id}/raw/recording.mp4"
+    raw_key = f'{talk.id}/raw/recording.mp4'
     mock_storage.list_keys.return_value = [raw_key]
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
-        with patch("app.routes.talks.light_queue") as mock_queue:
+        with patch('app.routes.talks.light_queue') as mock_queue:
             resp = client.post(
-                f"/talks/{talk.id}/cut",
-                json={"cut_start": "00:00:10", "cut_end": "00:45:00"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/cut',
+                json={'cut_start': '00:00:10', 'cut_end': '00:45:00'},
+                headers={'X-API-Key': API_KEY},
             )
             assert resp.status_code == 202
 
@@ -286,7 +287,7 @@ def test_cut_bounds_happy_path(db_session: Session) -> None:
             mock_queue.enqueue.assert_called_once()
             # Verify job_cut was enqueued (not arbitrary function)
             call_args = mock_queue.enqueue.call_args
-            assert call_args[0][0].__name__ == "job_cut"
+            assert call_args[0][0].__name__ == 'job_cut'
             # Verify talk_id and raw_key are passed, not scheduled times
             assert call_args[0][1] == talk.id
             assert call_args[0][2] == raw_key
@@ -305,19 +306,19 @@ def test_cut_bounds_with_note(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    mock_storage.list_keys.return_value = [f"{talk.id}/raw/recording.mp4"]
+    mock_storage.list_keys.return_value = [f'{talk.id}/raw/recording.mp4']
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
-        with patch("app.routes.talks.light_queue"):
+        with patch('app.routes.talks.light_queue'):
             resp = client.post(
-                f"/talks/{talk.id}/cut",
+                f'/talks/{talk.id}/cut',
                 json={
-                    "cut_start": "00:00:10",
-                    "cut_end": "00:45:00",
-                    "note": "Trimmed initial silent intro",
+                    'cut_start': '00:00:10',
+                    'cut_end': '00:45:00',
+                    'note': 'Trimmed initial silent intro',
                 },
-                headers={"X-API-Key": API_KEY},
+                headers={'X-API-Key': API_KEY},
             )
             assert resp.status_code == 202
 
@@ -326,8 +327,8 @@ def test_cut_bounds_with_note(db_session: Session) -> None:
                 select(models.Review).where(models.Review.talk_id == talk.id)
             )
             assert review is not None
-            assert review.note == "Trimmed initial silent intro"
-            assert review.decision == "cut"
+            assert review.note == 'Trimmed initial silent intro'
+            assert review.decision == 'cut'
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -343,15 +344,15 @@ def test_cut_bounds_subsecond_precision(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    mock_storage.list_keys.return_value = [f"{talk.id}/raw/recording.mp4"]
+    mock_storage.list_keys.return_value = [f'{talk.id}/raw/recording.mp4']
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
-        with patch("app.routes.talks.light_queue"):
+        with patch('app.routes.talks.light_queue'):
             resp = client.post(
-                f"/talks/{talk.id}/cut",
-                json={"cut_start": "00:00:10.500", "cut_end": "00:00:45.250"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/cut',
+                json={'cut_start': '00:00:10.500', 'cut_end': '00:00:45.250'},
+                headers={'X-API-Key': API_KEY},
             )
             assert resp.status_code == 202
 
@@ -374,9 +375,9 @@ def test_cut_bounds_end_before_start(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:30:00", "cut_end": "00:10:00"},
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:30:00', 'cut_end': '00:10:00'},
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 422
 
@@ -392,9 +393,9 @@ def test_cut_bounds_equal_start_end(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:10:00", "cut_end": "00:10:00"},
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:10:00', 'cut_end': '00:10:00'},
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 422
 
@@ -410,9 +411,9 @@ def test_cut_bounds_exceeds_duration(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:00:05", "cut_end": "00:05:00"},  # 300s > 60s
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:00:05', 'cut_end': '00:05:00'},  # 300s > 60s
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 422
 
@@ -423,22 +424,22 @@ def test_cut_bounds_missing_raw_duration(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:00:05", "cut_end": "00:00:55"},
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:00:05', 'cut_end': '00:00:55'},
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 422
-    assert "no detected raw duration" in resp.json()["detail"]
+    assert 'no detected raw duration' in resp.json()['detail']
 
 
 @pytest.mark.parametrize(
-    "invalid_start,invalid_end",
+    'invalid_start,invalid_end',
     [
-        ("00:10", "00:20:00"),  # missing seconds
-        ("00:00:10+05:00", "00:20:00"),  # timezone offset
-        ("1:2:3", "00:20:00"),  # single digit fields
-        ("99:99:99", "00:20:00"),  # invalid time values
-        ("not-a-time", "00:20:00"),  # non-time string
+        ('00:10', '00:20:00'),  # missing seconds
+        ('00:00:10+05:00', '00:20:00'),  # timezone offset
+        ('1:2:3', '00:20:00'),  # single digit fields
+        ('99:99:99', '00:20:00'),  # invalid time values
+        ('not-a-time', '00:20:00'),  # non-time string
     ],
 )
 def test_cut_bounds_invalid_time_formats(
@@ -454,9 +455,9 @@ def test_cut_bounds_invalid_time_formats(
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": invalid_start, "cut_end": invalid_end},
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': invalid_start, 'cut_end': invalid_end},
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 422
 
@@ -467,9 +468,9 @@ def test_cut_bounds_wrong_state(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     resp = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:00:05", "cut_end": "00:00:55"},
-        headers={"X-API-Key": API_KEY},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:00:05', 'cut_end': '00:00:55'},
+        headers={'X-API-Key': API_KEY},
     )
     assert resp.status_code == 409
 
@@ -491,39 +492,39 @@ def test_full_phase4_happy_path(db_session: Session) -> None:
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
-    raw_key = f"{talk.id}/raw/recording.mp4"
+    raw_key = f'{talk.id}/raw/recording.mp4'
     mock_storage.list_keys.return_value = [raw_key]
-    mock_storage.url.return_value = f"file:///data/{raw_key}"
+    mock_storage.url.return_value = f'file:///data/{raw_key}'
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     try:
         # 1. Approve → pending_intro_outro
-        resp = client.post(f"/talks/{talk.id}/approve", headers={"X-API-Key": API_KEY})
+        resp = client.post(f'/talks/{talk.id}/approve', headers={'X-API-Key': API_KEY})
         assert resp.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.PENDING_INTRO_OUTRO
 
         # 1b. Handoff → pending_bounds
         resp = client.post(
-            f"/talks/{talk.id}/handoff",
-            json={"include_intro": False, "include_outro": False},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/handoff',
+            json={'include_intro': False, 'include_outro': False},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
         # 2. Raw preview accessible
         resp = client.get(
-            f"/talks/{talk.id}/raw-preview", headers={"X-API-Key": API_KEY}
+            f'/talks/{talk.id}/raw-preview', headers={'X-API-Key': API_KEY}
         )
         assert resp.status_code == 200
-        assert "url" in resp.json()
+        assert 'url' in resp.json()
 
         # 3. Submit cut bounds → cutting
-        with patch("app.routes.talks.light_queue") as mock_queue:
+        with patch('app.routes.talks.light_queue') as mock_queue:
             resp = client.post(
-                f"/talks/{talk.id}/cut",
-                json={"cut_start": "00:00:10", "cut_end": "01:00:00"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/cut',
+                json={'cut_start': '00:00:10', 'cut_end': '01:00:00'},
+                headers={'X-API-Key': API_KEY},
             )
             assert resp.status_code == 202
 
@@ -550,16 +551,18 @@ def test_abort_talk_success(db_session: Session) -> None:
         cut_end=1800.0,
     )
     _create_api_client(db_session, event_ids=[event.id])
-    db_session.add(models.Job(talk_id=talk.id, kind="cut", status="running"))
-    db_session.add(models.Review(talk_id=talk.id, decision="cut"))
+    db_session.add(
+        models.Job(talk_id=talk.id, kind=JobKind.CUT, status=JobStatus.RUNNING)
+    )
+    db_session.add(models.Review(talk_id=talk.id, decision='cut'))
     db_session.commit()
 
     mock_storage = MagicMock()
 
     mock_job = MagicMock()
-    mock_job.args = (talk.id, f"{talk.id}/raw/test.mp4")
+    mock_job.args = (talk.id, f'{talk.id}/raw/test.mp4')
     mock_light = MagicMock()
-    mock_light.job_ids = ["job_123"]
+    mock_light.job_ids = ['job_123']
     mock_light.fetch_job.return_value = mock_job
     mock_heavy = MagicMock()
     mock_heavy.job_ids = []
@@ -567,20 +570,20 @@ def test_abort_talk_success(db_session: Session) -> None:
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     with (
-        patch("app.routes.talks.light_queue", mock_light),
-        patch("app.routes.talks.heavy_queue", mock_heavy),
+        patch('app.routes.talks.light_queue', mock_light),
+        patch('app.routes.talks.heavy_queue', mock_heavy),
     ):
         try:
             resp = client.post(
-                f"/talks/{talk.id}/abort", headers={"X-API-Key": API_KEY}
+                f'/talks/{talk.id}/abort', headers={'X-API-Key': API_KEY}
             )
             assert resp.status_code == 200
             data = resp.json()
-            assert data["id"] == talk.id
-            assert data["status"] == "waiting_for_files"
-            assert data["raw_duration_seconds"] is None
-            assert data["cut_start"] is None
-            assert data["cut_end"] is None
+            assert data['id'] == talk.id
+            assert data['status'] == 'waiting_for_files'
+            assert data['raw_duration_seconds'] is None
+            assert data['cut_start'] is None
+            assert data['cut_end'] is None
 
             # Talk state persisted
             db_session.expire_all()
@@ -627,12 +630,12 @@ def test_abort_talk_cancels_jobs_in_registries(db_session: Session) -> None:
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     mock_started_job = MagicMock()
-    mock_started_job.id = "job_running"
-    mock_started_job.args = (talk.id, f"{talk.id}/raw/test.mp4")
+    mock_started_job.id = 'job_running'
+    mock_started_job.args = (talk.id, f'{talk.id}/raw/test.mp4')
 
     mock_light = MagicMock()
     mock_light.job_ids = []
-    mock_light.started_job_registry.get_job_ids.return_value = ["job_running"]
+    mock_light.started_job_registry.get_job_ids.return_value = ['job_running']
     mock_light.deferred_job_registry.get_job_ids.return_value = []
     mock_light.scheduled_job_registry.get_job_ids.return_value = []
     mock_light.fetch_job.return_value = mock_started_job
@@ -644,16 +647,16 @@ def test_abort_talk_cancels_jobs_in_registries(db_session: Session) -> None:
     mock_heavy.scheduled_job_registry.get_job_ids.return_value = []
 
     with (
-        patch("app.routes.talks.light_queue", mock_light),
-        patch("app.routes.talks.heavy_queue", mock_heavy),
-        patch("app.routes.talks.send_stop_job_command") as mock_send_stop,
+        patch('app.routes.talks.light_queue', mock_light),
+        patch('app.routes.talks.heavy_queue', mock_heavy),
+        patch('app.routes.talks.send_stop_job_command') as mock_send_stop,
     ):
         try:
             resp = client.post(
-                f"/talks/{talk.id}/abort", headers={"X-API-Key": API_KEY}
+                f'/talks/{talk.id}/abort', headers={'X-API-Key': API_KEY}
             )
             assert resp.status_code == 200
-            mock_send_stop.assert_called_once_with(mock_light.connection, "job_running")
+            mock_send_stop.assert_called_once_with(mock_light.connection, 'job_running')
             mock_started_job.cancel.assert_called_once()
             mock_started_job.delete.assert_called_once()
         finally:
@@ -664,18 +667,18 @@ def test_abort_talk_not_found(db_session: Session) -> None:
     event = _create_event(db_session)
     _create_api_client(db_session, event_ids=[event.id])
 
-    resp = client.post("/talks/999/abort", headers={"X-API-Key": API_KEY})
+    resp = client.post('/talks/999/abort', headers={'X-API-Key': API_KEY})
     assert resp.status_code == 404
-    assert resp.json()["detail"] == "Talk not found"
+    assert resp.json()['detail'] == 'Talk not found'
 
 
 def test_abort_talk_unauthorized_event(db_session: Session) -> None:
     event = _create_event(db_session)
-    other_event = _create_event(db_session, "Other Event")
+    other_event = _create_event(db_session, 'Other Event')
     talk = _create_talk(db_session, other_event.id, status=TalkStatus.CUTTING)
     _create_api_client(db_session, event_ids=[event.id])
 
-    resp = client.post(f"/talks/{talk.id}/abort", headers={"X-API-Key": API_KEY})
+    resp = client.post(f'/talks/{talk.id}/abort', headers={'X-API-Key': API_KEY})
     assert resp.status_code == 404
 
 
@@ -688,9 +691,9 @@ def test_abort_talk_from_any_state(db_session: Session) -> None:
         TalkStatus.WAITING_FILES,
         TalkStatus.DETECTING,
     ):
-        event = _create_event(db_session, f"Abort Event {initial_status}")
+        event = _create_event(db_session, f'Abort Event {initial_status}')
         talk = _create_talk(db_session, event.id, status=initial_status)
-        status_api_key = f"{API_KEY}-{initial_status}"
+        status_api_key = f'{API_KEY}-{initial_status}'
         _create_api_client(db_session, event_ids=[event.id], api_key=status_api_key)
 
         mock_storage = MagicMock()
@@ -699,14 +702,14 @@ def test_abort_talk_from_any_state(db_session: Session) -> None:
         )
 
         with (
-            patch("app.routes.talks.light_queue") as mock_l,
-            patch("app.routes.talks.heavy_queue") as mock_h,
+            patch('app.routes.talks.light_queue') as mock_l,
+            patch('app.routes.talks.heavy_queue') as mock_h,
         ):
             mock_l.job_ids = []
             mock_h.job_ids = []
             try:
                 resp = client.post(
-                    f"/talks/{talk.id}/abort", headers={"X-API-Key": status_api_key}
+                    f'/talks/{talk.id}/abort', headers={'X-API-Key': status_api_key}
                 )
                 assert resp.status_code == 200
                 assert _talk(db_session, talk.id).status == TalkStatus.WAITING_FILES
@@ -733,35 +736,35 @@ def test_lifecycle_full_ingest_to_done(
     """
 
     event = _create_event(db_session)
-    talk = _create_talk(db_session, event.id, title="Lifecycle Talk")
+    talk = _create_talk(db_session, event.id, title='Lifecycle Talk')
     _create_api_client(db_session, event_ids=[event.id])
 
     mock_storage = MagicMock()
     mock_storage.exists.return_value = True
-    mock_storage.get.return_value = Path("/tmp/mock_raw.mp4")
-    mock_storage.url.return_value = "https://example.com/preview.mp4"
-    mock_storage.list_keys.return_value = [f"{talk.id}/raw/mock_source.mp4"]
+    mock_storage.get.return_value = Path('/tmp/mock_raw.mp4')
+    mock_storage.url.return_value = 'https://example.com/preview.mp4'
+    mock_storage.list_keys.return_value = [f'{talk.id}/raw/mock_source.mp4']
 
-    raw_key = f"{talk.id}/raw/mock_source.mp4"
-    cut_key = f"{talk.id}/cut/cut.mp4"
+    raw_key = f'{talk.id}/raw/mock_source.mp4'
+    cut_key = f'{talk.id}/cut/cut.mp4'
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     with (
-        patch("app.routes.talks.light_queue") as mock_light_queue,
-        patch("app.routes.talks.heavy_queue") as mock_heavy_queue,
-        patch("app.tasks.light_queue", mock_light_queue),
-        patch("app.tasks.heavy_queue", mock_heavy_queue),
-        patch("app.routes.talks.stage_recording", return_value=raw_key),
-        patch("app.tasks.get_storage_backend", return_value=mock_storage),
-        patch("app.tasks.detect") as mock_detect,
-        patch("app.tasks.cut"),
-        patch("app.tasks.generate_preview"),
-        patch("app.tasks.generate_intro_clip"),
-        patch("app.tasks.concat"),
-        patch("app.tasks.normalize"),
-        patch("app.tasks.transcode"),
-        patch("app.tasks.publish"),
+        patch('app.routes.talks.light_queue') as mock_light_queue,
+        patch('app.routes.talks.heavy_queue') as mock_heavy_queue,
+        patch('app.tasks.light_queue', mock_light_queue),
+        patch('app.tasks.heavy_queue', mock_heavy_queue),
+        patch('app.routes.talks.stage_recording', return_value=raw_key),
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch('app.tasks.detect') as mock_detect,
+        patch('app.tasks.cut'),
+        patch('app.tasks.generate_preview'),
+        patch('app.tasks.generate_intro_clip'),
+        patch('app.tasks.concat'),
+        patch('app.tasks.normalize'),
+        patch('app.tasks.transcode'),
+        patch('app.tasks.publish'),
     ):
         mock_detect.return_value = MagicMock(
             passed=True, actual_duration_seconds=3600.0
@@ -769,9 +772,9 @@ def test_lifecycle_full_ingest_to_done(
 
         # 1. Ingest recording -> transitions talk to 'detecting' and enqueues job_detect
         resp1 = client.post(
-            f"/talks/{talk.id}/recordings",
-            json={"source_path": "/tmp/mock_source.mp4"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/recordings',
+            json={'source_path': '/tmp/mock_source.mp4'},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp1.status_code == 202
         assert _talk(db_session, talk.id).status == TalkStatus.DETECTING
@@ -786,28 +789,28 @@ def test_lifecycle_full_ingest_to_done(
         assert reloaded.status == TalkStatus.PENDING_APPROVAL
         assert reloaded.raw_duration_seconds == 3600.0
         assert any(
-            j.kind == "detect" and j.status == "done"
+            j.kind == JobKind.DETECT and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
 
         # 3. Approve talk -> transitions talk to 'pending_intro_outro'
         resp2 = client.post(
-            f"/talks/{talk.id}/approve",
-            json={"decision": "approve"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/approve',
+            json={'decision': 'approve'},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp2.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.PENDING_INTRO_OUTRO
 
         # 3b. Handoff to speaker -> transitions talk to 'pending_bounds'
         resp_handoff = client.post(
-            f"/talks/{talk.id}/handoff",
+            f'/talks/{talk.id}/handoff',
             json={
-                "include_intro": True,
-                "intro_source": "generated",
-                "include_outro": False,
+                'include_intro': True,
+                'intro_source': 'generated',
+                'include_outro': False,
             },
-            headers={"X-API-Key": API_KEY},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp_handoff.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
@@ -815,9 +818,9 @@ def test_lifecycle_full_ingest_to_done(
         # 4. Submit cut bounds -> transitions talk to 'cutting' and enqueues job_cut
         mock_light_queue.reset_mock()
         resp3 = client.post(
-            f"/talks/{talk.id}/cut",
-            json={"cut_start": "00:00:10", "cut_end": "00:50:00"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/cut',
+            json={'cut_start': '00:00:10', 'cut_end': '00:50:00'},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp3.status_code == 202
         reloaded = _talk(db_session, talk.id)
@@ -834,7 +837,7 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.GENERATING_PREVIEWS
         assert any(
-            j.kind == "cut" and j.status == "done"
+            j.kind == JobKind.CUT and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -846,16 +849,16 @@ def test_lifecycle_full_ingest_to_done(
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.PREVIEW
         assert any(
-            j.kind == "preview" and j.status == "done"
+            j.kind == JobKind.PREVIEW and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
 
         # 7. Review talk -> transitions talk to 'assembling' and enqueues job_intro
         mock_light_queue.reset_mock()
         resp4 = client.post(
-            f"/talks/{talk.id}/review",
-            json={"decision": "approve", "note": "Looks great!"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/review',
+            json={'decision': 'approve', 'note': 'Looks great!'},
+            headers={'X-API-Key': API_KEY},
         )
         assert resp4.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.ASSEMBLING
@@ -865,9 +868,9 @@ def test_lifecycle_full_ingest_to_done(
 
         # 8. Execute job_intro -> dispatches assembly to enqueue job_concat
         mock_light_queue.reset_mock()
-        job_intro(talk.id, cut_key, f"{talk.id}/intro/intro.mp4")
+        job_intro(talk.id, cut_key, f'{talk.id}/intro/intro.mp4')
         assert any(
-            j.kind == "intro" and j.status == "done"
+            j.kind == JobKind.INTRO and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -879,12 +882,12 @@ def test_lifecycle_full_ingest_to_done(
         job_concat(
             talk.id,
             cut_key=cut_key,
-            intro_key=f"{talk.id}/intro/intro.mp4",
+            intro_key=f'{talk.id}/intro/intro.mp4',
             outro_key=None,
-            concat_key=f"{talk.id}/assemble/assemble.mp4",
+            concat_key=f'{talk.id}/assemble/assemble.mp4',
         )
         assert any(
-            j.kind == "concat" and j.status == "done"
+            j.kind == JobKind.CONCAT and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -896,13 +899,13 @@ def test_lifecycle_full_ingest_to_done(
         mock_heavy_queue.reset_mock()
         job_loudness(
             talk.id,
-            f"{talk.id}/assemble/assemble.mp4",
-            f"{talk.id}/assemble/assemble_loud.mp4",
+            f'{talk.id}/assemble/assemble.mp4',
+            f'{talk.id}/assemble/assemble_loud.mp4',
         )
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.TRANSCODING
         assert any(
-            j.kind == "loudness" and j.status == "done"
+            j.kind == JobKind.LOUDNESS and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_heavy_queue.enqueue.assert_called_once()
@@ -914,13 +917,13 @@ def test_lifecycle_full_ingest_to_done(
         mock_heavy_queue.reset_mock()
         job_transcode(
             talk.id,
-            f"{talk.id}/assemble/assemble_loud.mp4",
-            f"{talk.id}/final/final.mp4",
+            f'{talk.id}/assemble/assemble_loud.mp4',
+            f'{talk.id}/final/final.mp4',
         )
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.UPLOADING
         assert any(
-            j.kind == "transcode" and j.status == "done"
+            j.kind == JobKind.TRANSCODE and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
         mock_light_queue.enqueue.assert_called_once()
@@ -929,33 +932,33 @@ def test_lifecycle_full_ingest_to_done(
 
         # 13. Execute job_publish -> transitions talk to terminal 'done'
         mock_light_queue.reset_mock()
-        job_publish(talk.id, f"{talk.id}/final/final.mp4")
+        job_publish(talk.id, f'{talk.id}/final/final.mp4')
         db_session.expire_all()
         assert _talk(db_session, talk.id).status == TalkStatus.DONE
         assert any(
-            j.kind == "publish" and j.status == "done"
+            j.kind == JobKind.PUBLISH and j.status == JobStatus.DONE
             for j in _talk_jobs(db_session, talk.id)
         )
 
         # 14. Final GET /talks/{id} verify
-        get_resp = client.get(f"/talks/{talk.id}", headers={"X-API-Key": API_KEY})
+        get_resp = client.get(f'/talks/{talk.id}', headers={'X-API-Key': API_KEY})
         assert get_resp.status_code == 200
         talk_payload = get_resp.json()
-        assert talk_payload["status"] == "done"
-        assert talk_payload["cut_start"] == 10.0
-        assert talk_payload["cut_end"] == 3000.0
-        assert talk_payload["raw_duration_seconds"] == 3600.0
+        assert talk_payload['status'] == 'done'
+        assert talk_payload['cut_start'] == 10.0
+        assert talk_payload['cut_end'] == 3000.0
+        assert talk_payload['raw_duration_seconds'] == 3600.0
         jobs = _talk_jobs(db_session, talk.id)
         assert len(jobs) == 8
         assert {j.kind for j in jobs} == {
-            "detect",
-            "cut",
-            "preview",
-            "intro",
-            "concat",
-            "loudness",
-            "transcode",
-            "publish",
+            'detect',
+            'cut',
+            'preview',
+            'intro',
+            'concat',
+            'loudness',
+            'transcode',
+            'publish',
         }
 
     app.dependency_overrides.pop(get_storage_backend, None)
@@ -967,69 +970,69 @@ def test_cross_tenant_event_scoping_isolation(db_session: Session) -> None:
     Verifies that a client authorized only for event B receives 404 Not Found (or 403 Forbidden)
     and cannot inspect or mutate talks/jobs belonging to event A.
     """
-    event1 = _create_event(db_session, "Tenant A Event")
-    event2 = _create_event(db_session, "Tenant B Event")
+    event1 = _create_event(db_session, 'Tenant A Event')
+    event2 = _create_event(db_session, 'Tenant B Event')
 
-    talk = _create_talk(db_session, event1.id, title="Tenant A Talk")
-    job = models.Job(talk_id=talk.id, kind="detect", status="done")
+    talk = _create_talk(db_session, event1.id, title='Tenant A Talk')
+    job = models.Job(talk_id=talk.id, kind=JobKind.DETECT, status=JobStatus.DONE)
     db_session.add(job)
     db_session.commit()
 
     # Authenticated client scoped strictly to event2 (Tenant B)
-    _create_api_client(db_session, event_ids=[event2.id], api_key="client_b")
-    api_key_header = {"X-API-Key": "client_b"}
+    _create_api_client(db_session, event_ids=[event2.id], api_key='client_b')
+    api_key_header = {'X-API-Key': 'client_b'}
 
     # 1. GET /talks/{talk.id} -> 404
-    r1 = client.get(f"/talks/{talk.id}", headers=api_key_header)
+    r1 = client.get(f'/talks/{talk.id}', headers=api_key_header)
     assert r1.status_code == 404
-    assert r1.json()["detail"] == "Talk not found"
+    assert r1.json()['detail'] == 'Talk not found'
 
     # 2. GET /jobs/{job.id} -> 404
-    r2 = client.get(f"/jobs/{job.id}", headers=api_key_header)
+    r2 = client.get(f'/jobs/{job.id}', headers=api_key_header)
     assert r2.status_code == 404
-    assert r2.json()["detail"] == "Job not found"
+    assert r2.json()['detail'] == 'Job not found'
 
     # 3. POST /talks/{talk.id}/recordings -> 404
     r3 = client.post(
-        f"/talks/{talk.id}/recordings",
-        json={"source_path": "/tmp/test.mp4"},
+        f'/talks/{talk.id}/recordings',
+        json={'source_path': '/tmp/test.mp4'},
         headers=api_key_header,
     )
     assert r3.status_code == 404
-    assert r3.json()["detail"] == "Talk not found"
+    assert r3.json()['detail'] == 'Talk not found'
 
     # 4. POST /talks/{talk.id}/approve -> 404
     r4 = client.post(
-        f"/talks/{talk.id}/approve",
-        json={"decision": "approve"},
+        f'/talks/{talk.id}/approve',
+        json={'decision': 'approve'},
         headers=api_key_header,
     )
     assert r4.status_code == 404
-    assert r4.json()["detail"] == "Talk not found"
+    assert r4.json()['detail'] == 'Talk not found'
 
     # 5. POST /talks/{talk.id}/cut -> 404
     r5 = client.post(
-        f"/talks/{talk.id}/cut",
-        json={"cut_start": "00:00:10", "cut_end": "00:20:00"},
+        f'/talks/{talk.id}/cut',
+        json={'cut_start': '00:00:10', 'cut_end': '00:20:00'},
         headers=api_key_header,
     )
     assert r5.status_code == 404
-    assert r5.json()["detail"] == "Talk not found"
+    assert r5.json()['detail'] == 'Talk not found'
 
     # 6. POST /talks/{talk.id}/abort -> 404
-    r6 = client.post(f"/talks/{talk.id}/abort", headers=api_key_header)
+    r6 = client.post(f'/talks/{talk.id}/abort', headers=api_key_header)
     assert r6.status_code == 404
-    assert r6.json()["detail"] == "Talk not found"
+    assert r6.json()['detail'] == 'Talk not found'
 
     # 7. GET /talks/{talk.id}/raw-preview -> 404
-    r7 = client.get(f"/talks/{talk.id}/raw-preview", headers=api_key_header)
+    r7 = client.get(f'/talks/{talk.id}/raw-preview', headers=api_key_header)
     assert r7.status_code == 404
-    assert r7.json()["detail"] == "Talk not found"
+    assert r7.json()['detail'] == 'Talk not found'
 
     # 8. POST /talks/{talk.id}/review -> 403 (unauthorized event)
     r8 = client.post(
-        f"/talks/{talk.id}/review",
-        json={"decision": "approve"},
+        f'/talks/{talk.id}/review',
+        json={'decision': 'approve'},
         headers=api_key_header,
     )
     assert r8.status_code == 403
@@ -1051,7 +1054,7 @@ def _e2e_dummy_light_task(val: int = 1) -> int:
 def _e2e_dummy_heavy_task(duration: float = 0.5) -> str:
 
     time.sleep(duration)
-    return "heavy_complete"
+    return 'heavy_complete'
 
 
 def _run_named_simple_worker(redis_url: str, queue_name: str) -> None:
@@ -1070,22 +1073,22 @@ def test_e2e_heavy_light_queue_isolation() -> None:
     """
 
     # 1. Verify queue configuration segregation
-    assert STAGE_CONFIG["transcode"]["queue"] == "heavy"
-    assert STAGE_CONFIG["detect"]["queue"] == "light"
-    assert STAGE_CONFIG["cut"]["queue"] == "light"
-    assert STAGE_CONFIG["preview"]["queue"] == "light"
-    assert STAGE_CONFIG["loudness"]["queue"] == "light"
-    assert STAGE_CONFIG["publish"]["queue"] == "light"
+    assert STAGE_CONFIG[JobKind.TRANSCODE]['queue'] == 'heavy'
+    assert STAGE_CONFIG[JobKind.DETECT]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.CUT]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.PREVIEW]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.LOUDNESS]['queue'] == 'light'
+    assert STAGE_CONFIG[JobKind.PUBLISH]['queue'] == 'light'
 
     # 2. Verify independent Queue instances and names
-    assert light_queue.name == "light"
-    assert heavy_queue.name == "heavy"
+    assert light_queue.name == 'light'
+    assert heavy_queue.name == 'heavy'
     assert light_queue.name != heavy_queue.name
 
     # 3. Real RQ queue isolation: light-only worker drains light queue and leaves heavy work queued
     conn = redis.from_url(settings.redis_url)
-    iso_heavy_q = Queue(f"test_heavy_{uuid4().hex}", connection=conn)
-    iso_light_q = Queue(f"test_light_{uuid4().hex}", connection=conn)
+    iso_heavy_q = Queue(f'test_heavy_{uuid4().hex}', connection=conn)
+    iso_light_q = Queue(f'test_light_{uuid4().hex}', connection=conn)
 
     try:
         heavy_job = iso_heavy_q.enqueue(_e2e_dummy_heavy_task, 0.1)
@@ -1097,16 +1100,16 @@ def test_e2e_heavy_light_queue_isolation() -> None:
         light_job.refresh()
         heavy_job.refresh()
 
-        assert light_job.get_status() in ("finished", "done")
+        assert light_job.get_status() in ('finished', 'done')
         assert light_job.return_value() == 42
-        assert heavy_job.get_status() == "queued"
+        assert heavy_job.get_status() == 'queued'
         assert iso_heavy_q.count == 1
 
         # Drain heavy queue
         SimpleWorker([iso_heavy_q], connection=conn).work(burst=True)
         heavy_job.refresh()
-        assert heavy_job.get_status() in ("finished", "done")
-        assert heavy_job.return_value() == "heavy_complete"
+        assert heavy_job.get_status() in ('finished', 'done')
+        assert heavy_job.return_value() == 'heavy_complete'
         assert iso_heavy_q.count == 0
     finally:
         iso_heavy_q.empty()
@@ -1130,9 +1133,9 @@ def test_lifecycle_disk_guard_insufficient_storage(db_session: Session) -> None:
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
     with (
-        patch("app.routes.talks.light_queue") as mock_light_q,
+        patch('app.routes.talks.light_queue') as mock_light_q,
         patch(
-            "app.routes.talks.stage_recording",
+            'app.routes.talks.stage_recording',
             side_effect=InsufficientStorageError(
                 required_bytes=1000000, available_bytes=100
             ),
@@ -1140,12 +1143,12 @@ def test_lifecycle_disk_guard_insufficient_storage(db_session: Session) -> None:
     ):
         try:
             resp = client.post(
-                f"/talks/{talk.id}/recordings",
-                json={"source_path": "/tmp/mock_source.mp4"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/recordings',
+                json={'source_path': '/tmp/mock_source.mp4'},
+                headers={'X-API-Key': API_KEY},
             )
             assert resp.status_code == 507
-            assert "Insufficient storage" in resp.json()["detail"]
+            assert 'Insufficient storage' in resp.json()['detail']
             assert _talk(db_session, talk.id).status == TalkStatus.WAITING_FILES
             mock_light_q.enqueue.assert_not_called()
         finally:
@@ -1165,7 +1168,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
     talk = _create_talk(
         db_session,
         event.id,
-        title="Review Flow Talk",
+        title='Review Flow Talk',
         status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
@@ -1174,45 +1177,45 @@ def test_lifecycle_full_approve_review_flow_to_done(
     _create_api_client(db_session, event_ids=[event.id])
 
     storage_data: dict[str, str] = {
-        f"{talk.id}/raw/mock_source.mp4": "raw_video_bytes",
-        f"{talk.id}/cut/cut.mp4": "cut_video_bytes",
-        f"{talk.id}/preview/preview.mp4": "preview_video_bytes",
+        f'{talk.id}/raw/mock_source.mp4': 'raw_video_bytes',
+        f'{talk.id}/cut/cut.mp4': 'cut_video_bytes',
+        f'{talk.id}/preview/preview.mp4': 'preview_video_bytes',
     }
     mock_storage = MagicMock()
     mock_storage.exists.side_effect = lambda k: k in storage_data
-    mock_storage.get.side_effect = lambda k: Path(f"/tmp/{k}")
-    mock_storage.url.side_effect = lambda k: f"https://cdn.example.com/{k}"
+    mock_storage.get.side_effect = lambda k: Path(f'/tmp/{k}')
+    mock_storage.url.side_effect = lambda k: f'https://cdn.example.com/{k}'
     mock_storage.put.side_effect = lambda key, source: storage_data.update(
         {key: str(source)}
     )
-    mock_storage.list_keys.side_effect = lambda prefix="": [
+    mock_storage.list_keys.side_effect = lambda prefix='': [
         k for k in storage_data if k.startswith(prefix)
     ]
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
-    cut_key = f"{talk.id}/cut/cut.mp4"
+    cut_key = f'{talk.id}/cut/cut.mp4'
 
     try:
         with (
-            patch("app.routes.talks.light_queue") as mock_lq,
-            patch("app.routes.talks.heavy_queue") as mock_hq,
-            patch("app.tasks.light_queue", mock_lq),
-            patch("app.tasks.heavy_queue", mock_hq),
-            patch("app.tasks.get_storage_backend", return_value=mock_storage),
-            patch("app.tasks.concat"),
-            patch("app.tasks.normalize"),
-            patch("app.tasks.transcode"),
-            patch("app.tasks.publish") as mock_publish_fn,
+            patch('app.routes.talks.light_queue') as mock_lq,
+            patch('app.routes.talks.heavy_queue') as mock_hq,
+            patch('app.tasks.light_queue', mock_lq),
+            patch('app.tasks.heavy_queue', mock_hq),
+            patch('app.tasks.get_storage_backend', return_value=mock_storage),
+            patch('app.tasks.concat'),
+            patch('app.tasks.normalize'),
+            patch('app.tasks.transcode'),
+            patch('app.tasks.publish') as mock_publish_fn,
         ):
             mock_publish_fn.side_effect = lambda *args, **kwargs: storage_data.update(
-                {f"{talk.id}/final/final.mp4": "published_video"}
+                {f'{talk.id}/final/final.mp4': 'published_video'}
             )
 
             # 1. Speaker approves preview -> transitions to 'assembling' and enqueues job_concat
             review_resp = client.post(
-                f"/talks/{talk.id}/review",
-                json={"decision": "approve", "note": "Approved by speaker"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/review',
+                json={'decision': 'approve', 'note': 'Approved by speaker'},
+                headers={'X-API-Key': API_KEY},
             )
             assert review_resp.status_code == 200
             assert _talk(db_session, talk.id).status == TalkStatus.ASSEMBLING
@@ -1221,8 +1224,8 @@ def test_lifecycle_full_approve_review_flow_to_done(
                 select(models.Review).where(models.Review.talk_id == talk.id)
             )
             assert review is not None
-            assert review.decision == "approve"
-            assert review.note == "Approved by speaker"
+            assert review.decision == 'approve'
+            assert review.note == 'Approved by speaker'
 
             mock_lq.enqueue.assert_called_once()
             queued_concat_task, *_ = mock_lq.enqueue.call_args[0]
@@ -1235,7 +1238,7 @@ def test_lifecycle_full_approve_review_flow_to_done(
                 cut_key=cut_key,
                 intro_key=None,
                 outro_key=None,
-                concat_key=f"{talk.id}/assemble/assemble.mp4",
+                concat_key=f'{talk.id}/assemble/assemble.mp4',
             )
             mock_lq.enqueue.assert_called_once()
             queued_loudness, *_ = mock_lq.enqueue.call_args[0]
@@ -1246,8 +1249,8 @@ def test_lifecycle_full_approve_review_flow_to_done(
             mock_hq.reset_mock()
             job_loudness(
                 talk.id,
-                f"{talk.id}/assemble/assemble.mp4",
-                f"{talk.id}/assemble/assemble_loud.mp4",
+                f'{talk.id}/assemble/assemble.mp4',
+                f'{talk.id}/assemble/assemble_loud.mp4',
             )
             db_session.expire_all()
             assert _talk(db_session, talk.id).status == TalkStatus.TRANSCODING
@@ -1260,8 +1263,8 @@ def test_lifecycle_full_approve_review_flow_to_done(
             mock_hq.reset_mock()
             job_transcode(
                 talk.id,
-                f"{talk.id}/assemble/assemble_loud.mp4",
-                f"{talk.id}/final/final.mp4",
+                f'{talk.id}/assemble/assemble_loud.mp4',
+                f'{talk.id}/final/final.mp4',
             )
             db_session.expire_all()
             assert _talk(db_session, talk.id).status == TalkStatus.UPLOADING
@@ -1270,16 +1273,16 @@ def test_lifecycle_full_approve_review_flow_to_done(
             assert queued_publish == job_publish
 
             # 6. Execute job_publish -> transitions talk to 'done' and verifies final storage artifact
-            job_publish(talk.id, f"{talk.id}/final/final.mp4")
+            job_publish(talk.id, f'{talk.id}/final/final.mp4')
             db_session.expire_all()
             assert _talk(db_session, talk.id).status == TalkStatus.DONE
-            assert mock_storage.exists(f"{talk.id}/final/final.mp4")
+            assert mock_storage.exists(f'{talk.id}/final/final.mp4')
 
             # 7. Final GET /talks/{id} verification
-            get_resp = client.get(f"/talks/{talk.id}", headers={"X-API-Key": API_KEY})
+            get_resp = client.get(f'/talks/{talk.id}', headers={'X-API-Key': API_KEY})
             assert get_resp.status_code == 200
             data = get_resp.json()
-            assert data["status"] == "done"
+            assert data['status'] == 'done'
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -1293,7 +1296,7 @@ def test_lifecycle_needs_work_review_loop(
     talk = _create_talk(
         db_session,
         event.id,
-        title="Needs Work Loop Talk",
+        title='Needs Work Loop Talk',
         status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
@@ -1303,37 +1306,37 @@ def test_lifecycle_needs_work_review_loop(
 
     mock_storage = MagicMock()
     mock_storage.exists.return_value = True
-    mock_storage.get.return_value = Path("/tmp/mock_raw.mp4")
-    mock_storage.list_keys.return_value = [f"{talk.id}/raw/mock_source.mp4"]
-    mock_storage.url.return_value = "https://example.com/preview.mp4"
+    mock_storage.get.return_value = Path('/tmp/mock_raw.mp4')
+    mock_storage.list_keys.return_value = [f'{talk.id}/raw/mock_source.mp4']
+    mock_storage.url.return_value = 'https://example.com/preview.mp4'
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
 
-    raw_key = f"{talk.id}/raw/mock_source.mp4"
-    cut_key = f"{talk.id}/cut/cut.mp4"
+    raw_key = f'{talk.id}/raw/mock_source.mp4'
+    cut_key = f'{talk.id}/cut/cut.mp4'
 
     try:
         with (
-            patch("app.tasks.get_storage_backend", return_value=mock_storage),
-            patch("app.tasks.cut"),
-            patch("app.tasks.generate_preview"),
-            patch("app.routes.talks.light_queue") as mock_lq,
-            patch("app.tasks.light_queue", mock_lq),
+            patch('app.tasks.get_storage_backend', return_value=mock_storage),
+            patch('app.tasks.cut'),
+            patch('app.tasks.generate_preview'),
+            patch('app.routes.talks.light_queue') as mock_lq,
+            patch('app.tasks.light_queue', mock_lq),
         ):
             # === CYCLE 1: needs_work -> pending_bounds -> cutting -> preview ===
             # Speaker requests rework
             r1 = client.post(
-                f"/talks/{talk.id}/review",
-                json={"decision": "needs_work", "note": "Cut head too close"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/review',
+                json={'decision': 'needs_work', 'note': 'Cut head too close'},
+                headers={'X-API-Key': API_KEY},
             )
             assert r1.status_code == 200
             assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
             # Operator resubmits cut bounds
             cut1 = client.post(
-                f"/talks/{talk.id}/cut",
-                json={"cut_start": "00:00:15", "cut_end": "00:45:00"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/cut',
+                json={'cut_start': '00:00:15', 'cut_end': '00:45:00'},
+                headers={'X-API-Key': API_KEY},
             )
             assert cut1.status_code == 202
             reloaded = _talk(db_session, talk.id)
@@ -1352,18 +1355,18 @@ def test_lifecycle_needs_work_review_loop(
             # === CYCLE 2: needs_work -> pending_bounds -> cutting -> preview ===
             # Speaker requests second rework
             r2 = client.post(
-                f"/talks/{talk.id}/review",
-                json={"decision": "needs_work", "note": "Need 5s more at the end"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/review',
+                json={'decision': 'needs_work', 'note': 'Need 5s more at the end'},
+                headers={'X-API-Key': API_KEY},
             )
             assert r2.status_code == 200
             assert _talk(db_session, talk.id).status == TalkStatus.PENDING_BOUNDS
 
             # Operator resubmits revised cut bounds
             cut2 = client.post(
-                f"/talks/{talk.id}/cut",
-                json={"cut_start": "00:00:15", "cut_end": "00:46:00"},
-                headers={"X-API-Key": API_KEY},
+                f'/talks/{talk.id}/cut',
+                json={'cut_start': '00:00:15', 'cut_end': '00:46:00'},
+                headers={'X-API-Key': API_KEY},
             )
             assert cut2.status_code == 202
             reloaded = _talk(db_session, talk.id)
@@ -1386,9 +1389,9 @@ def test_lifecycle_needs_work_review_loop(
                 )
             )
             assert len(reviews) == 2
-            assert [r.decision for r in reviews] == ["needs_work", "needs_work"]
-            assert reviews[0].note == "Cut head too close"
-            assert reviews[1].note == "Need 5s more at the end"
+            assert [r.decision for r in reviews] == ['needs_work', 'needs_work']
+            assert reviews[0].note == 'Cut head too close'
+            assert reviews[1].note == 'Need 5s more at the end'
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -1399,7 +1402,7 @@ def test_lifecycle_initial_approval_reject_flow(db_session: Session) -> None:
     talk = _create_talk(
         db_session,
         event.id,
-        title="Reject Flow Talk",
+        title='Reject Flow Talk',
         status=TalkStatus.PENDING_APPROVAL,
     )
     _create_api_client(db_session, event_ids=[event.id])
@@ -1409,9 +1412,9 @@ def test_lifecycle_initial_approval_reject_flow(db_session: Session) -> None:
 
     try:
         r1 = client.post(
-            f"/talks/{talk.id}/approve",
-            json={"decision": "reject"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/approve',
+            json={'decision': 'reject'},
+            headers={'X-API-Key': API_KEY},
         )
         assert r1.status_code == 200
         assert _talk(db_session, talk.id).status == TalkStatus.REJECTED
@@ -1427,7 +1430,7 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup(
     talk = _create_talk(
         db_session,
         event.id,
-        title="Reject Cleanup Talk",
+        title='Reject Cleanup Talk',
         status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=1800.0,
@@ -1439,9 +1442,9 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup(
 
     try:
         r = client.post(
-            f"/talks/{talk.id}/review",
-            json={"decision": "reject", "note": "Recording unsuitable"},
-            headers={"X-API-Key": API_KEY},
+            f'/talks/{talk.id}/review',
+            json={'decision': 'reject', 'note': 'Recording unsuitable'},
+            headers={'X-API-Key': API_KEY},
         )
         assert r.status_code == 200
 
@@ -1455,11 +1458,11 @@ def test_lifecycle_speaker_review_reject_and_storage_cleanup(
             select(models.Review).where(models.Review.talk_id == talk.id)
         )
         assert review is not None
-        assert review.decision == "reject"
-        assert review.note == "Recording unsuitable"
+        assert review.decision == 'reject'
+        assert review.note == 'Recording unsuitable'
 
-        mock_storage.delete.assert_any_call(f"{talk.id}/cut")
-        mock_storage.delete.assert_any_call(f"{talk.id}/preview")
+        mock_storage.delete.assert_any_call(f'{talk.id}/cut')
+        mock_storage.delete.assert_any_call(f'{talk.id}/preview')
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -1469,14 +1472,14 @@ def test_job_progress_tracking_transcode_polling(db_session: Session) -> None:
     now = datetime.now(UTC)
     event = _create_event(db_session)
     talk = _create_talk(
-        db_session, event.id, title="Progress Talk", status=TalkStatus.TRANSCODING
+        db_session, event.id, title='Progress Talk', status=TalkStatus.TRANSCODING
     )
     _create_api_client(db_session, event_ids=[event.id])
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         progress_pct=25.0,
         started_at=now - timedelta(seconds=10),
         updated_at=now,
@@ -1485,11 +1488,11 @@ def test_job_progress_tracking_transcode_polling(db_session: Session) -> None:
     db_session.commit()
 
     # Poll 1: initial progress at 25%
-    p1 = client.get(f"/jobs/{job.id}", headers={"X-API-Key": API_KEY})
+    p1 = client.get(f'/jobs/{job.id}', headers={'X-API-Key': API_KEY})
     assert p1.status_code == 200
     data1 = p1.json()
-    assert data1["progress_pct"] == 25.0
-    assert data1["status"] == "running"
+    assert data1['progress_pct'] == 25.0
+    assert data1['status'] == 'running'
 
     # Advance job progress to 75%
     job.progress_pct = 75.0
@@ -1497,19 +1500,19 @@ def test_job_progress_tracking_transcode_polling(db_session: Session) -> None:
     db_session.commit()
 
     # Poll 2: updated progress at 75%
-    p2 = client.get(f"/jobs/{job.id}", headers={"X-API-Key": API_KEY})
+    p2 = client.get(f'/jobs/{job.id}', headers={'X-API-Key': API_KEY})
     assert p2.status_code == 200
     data2 = p2.json()
-    assert data2["progress_pct"] == 75.0
-    assert data2["progress_pct"] > data1["progress_pct"]
+    assert data2['progress_pct'] == 75.0
+    assert data2['progress_pct'] > data1['progress_pct']
 
     # Finalize job to done at 100%
     job.progress_pct = 100.0
-    job.status = "done"
+    job.status = JobStatus.DONE
     db_session.commit()
 
-    p3 = client.get(f"/jobs/{job.id}", headers={"X-API-Key": API_KEY})
+    p3 = client.get(f'/jobs/{job.id}', headers={'X-API-Key': API_KEY})
     assert p3.status_code == 200
     data3 = p3.json()
-    assert data3["progress_pct"] == 100.0
-    assert data3["status"] == "done"
+    assert data3['progress_pct'] == 100.0
+    assert data3['status'] == 'done'

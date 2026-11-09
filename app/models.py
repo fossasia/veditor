@@ -24,10 +24,9 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from app.db import Base
-from app.retention import validate_retention_overrides
-
-from .consts import TalkStatus
+from .consts import AuthRole, JobKind, JobStatus, TalkStatus
+from .db import Base
+from .retention import validate_retention_overrides
 
 
 class RetentionOverrides(MutableDict):
@@ -54,34 +53,40 @@ class RetentionOverrides(MutableDict):
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = 'users'
     __table_args__ = (
-        Index("idx_users_email", "email", unique=True),
+        Index('idx_users_email', 'email', unique=True),
         CheckConstraint(
             "role IN ('user', 'organizer', 'admin', 'speaker')",
-            name="ck_users_role",
+            name='ck_users_role',
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(
-        String(32),
-        default="user",
+    role: Mapped[AuthRole] = mapped_column(
+        SAEnum(
+            AuthRole,
+            native_enum=False,
+            length=32,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        default=AuthRole.USER,
         server_default=text("'user'"),
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
-        server_default=text("true"),
+        server_default=text('true'),
         nullable=False,
     )
     is_verified: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
-        server_default=text("false"),
+        server_default=text('false'),
         nullable=False,
     )
     verified_at: Mapped[datetime | None] = mapped_column(
@@ -92,7 +97,7 @@ class User(Base):
     organizer_requested: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
-        server_default=text("false"),
+        server_default=text('false'),
         nullable=False,
     )
     organizer_request_note: Mapped[str | None] = mapped_column(
@@ -123,19 +128,19 @@ class User(Base):
         nullable=False,
     )
 
-    events: Mapped[list[Event]] = relationship(back_populates="created_by_user")
-    reviews: Mapped[list[Review]] = relationship(back_populates="user")
+    events: Mapped[list[Event]] = relationship(back_populates='created_by_user')
+    reviews: Mapped[list[Review]] = relationship(back_populates='user')
 
     def __init__(self, **kwargs: Any) -> None:
-        if "session_revoked_at" not in kwargs:
-            kwargs["session_revoked_at"] = datetime.fromtimestamp(0, UTC)
+        if 'session_revoked_at' not in kwargs:
+            kwargs['session_revoked_at'] = datetime.fromtimestamp(0, UTC)
         super().__init__(**kwargs)
 
 
 class Event(Base):
-    __tablename__ = "events"
+    __tablename__ = 'events'
     __table_args__ = (
-        UniqueConstraint("source", "external_id", name="uq_events_source_external_id"),
+        UniqueConstraint('source', 'external_id', name='uq_events_source_external_id'),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -155,24 +160,24 @@ class Event(Base):
     )
     created_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey(
-            "users.id",
-            name="fk_events_created_by_user_id_users",
-            ondelete="SET NULL",
+            'users.id',
+            name='fk_events_created_by_user_id_users',
+            ondelete='SET NULL',
         ),
         nullable=True,
     )
 
     talks: Mapped[list[Talk]] = relationship(
-        back_populates="event", cascade="all, delete-orphan"
+        back_populates='event', cascade='all, delete-orphan'
     )
     rooms: Mapped[list[Room]] = relationship(
-        back_populates="event",
-        cascade="all, delete-orphan",
-        order_by="Room.name",
+        back_populates='event',
+        cascade='all, delete-orphan',
+        order_by='Room.name',
     )
-    created_by_user: Mapped[User | None] = relationship(back_populates="events")
+    created_by_user: Mapped[User | None] = relationship(back_populates='events')
 
-    @validates("retention_overrides")
+    @validates('retention_overrides')
     def _validate_retention_overrides(self, key: str, value: Any) -> Any:
         return validate_retention_overrides(value)
 
@@ -196,21 +201,21 @@ class Event(Base):
     def is_eventyay_synced(self) -> bool:
         if not isinstance(self.source, str):
             return False
-        return self.source.strip().lower() in ("eventyay", "platform")
+        return self.source.strip().lower() in ('eventyay', 'platform')
 
 
 class Room(Base):
-    __tablename__ = "rooms"
+    __tablename__ = 'rooms'
     __table_args__ = (
-        UniqueConstraint("event_id", "name", name="uq_rooms_event_id_name"),
+        UniqueConstraint('event_id', 'name', name='uq_rooms_event_id_name'),
         Index(
-            "uq_rooms_event_id_name_ci", "event_id", text("lower(name)"), unique=True
+            'uq_rooms_event_id_name_ci', 'event_id', text('lower(name)'), unique=True
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[int] = mapped_column(
-        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey('events.id', ondelete='CASCADE'), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -221,16 +226,16 @@ class Room(Base):
         nullable=False,
     )
 
-    event: Mapped[Event] = relationship(back_populates="rooms")
+    event: Mapped[Event] = relationship(back_populates='rooms')
 
 
 class Client(Base):
-    __tablename__ = "clients"
+    __tablename__ = 'clients'
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_platform: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=text("false"), nullable=False
+        Boolean, default=False, server_default=text('false'), nullable=False
     )
     hashed_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     event_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
@@ -252,18 +257,18 @@ class Client(Base):
 
 
 class Talk(Base):
-    __tablename__ = "talks"
+    __tablename__ = 'talks'
     __table_args__ = (
         UniqueConstraint(
-            "event_id", "title", "start", name="uq_talks_event_id_title_start"
+            'event_id', 'title', 'start', name='uq_talks_event_id_title_start'
         ),
         UniqueConstraint(
-            "event_id", "external_id", name="uq_talks_event_id_external_id"
+            'event_id', 'external_id', name='uq_talks_event_id_external_id'
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False)
+    event_id: Mapped[int] = mapped_column(ForeignKey('events.id'), nullable=False)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     room: Mapped[str | None] = mapped_column(String(255))
@@ -287,7 +292,7 @@ class Talk(Base):
         DateTime(timezone=True), nullable=True
     )
     handed_off_by_user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ForeignKey('users.id', ondelete='SET NULL'), nullable=True
     )
     raw_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     cut_start: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -312,18 +317,18 @@ class Talk(Base):
         nullable=True,
     )
 
-    event: Mapped[Event] = relationship(back_populates="talks")
+    event: Mapped[Event] = relationship(back_populates='talks')
     jobs: Mapped[list[Job]] = relationship(
-        back_populates="talk", cascade="all, delete-orphan"
+        back_populates='talk', cascade='all, delete-orphan'
     )
     reviews: Mapped[list[Review]] = relationship(
-        back_populates="talk", cascade="all, delete-orphan"
+        back_populates='talk', cascade='all, delete-orphan'
     )
     approved_cuts: Mapped[list[ApprovedCut]] = relationship(
-        back_populates="talk", cascade="all, delete-orphan"
+        back_populates='talk', cascade='all, delete-orphan'
     )
 
-    @validates("speaker_email")
+    @validates('speaker_email')
     def _validate_speaker_email(self, key: str, value: str | None) -> str | None:
         return value.strip().lower() or None if value else None
 
@@ -334,12 +339,30 @@ class Talk(Base):
 
 
 class Job(Base):
-    __tablename__ = "jobs"
+    __tablename__ = 'jobs'
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    talk_id: Mapped[int] = mapped_column(ForeignKey("talks.id"), nullable=False)
-    kind: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    talk_id: Mapped[int] = mapped_column(ForeignKey('talks.id'), nullable=False)
+    kind: Mapped[JobKind] = mapped_column(
+        SAEnum(
+            JobKind,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+    )
+    status: Mapped[JobStatus] = mapped_column(
+        SAEnum(
+            JobStatus,
+            native_enum=False,
+            length=50,
+            create_constraint=False,
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
+        nullable=False,
+    )
     log_path: Mapped[str | None] = mapped_column(Text)
     progress_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(
@@ -354,13 +377,13 @@ class Job(Base):
         nullable=True,
     )
 
-    talk: Mapped[Talk] = relationship(back_populates="jobs")
+    talk: Mapped[Talk] = relationship(back_populates='jobs')
 
     @property
     def elapsed_time(self) -> float | None:
         """Calculate elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        Uses `updated_at` as the end time for terminal statuses (`JobStatus.is_terminal`)
         when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
@@ -370,7 +393,7 @@ class Job(Base):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed", "broken", "rejected", "cancelled"):
+        if self.status.is_terminal:
             if self.updated_at is None:
                 return None
             end = (
@@ -385,10 +408,10 @@ class Job(Base):
     @property
     def estimated_remaining(self) -> float | None:
         """Estimate remaining runtime in seconds based on elapsed time and progress percentage."""
-        if self.status != "running":
+        if self.status != JobStatus.RUNNING:
             return (
                 0.0
-                if self.status == "done"
+                if self.status == JobStatus.DONE
                 and self.progress_pct is not None
                 and self.progress_pct >= 100.0
                 else None
@@ -407,10 +430,10 @@ class Job(Base):
 
 
 class Review(Base):
-    __tablename__ = "reviews"
+    __tablename__ = 'reviews'
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    talk_id: Mapped[int] = mapped_column(ForeignKey("talks.id"), nullable=False)
+    talk_id: Mapped[int] = mapped_column(ForeignKey('talks.id'), nullable=False)
     decision: Mapped[str] = mapped_column(String(50), nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
@@ -421,19 +444,19 @@ class Review(Base):
     )
     user_id: Mapped[int | None] = mapped_column(
         ForeignKey(
-            "users.id",
-            name="fk_reviews_user_id_users",
-            ondelete="SET NULL",
+            'users.id',
+            name='fk_reviews_user_id_users',
+            ondelete='SET NULL',
         ),
         nullable=True,
     )
 
-    talk: Mapped[Talk] = relationship(back_populates="reviews")
-    user: Mapped[User | None] = relationship(back_populates="reviews")
+    talk: Mapped[Talk] = relationship(back_populates='reviews')
+    user: Mapped[User | None] = relationship(back_populates='reviews')
 
 
 class SystemSetting(Base):
-    __tablename__ = "system_settings"
+    __tablename__ = 'system_settings'
 
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
@@ -448,11 +471,11 @@ class SystemSetting(Base):
 
 
 class ApprovedCut(Base):
-    __tablename__ = "approved_cuts"
+    __tablename__ = 'approved_cuts'
 
     id: Mapped[int] = mapped_column(primary_key=True)
     talk_id: Mapped[int] = mapped_column(
-        ForeignKey("talks.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey('talks.id', ondelete='CASCADE'), nullable=False, index=True
     )
     cut_start: Mapped[float] = mapped_column(Float, nullable=False)
     cut_end: Mapped[float] = mapped_column(Float, nullable=False)
@@ -463,8 +486,8 @@ class ApprovedCut(Base):
         nullable=False,
     )
     review_id: Mapped[int | None] = mapped_column(
-        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+        ForeignKey('reviews.id', ondelete='SET NULL'), nullable=True
     )
 
-    talk: Mapped[Talk] = relationship(back_populates="approved_cuts")
+    talk: Mapped[Talk] = relationship(back_populates='approved_cuts')
     review: Mapped[Review | None] = relationship()

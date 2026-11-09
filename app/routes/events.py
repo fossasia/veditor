@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import logging
@@ -8,29 +9,29 @@ import socket
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from http import HTTPStatus
 from typing import Annotated
 from urllib.parse import urlsplit
 from urllib.request import Request as URLRequest
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import any_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.auth import (
+from .. import models, schemas
+from ..auth import (
     CurrentUser,
     check_event_access,
     get_client,
     hash_api_key,
     require_role,
 )
-from app.config import settings
-from app.consts import AuthRole, SSOScopeType
-from app.db import get_db
-from app.models import Event
-from app.routes.talks import _cancel_talk_jobs, _lock_event_for_room_operation
-from app.schemas import (
+from ..config import settings
+from ..consts import AuthRole, SSOScopeType
+from ..db import get_db
+from ..models import Event
+from ..schemas import (
     ApiKeyCreatedResponse,
     ApiKeyRead,
     RoomRead,
@@ -39,19 +40,21 @@ from app.schemas import (
     WebhookRegisterResponse,
     WebhookTestResponse,
 )
-from app.security import create_sso_token
-from app.storage import StorageBackend, get_storage_backend
-from app.tasks import _webhook_opener
+from ..security import create_sso_token
+from ..storage import StorageBackend, get_storage_backend
+from ..tasks import _webhook_opener
+from .talks import _cancel_talk_jobs, _lock_event_for_room_operation
+
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/events",
-    tags=["events"],
+    prefix='/events',
+    tags=['events'],
 )
 
 
-@router.post("", response_model=schemas.EventRead, status_code=status.HTTP_201_CREATED)
+@router.post('', response_model=schemas.EventRead, status_code=HTTPStatus.CREATED)
 def create_event(
     payload: schemas.EventCreate,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
@@ -59,8 +62,8 @@ def create_event(
 ) -> Event:
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to create events",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to create events',
         )
     created_by = user.user_id if not user.is_machine else None
     event = models.Event(
@@ -92,7 +95,7 @@ def create_event(
     return event
 
 
-@router.get("", response_model=list[schemas.EventRead], status_code=status.HTTP_200_OK)
+@router.get('', response_model=list[schemas.EventRead], status_code=HTTPStatus.OK)
 def list_events(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     db: Annotated[Session, Depends(get_db)],
@@ -103,8 +106,8 @@ def list_events(
                 db.scalars(select(models.Event).where(models.Event.id == user.scope_id))
             )
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO session is not authorized to list events",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO session is not authorized to list events',
         )
     if user.is_machine:
         if user.is_platform:
@@ -130,7 +133,7 @@ def _room_read(room: models.Room, talks_count: int = 0) -> schemas.RoomRead:
     )
 
 
-@router.get("/{event_id}/rooms", response_model=list[schemas.RoomRead])
+@router.get('/{event_id}/rooms', response_model=list[schemas.RoomRead])
 def list_event_rooms(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
@@ -153,9 +156,9 @@ def list_event_rooms(
 
 
 @router.post(
-    "/{event_id}/rooms",
+    '/{event_id}/rooms',
     response_model=schemas.RoomRead,
-    status_code=status.HTTP_201_CREATED,
+    status_code=HTTPStatus.CREATED,
 )
 def create_event_room(
     event_id: int,
@@ -165,7 +168,7 @@ def create_event_room(
 ) -> RoomRead:
     """Create an organizer-managed room scoped to one event."""
     if user.is_sso:
-        raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
+        raise HTTPException(status_code=403, detail='SSO sessions cannot manage rooms')
     check_event_access(event_id, user, db)
     _lock_event_for_room_operation(db, event_id)
     room = models.Room(
@@ -176,12 +179,12 @@ def create_event_room(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Room name already exists") from exc
+        raise HTTPException(status_code=409, detail='Room name already exists') from exc
     db.refresh(room)
     return _room_read(room)
 
 
-@router.patch("/{event_id}/rooms/{room_id}", response_model=schemas.RoomRead)
+@router.patch('/{event_id}/rooms/{room_id}', response_model=schemas.RoomRead)
 def update_event_room(
     event_id: int,
     room_id: int,
@@ -191,7 +194,7 @@ def update_event_room(
 ) -> RoomRead:
     """Update a room and synchronize its talk assignments atomically."""
     if user.is_sso:
-        raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
+        raise HTTPException(status_code=403, detail='SSO sessions cannot manage rooms')
     check_event_access(event_id, user, db)
     _lock_event_for_room_operation(db, event_id)
     room = db.scalar(
@@ -200,7 +203,7 @@ def update_event_room(
         .with_for_update()
     )
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise HTTPException(status_code=404, detail='Room not found')
     if payload.name is not None and payload.name != room.name:
         duplicate = db.scalar(
             select(models.Room).where(
@@ -210,7 +213,7 @@ def update_event_room(
             )
         )
         if duplicate:
-            raise HTTPException(status_code=409, detail="Room name already exists")
+            raise HTTPException(status_code=409, detail='Room name already exists')
         old_name = room.name
         room.name = payload.name
         db.execute(
@@ -223,13 +226,13 @@ def update_event_room(
             .execution_options(synchronize_session=False)
         )
     update_data = payload.model_dump(exclude_unset=True)
-    if "description" in update_data:
-        room.description = update_data["description"]
+    if 'description' in update_data:
+        room.description = update_data['description']
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Room name already exists") from exc
+        raise HTTPException(status_code=409, detail='Room name already exists') from exc
     db.refresh(room)
     count = (
         db.scalar(
@@ -242,7 +245,7 @@ def update_event_room(
     return _room_read(room, count)
 
 
-@router.delete("/{event_id}/rooms/{room_id}")
+@router.delete('/{event_id}/rooms/{room_id}')
 def delete_event_room(
     event_id: int,
     room_id: int,
@@ -251,7 +254,7 @@ def delete_event_room(
 ) -> dict[str, int | str]:
     """Delete a room and clear assignments for talks in the same event."""
     if user.is_sso:
-        raise HTTPException(status_code=403, detail="SSO sessions cannot manage rooms")
+        raise HTTPException(status_code=403, detail='SSO sessions cannot manage rooms')
     check_event_access(event_id, user, db)
     _lock_event_for_room_operation(db, event_id)
     room = db.scalar(
@@ -260,7 +263,7 @@ def delete_event_room(
         .with_for_update()
     )
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise HTTPException(status_code=404, detail='Room not found')
     db.execute(
         update(models.Talk)
         .where(
@@ -272,10 +275,10 @@ def delete_event_room(
     )
     db.delete(room)
     db.commit()
-    return {"status": "ok", "deleted_id": room_id}
+    return {'status': 'ok', 'deleted_id': room_id}
 
 
-@router.patch("/{event_id}", response_model=schemas.EventRead)
+@router.patch('/{event_id}', response_model=schemas.EventRead)
 def update_event(
     event_id: int,
     payload: schemas.EventUpdate,
@@ -284,8 +287,8 @@ def update_event(
 ) -> Event:
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to modify events",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to modify events',
         )
     event = check_event_access(event_id, user, db)
 
@@ -293,8 +296,8 @@ def update_event(
         clean_name = payload.name.strip()
         if not clean_name:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Event name cannot be empty",
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail='Event name cannot be empty',
             )
         event.name = clean_name
 
@@ -311,18 +314,18 @@ def update_event(
         event.speaker_magic_link_expire_hours = payload.speaker_magic_link_expire_hours
 
     fields_set = payload.model_fields_set
-    new_start = payload.start_date if "start_date" in fields_set else event.start_date
-    new_end = payload.end_date if "end_date" in fields_set else event.end_date
+    new_start = payload.start_date if 'start_date' in fields_set else event.start_date
+    new_end = payload.end_date if 'end_date' in fields_set else event.end_date
     if new_start and new_end and new_end < new_start:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="end_date must be greater than or equal to start_date",
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail='end_date must be greater than or equal to start_date',
         )
-    if "start_date" in fields_set:
+    if 'start_date' in fields_set:
         event.start_date = payload.start_date
-    if "end_date" in fields_set:
+    if 'end_date' in fields_set:
         event.end_date = payload.end_date
-    if "timezone" in fields_set:
+    if 'timezone' in fields_set:
         event.timezone = payload.timezone
 
     db.commit()
@@ -330,7 +333,7 @@ def update_event(
     return event
 
 
-@router.delete("/{event_id}")
+@router.delete('/{event_id}')
 def delete_event(
     event_id: int,
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
@@ -339,17 +342,15 @@ def delete_event(
 ) -> dict[str, int | str]:
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to delete events",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to delete events',
         )
     check_event_access(event_id, user, db)
     event = db.scalar(
         select(models.Event).where(models.Event.id == event_id).with_for_update()
     )
     if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Event not found')
 
     talks = list(event.talks)
     for talk in talks:
@@ -362,13 +363,13 @@ def delete_event(
 
     db.delete(event)
     db.commit()
-    return {"status": "ok", "deleted_id": event_id}
+    return {'status': 'ok', 'deleted_id': event_id}
 
 
 @router.post(
-    "/{event_identifier}/sso-token",
+    '/{event_identifier}/sso-token',
     response_model=schemas.SSOTokenResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def create_event_sso_token(
     event_identifier: str,
@@ -393,13 +394,13 @@ def create_event_sso_token(
         event = db.scalar(select(models.Event).where(*event_filters))
     if not event:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Event not found",
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='Event not found',
         )
     if not client.is_platform and event.id not in (client.event_ids or []):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Client is not authorized to mint an SSO token for this event",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='Client is not authorized to mint an SSO token for this event',
         )
 
     target_role = payload.role if payload and payload.role else AuthRole.ORGANIZER
@@ -416,12 +417,12 @@ def create_event_sso_token(
     )
     return schemas.SSOTokenResponse(
         token=token,
-        token_type="bearer",
+        token_type='bearer',
         scope_type=SSOScopeType.EVENT,
         scope_id=event.id,
         role=target_role,
         expires_in_seconds=settings.sso_token_expire_seconds,
-        url=f"/studio?event_id={event.id}&sso_token={token}",
+        url=f'/studio?event_id={event.id}&sso_token={token}',
     )
 
 
@@ -445,9 +446,9 @@ def _get_event_client(event_id: int, db: Session) -> models.Client | None:
 
 
 @router.get(
-    "/{event_id}/api-keys",
+    '/{event_id}/api-keys',
     response_model=list[schemas.ApiKeyRead],
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def list_event_api_keys(
     event_id: int,
@@ -457,8 +458,8 @@ def list_event_api_keys(
     """List all active API keys scoped to this event."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage API keys",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage API keys',
         )
     check_event_access(event_id, user, db)
     event_clients = list(
@@ -473,11 +474,11 @@ def list_event_api_keys(
 
     results = []
     for c in event_clients:
-        masked = f"client_{c.id}_{c.hashed_key[:8]}..."
+        masked = f'client_{c.id}_{c.hashed_key[:8]}...'
         results.append(
             schemas.ApiKeyRead(
                 id=c.id,
-                name=c.name or f"API Key #{c.id}",
+                name=c.name or f'API Key #{c.id}',
                 masked_key=masked,
                 event_ids=list(c.event_ids or []),
                 webhook_url=c.webhook_url,
@@ -490,9 +491,9 @@ def list_event_api_keys(
 
 
 @router.post(
-    "/{event_id}/api-keys",
+    '/{event_id}/api-keys',
     response_model=schemas.ApiKeyCreatedResponse,
-    status_code=status.HTTP_201_CREATED,
+    status_code=HTTPStatus.CREATED,
 )
 def create_event_api_key(
     event_id: int,
@@ -503,8 +504,8 @@ def create_event_api_key(
     """Generate a new event-scoped API key and return the unhashed key once."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage API keys",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage API keys',
         )
     check_event_access(event_id, user, db)
 
@@ -513,7 +514,7 @@ def create_event_api_key(
     name = (
         payload.name.strip()
         if (payload and payload.name and payload.name.strip())
-        else f"Event #{event_id} API Key"
+        else f'Event #{event_id} API Key'
     )
     webhook_url = payload.webhook_url if payload else None
     webhook_secret = payload.webhook_secret if payload else None
@@ -565,8 +566,8 @@ def create_event_api_key(
 
 
 @router.delete(
-    "/{event_id}/api-keys/{client_id}",
-    status_code=status.HTTP_200_OK,
+    '/{event_id}/api-keys/{client_id}',
+    status_code=HTTPStatus.OK,
 )
 def revoke_event_api_key(
     event_id: int,
@@ -577,16 +578,16 @@ def revoke_event_api_key(
     """Revoke an API key scoped to this event."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage API keys",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage API keys',
         )
     check_event_access(event_id, user, db)
 
     client = db.scalar(select(models.Client).where(models.Client.id == client_id))
     if not client or client.is_platform or event_id not in (client.event_ids or []):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key not found for this event",
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='API key not found for this event',
         )
 
     remaining = [eid for eid in (client.event_ids or []) if eid != event_id]
@@ -595,13 +596,13 @@ def revoke_event_api_key(
     else:
         db.delete(client)
     db.commit()
-    return {"status": "ok", "deleted_id": client_id}
+    return {'status': 'ok', 'deleted_id': client_id}
 
 
 @router.get(
-    "/{event_id}/webhook",
+    '/{event_id}/webhook',
     response_model=schemas.WebhookInfoResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def get_event_webhook(
     event_id: int,
@@ -622,10 +623,10 @@ def get_event_webhook(
     if client.webhook_secret:
         if len(client.webhook_secret) > 8:
             masked_secret = (
-                f"{client.webhook_secret[:4]}...{client.webhook_secret[-4:]}"
+                f'{client.webhook_secret[:4]}...{client.webhook_secret[-4:]}'
             )
         else:
-            masked_secret = "********"
+            masked_secret = '********'
 
     return schemas.WebhookInfoResponse(
         url=client.webhook_url,
@@ -635,9 +636,9 @@ def get_event_webhook(
 
 
 @router.post(
-    "/{event_id}/webhook",
+    '/{event_id}/webhook',
     response_model=schemas.WebhookRegisterResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def update_event_webhook(
     event_id: int,
@@ -648,8 +649,8 @@ def update_event_webhook(
     """Configure or update the outbound webhook URL and secret for an event."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage webhook settings",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage webhook settings',
         )
     check_event_access(event_id, user, db)
 
@@ -662,7 +663,7 @@ def update_event_webhook(
         new_client = models.Client(
             hashed_key=hash_api_key(raw_key),
             event_ids=[event_id],
-            name=f"Event #{event_id} Integration",
+            name=f'Event #{event_id} Integration',
             webhook_url=client.webhook_url,
             webhook_secret=client.webhook_secret,
         )
@@ -674,7 +675,7 @@ def update_event_webhook(
         client = models.Client(
             hashed_key=hash_api_key(raw_key),
             event_ids=[event_id],
-            name=f"Event #{event_id} Integration",
+            name=f'Event #{event_id} Integration',
         )
         db.add(client)
 
@@ -701,19 +702,19 @@ def update_event_webhook(
     response_secret = (
         secret
         if secret_was_generated_or_rotated
-        else (f"{secret[:4]}...{secret[-4:]}" if len(secret) > 8 else "********")
+        else (f'{secret[:4]}...{secret[-4:]}' if len(secret) > 8 else '********')
     )
 
     return schemas.WebhookRegisterResponse(
-        status="registered",
+        status='registered',
         url=payload.url,
         secret=response_secret,
     )
 
 
 @router.delete(
-    "/{event_id}/webhook",
-    status_code=status.HTTP_204_NO_CONTENT,
+    '/{event_id}/webhook',
+    status_code=HTTPStatus.NO_CONTENT,
 )
 def delete_event_webhook(
     event_id: int,
@@ -723,8 +724,8 @@ def delete_event_webhook(
     """Clear outbound webhook configuration for this event."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage webhook settings",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage webhook settings',
         )
     check_event_access(event_id, user, db)
     client = _get_event_client(event_id, db)
@@ -744,10 +745,10 @@ def _validate_webhook_target_ip(url: str) -> None:
     parsed = urlsplit(url)
     hostname = parsed.hostname
     if not hostname:
-        raise ValueError("Invalid URL: missing hostname")
+        raise ValueError('Invalid URL: missing hostname')
 
     try:
-        raw_ip = ipaddress.ip_address(hostname.strip("[]"))
+        raw_ip = ipaddress.ip_address(hostname.strip('[]'))
     except ValueError:
         raw_ip = None
 
@@ -760,7 +761,7 @@ def _validate_webhook_target_ip(url: str) -> None:
         or raw_ip.is_link_local
     ):
         raise ValueError(
-            f"Requests to private, loopback, link-local, or special IP addresses ({hostname}) are not allowed"
+            f'Requests to private, loopback, link-local, or special IP addresses ({hostname}) are not allowed'
         )
 
     try:
@@ -779,13 +780,13 @@ def _validate_webhook_target_ip(url: str) -> None:
         try:
             ip_obj = ipaddress.ip_address(ip_str)
         except ValueError as exc:
-            raise ValueError(f"Invalid IP address resolved for host: {ip_str}") from exc
+            raise ValueError(f'Invalid IP address resolved for host: {ip_str}') from exc
 
         check_ips = [ip_obj]
         if isinstance(ip_obj, ipaddress.IPv6Address):
             if ip_obj.ipv4_mapped:
                 check_ips.append(ip_obj.ipv4_mapped)
-            elif ip_obj in ipaddress.IPv6Network("64:ff9b::/96"):
+            elif ip_obj in ipaddress.IPv6Network('64:ff9b::/96'):
                 check_ips.append(ipaddress.IPv4Address(ip_obj.packed[-4:]))
 
         for target_ip in check_ips:
@@ -798,14 +799,14 @@ def _validate_webhook_target_ip(url: str) -> None:
                 or target_ip.is_link_local
             ):
                 raise ValueError(
-                    f"Requests to private, loopback, link-local, or special IP addresses ({ip_str}) are not allowed"
+                    f'Requests to private, loopback, link-local, or special IP addresses ({ip_str}) are not allowed'
                 )
 
 
 @router.post(
-    "/{event_id}/webhook/test",
+    '/{event_id}/webhook/test',
     response_model=schemas.WebhookTestResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
 )
 def test_event_webhook(
     event_id: int,
@@ -816,8 +817,8 @@ def test_event_webhook(
     """Send a signed test ping webhook to verify destination URL and HMAC secret."""
     if user.is_sso:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not permitted to manage webhook settings",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not permitted to manage webhook settings',
         )
     check_event_access(event_id, user, db)
     client = _get_event_client(event_id, db)
@@ -842,13 +843,13 @@ def test_event_webhook(
 
     if not target_url:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No webhook URL provided or configured for testing.",
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail='No webhook URL provided or configured for testing.',
         )
     if not target_secret:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No webhook secret provided or configured for testing.",
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail='No webhook secret provided or configured for testing.',
         )
 
     # Validate target URL against SSRF
@@ -858,57 +859,57 @@ def test_event_webhook(
         return schemas.WebhookTestResponse(
             success=False,
             status_code=None,
-            message=f"SSRF validation failed: {exc}",
+            message=f'SSRF validation failed: {exc}',
         )
 
     test_payload = {
-        "event": "ping",
-        "event_id": event_id,
-        "timestamp": datetime.now(UTC).isoformat(),
-        "message": "VEditor webhook connectivity test",
+        'event': 'ping',
+        'event_id': event_id,
+        'timestamp': datetime.now(UTC).isoformat(),
+        'message': 'VEditor webhook connectivity test',
     }
 
     try:
         payload_bytes = json.dumps(
-            test_payload, separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")
+            test_payload, separators=(',', ':'), sort_keys=True
+        ).encode('utf-8')
         signature = hmac.new(
-            target_secret.encode("utf-8"), payload_bytes, hashlib.sha256
+            target_secret.encode('utf-8'), payload_bytes, hashlib.sha256
         ).hexdigest()
 
         headers = {
-            "Content-Type": "application/json",
-            "X-VEditor-Signature": f"sha256={signature}",
-            "User-Agent": "VEditor-Webhook/1.0",
+            'Content-Type': 'application/json',
+            'X-VEditor-Signature': f'sha256={signature}',
+            'User-Agent': 'VEditor-Webhook/1.0',
         }
         req = URLRequest(
             target_url,
             data=payload_bytes,
             headers=headers,
-            method="POST",
+            method='POST',
         )
         with _webhook_opener.open(req, timeout=5) as resp:
             status_code = resp.status
             return schemas.WebhookTestResponse(
                 success=True,
                 status_code=status_code,
-                message=f"Webhook ping delivered successfully (HTTP {status_code}).",
+                message=f'Webhook ping delivered successfully (HTTP {status_code}).',
             )
     except urllib.error.HTTPError as exc:
         return schemas.WebhookTestResponse(
             success=False,
             status_code=exc.code,
-            message=f"Endpoint returned HTTP {exc.code}: {exc.reason}",
+            message=f'Endpoint returned HTTP {exc.code}: {exc.reason}',
         )
     except urllib.error.URLError as exc:
         return schemas.WebhookTestResponse(
             success=False,
             status_code=None,
-            message=f"Connection failed: {exc.reason}",
+            message=f'Connection failed: {exc.reason}',
         )
-    except Exception as exc:  # noqa: BLE001
+    except (http.client.HTTPException, OSError, ValueError) as exc:
         return schemas.WebhookTestResponse(
             success=False,
             status_code=None,
-            message=f"Delivery failed: {exc!s}",
+            message=f'Delivery failed: {exc!s}',
         )
