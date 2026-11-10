@@ -25,12 +25,12 @@ import app.models  # noqa: E402, F401
 # Under pytest, migrations run against the derived test database
 # ("test_" prefix convention, see README "Database Naming Convention")
 # instead of the main one.
-if os.getenv("PYTEST_VERSION"):
+if os.getenv('PYTEST_VERSION'):
     url = settings.testing_database_url
 else:
     url = settings.database_url
 
-config.set_main_option("sqlalchemy.url", url.render_as_string(hide_password=False))
+config.set_main_option('sqlalchemy.url', url.render_as_string(hide_password=False))
 
 # add your model's MetaData object here
 # for 'autogenerate' support
@@ -51,17 +51,17 @@ target_metadata = Base.metadata
 
 def _next_rev_id() -> str:
     """Return the next zero-padded revision number based on existing files."""
-    versions_dir = os.path.join(os.path.dirname(__file__), "versions")
+    versions_dir = os.path.join(os.path.dirname(__file__), 'versions')
     max_num = 0
     if os.path.isdir(versions_dir):
         for name in os.listdir(versions_dir):
-            if name.endswith(".py") and not name.startswith("__"):
+            if name.endswith('.py') and not name.startswith('__'):
                 try:
-                    num = int(name.split("_", 1)[0])
+                    num = int(name.split('_', 1)[0])
                     max_num = max(max_num, num)
                 except ValueError:
                     pass
-    return f"{max_num + 1:04d}"
+    return f'{max_num + 1:04d}'
 
 
 def process_revision_directives(
@@ -85,12 +85,12 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    url = config.get_main_option('sqlalchemy.url')
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
+        dialect_opts={'paramstyle': 'named'},
         process_revision_directives=process_revision_directives,
     )
 
@@ -107,7 +107,7 @@ def run_migrations_online() -> None:
     """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+        prefix='sqlalchemy.',
         poolclass=pool.NullPool,
     )
 

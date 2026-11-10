@@ -15,8 +15,9 @@ from pydantic import (
     model_validator,
 )
 
-from app.consts import AuthRole, SSOScopeType
-from app.retention import validate_retention_overrides
+from .consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
+from .retention import validate_retention_overrides
+
 
 StrictPositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
@@ -44,22 +45,22 @@ class EventBase(BaseModel):
     end_date: date | None = None
     timezone: str | None = None
 
-    @field_validator("retention_overrides")
+    @field_validator('retention_overrides')
     @classmethod
     def _validate_retention_overrides(
         cls, v: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         return validate_retention_overrides(v)
 
-    @field_validator("timezone")
+    @field_validator('timezone')
     @classmethod
     def _validate_timezone(cls, v: str | None) -> str | None:
         return validate_timezone(v)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("end_date must be greater than or equal to start_date")
+            raise ValueError('end_date must be greater than or equal to start_date')
         return self
 
 
@@ -77,22 +78,22 @@ class EventUpdate(BaseModel):
     end_date: date | None = None
     timezone: str | None = None
 
-    @field_validator("retention_overrides")
+    @field_validator('retention_overrides')
     @classmethod
     def _validate_retention_overrides(
         cls, v: dict[str, Any] | None
     ) -> dict[str, Any] | None:
         return validate_retention_overrides(v)
 
-    @field_validator("timezone")
+    @field_validator('timezone')
     @classmethod
     def _validate_timezone(cls, v: str | None) -> str | None:
         return validate_timezone(v)
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def _validate_dates(self) -> Self:
         if self.start_date and self.end_date and self.end_date < self.start_date:
-            raise ValueError("end_date must be greater than or equal to start_date")
+            raise ValueError('end_date must be greater than or equal to start_date')
         return self
 
 
@@ -106,12 +107,12 @@ class RoomBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
 
-    @field_validator("name")
+    @field_validator('name')
     @classmethod
     def _clean_name(cls, value: str) -> str:
         value = value.strip()
         if not value:
-            raise ValueError("Room name cannot be empty")
+            raise ValueError('Room name cannot be empty')
         return value
 
 
@@ -123,14 +124,14 @@ class RoomUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
 
-    @field_validator("name")
+    @field_validator('name')
     @classmethod
     def _clean_name(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
         if not value:
-            raise ValueError("Room name cannot be empty")
+            raise ValueError('Room name cannot be empty')
         return value
 
 
@@ -163,20 +164,20 @@ class WebhookRegisterRequest(BaseModel):
     url: str
     secret: str | None = Field(default=None, max_length=255)
 
-    @field_validator("url")
+    @field_validator('url')
     @classmethod
     def validate_url(cls, v: str) -> str:
         v = v.strip()
         parsed = urlsplit(v)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
             raise ValueError(
-                "Webhook URL must be a valid HTTP or HTTPS URL with a valid host"
+                'Webhook URL must be a valid HTTP or HTTPS URL with a valid host'
             )
         return v
 
 
 class WebhookRegisterResponse(BaseModel):
-    status: str = "registered"
+    status: str = 'registered'
     url: str
     secret: str
 
@@ -191,16 +192,16 @@ class WebhookTestRequest(BaseModel):
     url: str | None = None
     secret: str | None = Field(default=None, max_length=255)
 
-    @field_validator("url")
+    @field_validator('url')
     @classmethod
     def validate_url(cls, v: str | None) -> str | None:
         if v is None:
             return None
         v = v.strip()
         parsed = urlsplit(v)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
             raise ValueError(
-                "Webhook URL must be a valid HTTP or HTTPS URL with a valid host"
+                'Webhook URL must be a valid HTTP or HTTPS URL with a valid host'
             )
         return v
 
@@ -216,7 +217,7 @@ class TalkBase(BaseModel):
     room: str | None = None
     start: datetime
     end: datetime
-    status: str = "waiting_for_files"
+    status: str = TalkStatus.WAITING_FILES
     speaker_email: str | None = None
     external_id: str | None = None
 
@@ -242,15 +243,15 @@ class TalkRead(TalkBase):
     final_cleaned_at: datetime | None = None
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("include_intro", "include_outro", mode="before")
+    @field_validator('include_intro', 'include_outro', mode='before')
     @classmethod
     def _coerce_bool(cls, v: Any) -> bool:
         return False if v is None else bool(v)
 
 
 class JobBase(BaseModel):
-    kind: str
-    status: str
+    kind: JobKind
+    status: JobStatus
     log_path: str | None = None
     progress_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     started_at: datetime | None = None
@@ -271,7 +272,7 @@ class JobRead(JobBase):
     def elapsed_time(self) -> float | None:
         """Computed elapsed runtime in seconds.
 
-        Uses `updated_at` as the end time for terminal statuses (`done`, `failed`, `broken`, `rejected`)
+        Uses `updated_at` as the end time for terminal statuses (`JobStatus.is_terminal`)
         when present, returning None if `updated_at` is missing for terminal jobs to prevent time drift.
         """
         if self.started_at is None:
@@ -281,7 +282,7 @@ class JobRead(JobBase):
             if self.started_at.tzinfo is not None
             else self.started_at.replace(tzinfo=UTC)
         )
-        if self.status in ("done", "failed", "broken", "rejected", "cancelled"):
+        if self.status.is_terminal:
             if self.updated_at is None:
                 return None
             end = (
@@ -302,10 +303,10 @@ class JobRead(JobBase):
         Returns None if not running, or if progress_pct is None or <= 0.
         Returns 0.0 if progress_pct >= 100.0.
         """
-        if self.status != "running":
+        if self.status != JobStatus.RUNNING:
             return (
                 0.0
-                if self.status == "done"
+                if self.status == JobStatus.DONE
                 and self.progress_pct is not None
                 and self.progress_pct >= 100.0
                 else None
@@ -341,9 +342,9 @@ class ReviewRead(ReviewBase):
 
 
 class ReviewDecision(str, Enum):
-    approve = "approve"
-    needs_work = "needs_work"
-    reject = "reject"
+    approve = 'approve'
+    needs_work = 'needs_work'
+    reject = 'reject'
 
 
 class ReviewRequest(BaseModel):
@@ -372,22 +373,22 @@ class RecordingIngestRequest(BaseModel):
     relative_key: str | None = None
     recording_start: datetime | None = Field(
         default=None,
-        description="room recording wall-clock start for cut-bound seeding",
-        examples=["2026-09-26T10:00:00Z"],
+        description='room recording wall-clock start for cut-bound seeding',
+        examples=['2026-09-26T10:00:00Z'],
     )
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def exactly_one_path(self) -> Self:
         if bool(self.source_path) == bool(self.relative_key):
-            raise ValueError("exactly one of source_path or relative_key is required")
+            raise ValueError('exactly one of source_path or relative_key is required')
         return self
 
 
 class ApproveRequest(BaseModel):
-    decision: Literal["approve", "reject"] = "approve"
+    decision: Literal['approve', 'reject'] = 'approve'
 
 
-HHMMSS_PATTERN = re.compile(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?\Z")
+HHMMSS_PATTERN = re.compile(r'^\d{2}:\d{2}:\d{2}(?:\.\d+)?\Z')
 
 
 def _parse_hhmmss(value: str) -> Decimal:
@@ -398,13 +399,13 @@ def _parse_hhmmss(value: str) -> Decimal:
     """
     if not isinstance(value, str) or not HHMMSS_PATTERN.fullmatch(value):
         raise ValueError(f"Invalid time format '{value}', expected HH:MM:SS")
-    hh_str, mm_str, ss_str = value.split(":")
+    hh_str, mm_str, ss_str = value.split(':')
     hh, mm = int(hh_str), int(mm_str)
     ss = Decimal(ss_str)
     if hh >= 24 or mm >= 60 or ss >= 60:
         raise ValueError(
             f"Time components out of range in '{value}' "
-            "(HH must be 0–23, MM 0–59, SS 0–59)"
+            '(HH must be 0–23, MM 0–59, SS 0–59)'
         )
     return hh * 3600 + mm * 60 + ss
 
@@ -414,16 +415,16 @@ class CutBoundsRequest(BaseModel):
     cut_end: str  # "HH:MM:SS"
     note: str | None = None
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def parse_and_validate(self) -> Self:
         start_s = _parse_hhmmss(self.cut_start)
         end_s = _parse_hhmmss(self.cut_end)
         if end_s <= start_s:
-            raise ValueError("cut_end must be greater than cut_start")
+            raise ValueError('cut_end must be greater than cut_start')
 
         if float(end_s) <= float(start_s):
             raise ValueError(
-                "cut_end must be greater than cut_start (values are too close and lose ordering after float conversion)"
+                'cut_end must be greater than cut_start (values are too close and lose ordering after float conversion)'
             )
         return self
 
@@ -434,17 +435,17 @@ class CutBoundsRequest(BaseModel):
 class IntroOutroRequest(BaseModel):
     include_intro: bool = False
     include_outro: bool = False
-    intro_source: Literal["generated", "custom"] = "generated"
-    outro_source: Literal["generated", "custom"] = "generated"
+    intro_source: Literal['generated', 'custom'] = 'generated'
+    outro_source: Literal['generated', 'custom'] = 'generated'
     custom_intro_path: str | None = None
     custom_outro_path: str | None = None
     speaker_email: str | None = None
 
-    @model_validator(mode="after")
+    @model_validator(mode='after')
     def validate_custom_paths(self) -> Self:
         if (
             self.include_intro
-            and self.intro_source == "custom"
+            and self.intro_source == 'custom'
             and (not self.custom_intro_path or not self.custom_intro_path.strip())
         ):
             raise ValueError(
@@ -452,7 +453,7 @@ class IntroOutroRequest(BaseModel):
             )
         if (
             self.include_outro
-            and self.outro_source == "custom"
+            and self.outro_source == 'custom'
             and (not self.custom_outro_path or not self.custom_outro_path.strip())
         ):
             raise ValueError(
@@ -463,14 +464,14 @@ class IntroOutroRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = 'bearer'
     expires_in: int
 
 
 class UserRead(BaseModel):
     id: int
     email: str
-    role: str
+    role: AuthRole
     is_active: bool
     organizer_requested: bool = False
     organizer_request_note: str | None = None
@@ -480,7 +481,11 @@ class UserRead(BaseModel):
 
 
 class OrganizerRequestCreate(BaseModel):
-    note: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(
+        default=None,
+        max_length=500,
+        description='Optional justification note. If non-empty, must be at least 20 characters and at most 500 characters.',
+    )
 
 
 class UserPromoteRequest(BaseModel):
@@ -488,13 +493,13 @@ class UserPromoteRequest(BaseModel):
 
 
 class EventSSOTokenRequest(BaseModel):
-    role: Literal["organizer"] = "organizer"
+    role: Literal[AuthRole.ORGANIZER] = AuthRole.ORGANIZER
     email: str | None = None
     display_name: str | None = None
 
 
 class TalkSSOTokenRequest(BaseModel):
-    role: Literal["speaker"] = "speaker"
+    role: Literal[AuthRole.SPEAKER] = AuthRole.SPEAKER
     email: str | None = None
     display_name: str | None = None
     event_id: int | str | None = None
@@ -529,10 +534,10 @@ class ApiKeyCreatedResponse(BaseModel):
 
 class SSOTokenResponse(BaseModel):
     token: str
-    token_type: str = "bearer"
+    token_type: str = 'bearer'
     scope_type: SSOScopeType
     scope_id: int
-    role: str
+    role: AuthRole
     expires_in_seconds: int
     url: str
 
@@ -550,12 +555,12 @@ class BulkDeleteRequest(BaseModel):
 
 
 class BulkDeleteResponse(BaseModel):
-    status: str = "ok"
+    status: str = 'ok'
     deleted_count: int
 
 
 class ScheduleImportResponse(BaseModel):
-    status: str = "ok"
+    status: str = 'ok'
     event_id: int
     event_name: str
     imported_count: int
@@ -564,7 +569,7 @@ class ScheduleImportResponse(BaseModel):
 
 
 class RoomRecordingAttachResponse(BaseModel):
-    status: str = "ok"
+    status: str = 'ok'
     attached_count: int
     room: str
     event_id: int
@@ -587,7 +592,7 @@ class SystemSettingRead(BaseModel):
     is_overridden: bool = False
     default_value: str | None = None
     options: list[SystemSettingOption] = []
-    input_type: str = "select"
+    input_type: str = 'select'
     min_value: float | None = None
     max_value: float | None = None
     step: float | None = None

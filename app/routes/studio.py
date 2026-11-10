@@ -1,6 +1,7 @@
 import logging
 import urllib.parse
 from datetime import UTC, date, datetime
+from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -11,34 +12,33 @@ from fastapi import (
     Form,
     HTTPException,
     Request,
-    status,
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
 from sqlalchemy import and_, delete, false, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app import models, schemas
-from app.auth import CurrentUser, hash_api_key
-from app.config import get_setting, settings
-from app.db import get_db
-from app.queue import light_queue
-from app.routes.auth import _get_authenticated_user_from_cookie
-from app.routes.talks import _cancel_talk_jobs, attach_room_recording, get_room_days
-from app.security import SSOTokenPayload, decode_sso_token
-from app.storage import StorageBackend, get_storage_backend
-from app.tasks import job_waveform
-from app.ui.templating import templates
-
+from .. import models, schemas
+from ..auth import CurrentUser, hash_api_key
+from ..config import get_setting, settings
 from ..consts import AuthRole, SSOScopeType, TalkStatus
+from ..db import get_db
+from ..queue import light_queue
+from ..security import SSOTokenPayload, decode_sso_token
+from ..storage import StorageBackend, get_storage_backend
+from ..tasks import job_waveform
+from ..ui.templating import templates
+from .auth import _get_authenticated_user_from_cookie
+from .talks import _cancel_talk_jobs, attach_room_recording, get_room_days
+
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/studio", tags=["studio"])
+router = APIRouter(prefix='/studio', tags=['studio'])
 
 # Characters that would end a URL path early. The ASGI path is decoded, so a
 # room named "Q&A?" must have these re-escaped before the path is reused.
-_PATH_DELIMITERS = str.maketrans({"%": "%25", "?": "%3F", "#": "%23"})
+_PATH_DELIMITERS = str.maketrans({'%': '%25', '?': '%3F', '#': '%23'})
 
 
 def _request_path_and_query(request: Request) -> tuple[str, str]:
@@ -47,8 +47,8 @@ def _request_path_and_query(request: Request) -> tuple[str, str]:
     request.url re-parses the decoded path, so a "?" or "#" in a room name
     would cut the path short there; the scope keeps them intact.
     """
-    path = request.scope.get("root_path", "") + request.scope["path"]
-    query = request.scope.get("query_string", b"").decode("latin-1")
+    path = request.scope.get('root_path', '') + request.scope['path']
+    query = request.scope.get('query_string', b'').decode('latin-1')
     return path, query
 
 
@@ -57,11 +57,11 @@ def get_ui_client(
     db: Annotated[Session, Depends(get_db)],
 ) -> models.Client:
     """Dependency that extracts API Key from Header or Cookie."""
-    api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
+    api_key = request.headers.get('X-API-Key') or request.cookies.get('veditor_api_key')
     if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.',
         )
     hashed_key = hash_api_key(api_key)
     client = db.scalar(
@@ -69,8 +69,8 @@ def get_ui_client(
     )
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key. Please verify your credentials.",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Invalid API Key. Please verify your credentials.',
         )
     return client
 
@@ -80,7 +80,7 @@ def get_optional_ui_client(
     db: Annotated[Session, Depends(get_db)],
 ) -> models.Client | None:
     """Optional dependency that extracts API Key if present."""
-    api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
+    api_key = request.headers.get('X-API-Key') or request.cookies.get('veditor_api_key')
     if not api_key:
         return None
     hashed_key = hash_api_key(api_key)
@@ -93,7 +93,7 @@ def _authorize_studio_talk(
     talk_id: int,
     request: Request,
     db: Session,
-    not_found_detail: str = "Talk not found",
+    not_found_detail: str = 'Talk not found',
 ) -> models.Talk:
     """
     Authorizes access to a talk in studio endpoints.
@@ -105,8 +105,8 @@ def _authorize_studio_talk(
        - access if talk.event_id in client.event_ids
     Raises 401 if unauthenticated, 404 if talk does not exist or caller is unauthorized.
     """
-    raw_sso = request.query_params.get("sso_token") or request.cookies.get(
-        "veditor_session"
+    raw_sso = request.query_params.get('sso_token') or request.cookies.get(
+        'veditor_session'
     )
     if raw_sso:
         sso_payload = decode_sso_token(raw_sso)
@@ -114,7 +114,7 @@ def _authorize_studio_talk(
             talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
             if not talk:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=HTTPStatus.NOT_FOUND,
                     detail=not_found_detail,
                 )
             authorized = (
@@ -134,15 +134,15 @@ def _authorize_studio_talk(
             )
             if not authorized:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=HTTPStatus.NOT_FOUND,
                     detail=not_found_detail,
                 )
-            if hasattr(request, "state"):
+            if hasattr(request, 'state'):
                 request.state.user = CurrentUser(
                     email=sso_payload.email,
                     display_name=sso_payload.display_name,
                     role=sso_payload.role,
-                    source="sso",
+                    source='sso',
                     event_ids=[sso_payload.scope_id]
                     if sso_payload.scope_type == SSOScopeType.EVENT
                     else [],
@@ -160,7 +160,7 @@ def _authorize_studio_talk(
         )
         if not talk:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=not_found_detail,
             )
         authorized = (
@@ -173,8 +173,8 @@ def _authorize_studio_talk(
             or bool(talk.event and talk.event.created_by_user_id == user.id)
         )
         if not authorized:
-            api_key = request.headers.get("X-API-Key") or request.cookies.get(
-                "veditor_api_key"
+            api_key = request.headers.get('X-API-Key') or request.cookies.get(
+                'veditor_api_key'
             )
             if api_key:
                 hashed_key = hash_api_key(api_key)
@@ -185,7 +185,7 @@ def _authorize_studio_talk(
                     authorized = True
         if not authorized:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=HTTPStatus.NOT_FOUND,
                 detail=not_found_detail,
             )
         if (
@@ -196,15 +196,15 @@ def _authorize_studio_talk(
         ):
             user.role = AuthRole.SPEAKER
             db.commit()
-        if hasattr(request, "state"):
+        if hasattr(request, 'state'):
             request.state.user = user
         return talk
 
-    api_key = request.headers.get("X-API-Key") or request.cookies.get("veditor_api_key")
+    api_key = request.headers.get('X-API-Key') or request.cookies.get('veditor_api_key')
     if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Missing API Key. Please provide X-API-Key header or veditor_api_key cookie.',
         )
     hashed_key = hash_api_key(api_key)
     client = db.scalar(
@@ -212,8 +212,8 @@ def _authorize_studio_talk(
     )
     if not client:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Invalid API Key',
         )
     talk = db.scalar(
         select(models.Talk)
@@ -222,7 +222,7 @@ def _authorize_studio_talk(
     )
     if not talk or talk.event_id not in client.event_ids:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=HTTPStatus.NOT_FOUND,
             detail=not_found_detail,
         )
     return talk
@@ -246,26 +246,33 @@ ALL_STATUSES = [
     TalkStatus.BROKEN,
 ]
 
+TALK_SORT_COLUMNS = {
+    'start': models.Talk.start,
+    'title': models.Talk.title,
+    'room': models.Talk.room,
+    'status': models.Talk.status,
+}
+
 MILESTONES_DEF = [
     {
-        "num": 1,
-        "title": "Ingest & Detect",
-        "desc": "Recording ingestion & talk bounds detection",
+        'num': 1,
+        'title': 'Ingest & Detect',
+        'desc': 'Recording ingestion & talk bounds detection',
     },
     {
-        "num": 2,
-        "title": "Timestamp Review",
-        "desc": "Human verification of speaker In/Out points",
+        'num': 2,
+        'title': 'Timestamp Review',
+        'desc': 'Human verification of speaker In/Out points',
     },
     {
-        "num": 3,
-        "title": "Processing & Preview",
-        "desc": "Cut, loudness, title slates & low-res preview",
+        'num': 3,
+        'title': 'Processing & Preview',
+        'desc': 'Cut, loudness, title slates & low-res preview',
     },
     {
-        "num": 4,
-        "title": "Transcode & Publish",
-        "desc": "Final quality master encode & upload",
+        'num': 4,
+        'title': 'Transcode & Publish',
+        'desc': 'Final quality master encode & upload',
     },
 ]
 
@@ -294,14 +301,14 @@ def get_evaluated_milestones(status: str) -> list[dict]:
     for idx, m in enumerate(MILESTONES_DEF):
         item = dict(m)
         if status == TalkStatus.DONE or current_idx > idx:
-            item["state"] = "completed"
+            item['state'] = 'completed'
         elif current_idx == idx:
             if status in (TalkStatus.REJECTED, TalkStatus.BROKEN):
-                item["state"] = "failed"
+                item['state'] = 'failed'
             else:
-                item["state"] = "active"
+                item['state'] = 'active'
         else:
-            item["state"] = "pending"
+            item['state'] = 'pending'
         result.append(item)
     return result
 
@@ -312,7 +319,7 @@ def _get_sso_cookie_max_age(sso_payload: SSOTokenPayload) -> int:
     return max(int(exp_timestamp - datetime.now(UTC).timestamp()), 0)
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get('', response_class=HTMLResponse)
 def dashboard(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
@@ -320,44 +327,47 @@ def dashboard(
     event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    room_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     sso_token: str | None = None,
 ) -> Response:
     # 1. Check if landing with ?sso_token=...
-    if sso_token is not None or "sso_token" in request.query_params:
+    if sso_token is not None or 'sso_token' in request.query_params:
         raw_sso = (
             sso_token
             if sso_token is not None
-            else request.query_params.get("sso_token")
+            else request.query_params.get('sso_token')
         )
         if not raw_sso:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail='Invalid or expired SSO token',
             )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail='Invalid or expired SSO token',
             )
-        is_secure = (request.url.scheme == "https") or (
-            settings.environment.lower() in ("production", "prod")
+        is_secure = (request.url.scheme == 'https') or (
+            settings.environment.lower() in ('production', 'prod')
         )
         if sso_payload.scope_type == SSOScopeType.TALK:
-            dest_url = f"/studio/talks/{sso_payload.scope_id}"
+            dest_url = f'/studio/talks/{sso_payload.scope_id}'
         else:
-            dest_url = f"/studio?event_id={sso_payload.scope_id}"
+            dest_url = f'/studio?event_id={sso_payload.scope_id}'
         cookie_max_age = _get_sso_cookie_max_age(sso_payload)
 
-        resp = RedirectResponse(url=dest_url, status_code=status.HTTP_303_SEE_OTHER)
+        resp = RedirectResponse(url=dest_url, status_code=HTTPStatus.SEE_OTHER)
         resp.set_cookie(
-            key="veditor_session",
+            key='veditor_session',
             value=raw_sso,
             max_age=cookie_max_age,
             httponly=True,
-            samesite="lax",
+            samesite='lax',
             secure=is_secure,
-            path="/",
+            path='/',
         )
         return resp
 
@@ -368,10 +378,13 @@ def dashboard(
         event_id=event_id,
         status_filter=status_filter,
         q=q,
+        room_filter=room_filter,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
 
-@router.get("/rooms/{room_name:path}", response_class=HTMLResponse)
+@router.get('/rooms/{room_name:path}', response_class=HTMLResponse)
 def room_talks(
     request: Request,
     room_name: str,
@@ -380,6 +393,9 @@ def room_talks(
     event_id: str | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    room_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ) -> Response:
     return _render_talks_page(
         request,
@@ -388,6 +404,9 @@ def room_talks(
         event_id=event_id,
         status_filter=status_filter,
         q=q,
+        room_filter=room_filter,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
         room=room_name,
     )
 
@@ -419,18 +438,21 @@ def _render_talks_page(
     event_id: str | int | None,
     status_filter: str | None,
     q: str | None,
+    room_filter: str | None,
+    sort_by: str | None,
+    sort_dir: str | None,
     room: str | None = None,
 ) -> Response:
     """Render the talks list, scoped to the caller and optionally to an event/room."""
     # Check for authenticated user or active SSO session in cookie
     user = _get_authenticated_user_from_cookie(request, db)
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     sso_user = decode_sso_token(cookie_token) if (not user and cookie_token) else None
 
-    if request.headers.get("X-API-Key") and client is None:
+    if request.headers.get('X-API-Key') and client is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key. Please verify your credentials.",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Invalid API Key. Please verify your credentials.',
         )
 
     if not user and not sso_user and client is None:
@@ -440,20 +462,20 @@ def _render_talks_page(
         path, query = _request_path_and_query(request)
         login_next = path.translate(_PATH_DELIMITERS)
         if query:
-            login_next += f"?{query}"
+            login_next += f'?{query}'
         resp = RedirectResponse(
-            url=f"/login?next={urllib.parse.quote(login_next, safe='/')}",
-            status_code=status.HTTP_302_FOUND,
+            url=f'/login?next={urllib.parse.quote(login_next, safe="/")}',
+            status_code=HTTPStatus.FOUND,
         )
-        if request.cookies.get("veditor_api_key"):
-            resp.delete_cookie("veditor_api_key")
+        if request.cookies.get('veditor_api_key'):
+            resp.delete_cookie('veditor_api_key')
         return resp
 
     if sso_user:
         if sso_user.scope_type == SSOScopeType.TALK:
             return RedirectResponse(
-                url=f"/studio/talks/{sso_user.scope_id}",
-                status_code=status.HTTP_303_SEE_OTHER,
+                url=f'/studio/talks/{sso_user.scope_id}',
+                status_code=HTTPStatus.SEE_OTHER,
             )
         event_id = sso_user.scope_id
         user_events = list(
@@ -535,18 +557,31 @@ def _render_talks_page(
     )
     if room is not None:
         stmt = stmt.where(models.Talk.room == room)
+    elif room_filter:
+        stmt = stmt.where(models.Talk.room == room_filter)
     if status_filter:
         stmt = stmt.where(models.Talk.status == status_filter)
-
-    talks = list(db.scalars(stmt.order_by(models.Talk.start.desc())))
     if q:
+        q = q.replace('\x00', '')
+        escaped_q = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        if q.isascii():
+            stmt = stmt.where(models.Talk.title.ilike(f'%{escaped_q}%', escape='\\'))
+
+    normalized_sort_by = sort_by if sort_by in TALK_SORT_COLUMNS else 'start'
+    normalized_sort_dir = sort_dir if sort_dir in ('asc', 'desc') else 'desc'
+    sort_column = TALK_SORT_COLUMNS[normalized_sort_by]
+    order_expression = (
+        sort_column.asc() if normalized_sort_dir == 'asc' else sort_column.desc()
+    )
+    talks = list(db.scalars(stmt.order_by(order_expression, models.Talk.id.desc())))
+    if q and not q.isascii():
         q_lower = q.lower()
-        talks = [t for t in talks if q_lower in t.title.lower()]
+        talks = [talk for talk in talks if q_lower in talk.title.lower()]
 
     all_rooms = list(
         db.scalars(
             select(models.Talk.room)
-            .where(scope, models.Talk.room.isnot(None), models.Talk.room != "")
+            .where(scope, models.Talk.room.isnot(None), models.Talk.room != '')
             .distinct()
             .order_by(models.Talk.room)
         )
@@ -563,9 +598,9 @@ def _render_talks_page(
     current_event = next((e for e in user_events if e.id == event_id), None)
 
     stats = {
-        "total": sum(status_counts.values()),
-        "pending": status_counts.get(TalkStatus.PENDING_APPROVAL, 0),
-        "processing": sum(
+        'total': sum(status_counts.values()),
+        'pending': status_counts.get(TalkStatus.PENDING_APPROVAL, 0),
+        'processing': sum(
             status_counts.get(s, 0)
             for s in (
                 TalkStatus.CUTTING,
@@ -574,60 +609,63 @@ def _render_talks_page(
                 TalkStatus.UPLOADING,
             )
         ),
-        "preview": status_counts.get(TalkStatus.PREVIEW, 0),
-        "done": status_counts.get(TalkStatus.DONE, 0),
-        "broken": status_counts.get(TalkStatus.BROKEN, 0)
+        'preview': status_counts.get(TalkStatus.PREVIEW, 0),
+        'done': status_counts.get(TalkStatus.DONE, 0),
+        'broken': status_counts.get(TalkStatus.BROKEN, 0)
         + status_counts.get(TalkStatus.REJECTED, 0),
     }
 
-    flash_error = request.cookies.get("flash_error")
+    flash_error = request.cookies.get('flash_error')
 
     response = templates.TemplateResponse(
         request,
-        "dashboard.html.jinja",
+        'dashboard.html.jinja',
         {
-            "talks": talks,
-            "stats": stats,
-            "all_statuses": ALL_STATUSES,
-            "all_rooms": all_rooms,
-            "q": q or "",
-            "status_filter": status_filter or "",
-            "event_id": event_id,
-            "user_events": user_events,
-            "error": flash_error,
-            "current_event": current_event,
-            "room": room,
-            "filter_action": urllib.parse.quote(
-                _request_path_and_query(request)[0], safe="/"
+            'talks': talks,
+            'stats': stats,
+            'all_statuses': ALL_STATUSES,
+            'all_rooms': all_rooms,
+            'q': q or '',
+            'status_filter': status_filter or '',
+            'room_filter': room_filter or '',
+            'sort_by': normalized_sort_by,
+            'sort_dir': normalized_sort_dir,
+            'event_id': event_id,
+            'user_events': user_events,
+            'error': flash_error,
+            'current_event': current_event,
+            'room': room,
+            'filter_action': urllib.parse.quote(
+                _request_path_and_query(request)[0], safe='/'
             ),
         },
-        headers={"Cache-Control": "no-store"},
+        headers={'Cache-Control': 'no-store'},
     )
-    if request.cookies.get("flash_error"):
-        response.delete_cookie("flash_error", path="/")
+    if request.cookies.get('flash_error'):
+        response.delete_cookie('flash_error', path='/')
     return response
 
 
 ALLOWED_MEDIA_CATEGORIES = frozenset(
     {
-        "preview",
-        "raw",
-        "intro",
-        "outro",
-        "cut",
-        "final",
+        'preview',
+        'raw',
+        'intro',
+        'outro',
+        'cut',
+        'final',
     }
 )
 
 
 def _download_filename(talk: models.Talk, filename: str) -> str:
-    safe_title = "".join(
-        c if c.isalnum() or c in ("-", "_") else "_" for c in (talk.title or "")
-    ).strip("_")
-    return f"{safe_title}_{filename}" if safe_title else f"talk_{talk.id}_{filename}"
+    safe_title = ''.join(
+        c if c.isalnum() or c in ('-', '_') else '_' for c in (talk.title or '')
+    ).strip('_')
+    return f'{safe_title}_{filename}' if safe_title else f'talk_{talk.id}_{filename}'
 
 
-@router.get("/media/{talk_id}/{filename}")
+@router.get('/media/{talk_id}/{filename}')
 def get_talk_media_default(
     request: Request,
     talk_id: int,
@@ -636,21 +674,21 @@ def get_talk_media_default(
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ) -> FileResponse:
     talk = _authorize_studio_talk(
-        talk_id, request, db, not_found_detail="Media not found"
+        talk_id, request, db, not_found_detail='Media not found'
     )
 
     safe_filename = Path(filename).name
     candidate_keys = [
-        f"{talk_id}/preview/{safe_filename}",
-        f"{talk_id}/raw/{safe_filename}",
-        f"{talk_id}/intro/{safe_filename}",
-        f"{talk_id}/outro/{safe_filename}",
-        f"{talk_id}/cut/{safe_filename}",
-        f"{talk_id}/final/{safe_filename}",
+        f'{talk_id}/preview/{safe_filename}',
+        f'{talk_id}/raw/{safe_filename}',
+        f'{talk_id}/intro/{safe_filename}',
+        f'{talk_id}/outro/{safe_filename}',
+        f'{talk_id}/cut/{safe_filename}',
+        f'{talk_id}/final/{safe_filename}',
     ]
     download_filename = (
         _download_filename(talk, safe_filename)
-        if request.query_params.get("download") in ("1", "true", "yes")
+        if request.query_params.get('download') in ('1', 'true', 'yes')
         else None
     )
 
@@ -659,14 +697,14 @@ def get_talk_media_default(
             path = storage.get(key)
             return FileResponse(
                 path,
-                media_type="video/mp4",
+                media_type='video/mp4',
                 filename=download_filename,
-                headers={"Cache-Control": "no-store"},
+                headers={'Cache-Control': 'no-store'},
             )
-    raise HTTPException(status_code=404, detail="Media not found")
+    raise HTTPException(status_code=404, detail='Media not found')
 
 
-@router.get("/media/{talk_id}/{category}/{filename}")
+@router.get('/media/{talk_id}/{category}/{filename}')
 def get_talk_media_categorized(
     request: Request,
     talk_id: int,
@@ -677,55 +715,55 @@ def get_talk_media_categorized(
 ) -> FileResponse:
     safe_category = Path(category).name
     if safe_category not in ALLOWED_MEDIA_CATEGORIES:
-        raise HTTPException(status_code=404, detail="Media not found")
+        raise HTTPException(status_code=404, detail='Media not found')
 
     talk = None
     # Final published media on completed talks is public for agendas and webhook consumers.
-    if safe_category == "final":
+    if safe_category == 'final':
         talk = db.scalar(
             select(models.Talk).where(
                 models.Talk.id == talk_id, models.Talk.status == TalkStatus.DONE
             )
         )
         if not talk:
-            raw_sso = request.query_params.get("sso_token") or request.cookies.get(
-                "veditor_session"
+            raw_sso = request.query_params.get('sso_token') or request.cookies.get(
+                'veditor_session'
             )
             user = _get_authenticated_user_from_cookie(request, db)
             client = get_optional_ui_client(request, db)
             if not raw_sso and not user and not client:
-                raise HTTPException(status_code=404, detail="Media not found")
+                raise HTTPException(status_code=404, detail='Media not found')
 
     # All other categories and non-done states require studio authentication.
     if not talk:
         talk = _authorize_studio_talk(
-            talk_id, request, db, not_found_detail="Media not found"
+            talk_id, request, db, not_found_detail='Media not found'
         )
 
     safe_filename = Path(filename).name
-    key = f"{talk_id}/{safe_category}/{safe_filename}"
+    key = f'{talk_id}/{safe_category}/{safe_filename}'
     if not storage.exists(key):
-        raise HTTPException(status_code=404, detail=f"Media {key} not found")
+        raise HTTPException(status_code=404, detail=f'Media {key} not found')
     path = storage.get(key)
 
     download_filename = (
         _download_filename(talk, safe_filename)
-        if request.query_params.get("download") in ("1", "true", "yes")
+        if request.query_params.get('download') in ('1', 'true', 'yes')
         else None
     )
 
-    is_public_final = safe_category == "final" and talk.status == TalkStatus.DONE
-    cache_control = "no-cache" if is_public_final else "no-store"
+    is_public_final = safe_category == 'final' and talk.status == TalkStatus.DONE
+    cache_control = 'no-cache' if is_public_final else 'no-store'
 
     return FileResponse(
         path,
-        media_type="video/mp4",
+        media_type='video/mp4',
         filename=download_filename,
-        headers={"Cache-Control": cache_control},
+        headers={'Cache-Control': cache_control},
     )
 
 
-@router.get("/talks/{talk_id}/waveform")
+@router.get('/talks/{talk_id}/waveform')
 def get_talk_waveform(
     request: Request,
     talk_id: int,
@@ -734,25 +772,25 @@ def get_talk_waveform(
     category: str | None = None,
     filename: str | None = None,
 ) -> Response:
-    _authorize_studio_talk(talk_id, request, db, not_found_detail="Talk not found")
+    _authorize_studio_talk(talk_id, request, db, not_found_detail='Talk not found')
 
     media_key = None
     if category and filename:
         safe_category = Path(category).name
         if safe_category not in ALLOWED_MEDIA_CATEGORIES:
-            raise HTTPException(status_code=404, detail="Media not found")
-        cand = f"{talk_id}/{safe_category}/{Path(filename).name}"
+            raise HTTPException(status_code=404, detail='Media not found')
+        cand = f'{talk_id}/{safe_category}/{Path(filename).name}'
         if storage.exists(cand):
             media_key = cand
     else:
-        candidates = [f"{talk_id}/{c}/{c}.mp4" for c in ("preview", "cut", "raw")]
+        candidates = [f'{talk_id}/{c}/{c}.mp4' for c in ('preview', 'cut', 'raw')]
         media_key = next((c for c in candidates if storage.exists(c)), None)
         if not media_key:
-            raw_keys = storage.list_keys(f"{talk_id}/raw")
+            raw_keys = storage.list_keys(f'{talk_id}/raw')
             media_key = raw_keys[0] if raw_keys else None
 
     if media_key:
-        waveform_key = f"{media_key}.waveform.json"
+        waveform_key = f'{media_key}.waveform.json'
         if storage.exists(waveform_key):
             try:
                 cached_path = storage.get(waveform_key)
@@ -760,26 +798,26 @@ def get_talk_waveform(
                 raw_bytes = cached_path.read_bytes()
                 return Response(
                     content=raw_bytes,
-                    media_type="application/json",
-                    headers={"Cache-Control": "private, max-age=3600"},
+                    media_type='application/json',
+                    headers={'Cache-Control': 'private, max-age=3600'},
                 )
             except OSError:
-                logger.warning("Failed reading cached waveform for %s", waveform_key)
+                logger.warning('Failed reading cached waveform for %s', waveform_key)
         try:
             light_queue.enqueue(job_waveform, talk_id, media_key)
         except (OSError, RedisError, RuntimeError) as exc:
             logger.warning(
-                "Failed to enqueue waveform generation for %s: %s", media_key, exc
+                'Failed to enqueue waveform generation for %s: %s', media_key, exc
             )
 
     return Response(
         content=b'{"peaks":[]}',
-        media_type="application/json",
-        headers={"Cache-Control": "no-store"},
+        media_type='application/json',
+        headers={'Cache-Control': 'no-store'},
     )
 
 
-@router.get("/talks/{talk_id}", response_class=HTMLResponse)
+@router.get('/talks/{talk_id}', response_class=HTMLResponse)
 def studio(
     request: Request,
     talk_id: int,
@@ -788,39 +826,39 @@ def studio(
     client: Annotated[models.Client | None, Depends(get_optional_ui_client)] = None,
     sso_token: str | None = None,
 ) -> Response:
-    if sso_token is not None or "sso_token" in request.query_params:
+    if sso_token is not None or 'sso_token' in request.query_params:
         raw_sso = (
             sso_token
             if sso_token is not None
-            else request.query_params.get("sso_token")
+            else request.query_params.get('sso_token')
         )
         if not raw_sso:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail='Invalid or expired SSO token',
             )
         sso_payload = decode_sso_token(raw_sso)
         if not sso_payload:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired SSO token",
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail='Invalid or expired SSO token',
             )
         if (
             sso_payload.scope_type == SSOScopeType.TALK
             and sso_payload.scope_id != talk_id
         ):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="SSO token is not authorized for this talk",
+                status_code=HTTPStatus.FORBIDDEN,
+                detail='SSO token is not authorized for this talk',
             )
         if sso_payload.scope_type == SSOScopeType.EVENT:
             talk_obj = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
             if not talk_obj:
-                raise HTTPException(status_code=404, detail="Talk not found")
+                raise HTTPException(status_code=404, detail='Talk not found')
             if talk_obj.event_id != sso_payload.scope_id:
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="SSO token is not authorized for this event",
+                    status_code=HTTPStatus.FORBIDDEN,
+                    detail='SSO token is not authorized for this event',
                 )
             if sso_payload.role == AuthRole.SPEAKER and not (
                 talk_obj.speaker_email
@@ -828,56 +866,56 @@ def studio(
                 and talk_obj.speaker_email.lower() == sso_payload.email.lower()
             ):
                 raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="SSO token is not authorized for this talk",
+                    status_code=HTTPStatus.FORBIDDEN,
+                    detail='SSO token is not authorized for this talk',
                 )
 
-        is_secure = (request.url.scheme == "https") or (
-            settings.environment.lower() in ("production", "prod")
+        is_secure = (request.url.scheme == 'https') or (
+            settings.environment.lower() in ('production', 'prod')
         )
         cookie_max_age = _get_sso_cookie_max_age(sso_payload)
 
         resp = RedirectResponse(
-            url=f"/studio/talks/{talk_id}", status_code=status.HTTP_303_SEE_OTHER
+            url=f'/studio/talks/{talk_id}', status_code=HTTPStatus.SEE_OTHER
         )
         resp.set_cookie(
-            key="veditor_session",
+            key='veditor_session',
             value=raw_sso,
             max_age=cookie_max_age,
             httponly=True,
-            samesite="lax",
+            samesite='lax',
             secure=is_secure,
-            path="/",
+            path='/',
         )
         return resp
 
     user = _get_authenticated_user_from_cookie(request, db)
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     sso_user = decode_sso_token(cookie_token) if cookie_token else None
 
-    if "api_key" in request.query_params:
+    if 'api_key' in request.query_params:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=HTTPStatus.UNAUTHORIZED,
             detail="Query parameter 'api_key' is not supported. Please provide X-API-Key header or veditor_api_key cookie.",
         )
 
-    if request.headers.get("X-API-Key") and client is None:
+    if request.headers.get('X-API-Key') and client is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key. Please verify your credentials.",
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail='Invalid API Key. Please verify your credentials.',
         )
 
     if not user and not sso_user and client is None:
         resp = RedirectResponse(
-            url=f"/login?next=/studio/talks/{talk_id}",
-            status_code=status.HTTP_302_FOUND,
+            url=f'/login?next=/studio/talks/{talk_id}',
+            status_code=HTTPStatus.FOUND,
         )
-        if request.cookies.get("veditor_api_key"):
-            resp.delete_cookie("veditor_api_key")
+        if request.cookies.get('veditor_api_key'):
+            resp.delete_cookie('veditor_api_key')
         return resp
 
     talk = _authorize_studio_talk(
-        talk_id, request, db, not_found_detail="Talk not found"
+        talk_id, request, db, not_found_detail='Talk not found'
     )
 
     duration_seconds = None
@@ -886,52 +924,52 @@ def studio(
 
     # Build categorized media assets that can be watched in the studio
     asset_defs = [
-        ("final", "final.mp4", "Master Video (Final)"),
-        ("preview", "preview.mp4", "Preview Video"),
-        ("raw", "raw.mp4", "Raw Recording"),
+        ('final', 'final.mp4', 'Master Video (Final)'),
+        ('preview', 'preview.mp4', 'Preview Video'),
+        ('raw', 'raw.mp4', 'Raw Recording'),
     ]
     media_assets = []
     seen_urls = set()
 
     for cat, fname, label in asset_defs:
-        key = f"{talk.id}/{cat}/{fname}"
+        key = f'{talk.id}/{cat}/{fname}'
         if storage.exists(key):
-            url = f"/studio/media/{talk.id}/{cat}/{fname}"
+            url = f'/studio/media/{talk.id}/{cat}/{fname}'
             if url not in seen_urls:
                 seen_urls.add(url)
                 media_assets.append(
                     {
-                        "label": label,
-                        "category": cat,
-                        "url": url,
+                        'label': label,
+                        'category': cat,
+                        'url': url,
                     }
                 )
 
-    raw_keys = storage.list_keys(f"{talk.id}/raw")
+    raw_keys = storage.list_keys(f'{talk.id}/raw')
     for rk in sorted(raw_keys)[:1]:
         fname = Path(rk).name
-        url = f"/studio/media/{talk.id}/raw/{urllib.parse.quote(fname)}"
+        url = f'/studio/media/{talk.id}/raw/{urllib.parse.quote(fname)}'
         if url not in seen_urls:
             seen_urls.add(url)
             media_assets.append(
                 {
-                    "label": "Raw Recording",
-                    "category": "raw",
-                    "url": url,
+                    'label': 'Raw Recording',
+                    'category': 'raw',
+                    'url': url,
                 }
             )
 
-    final_asset = next((a for a in media_assets if a["category"] == "final"), None)
-    if not final_asset and (final_keys := storage.list_keys(f"{talk.id}/final")):
-        url = f"/studio/media/{talk.id}/final/{urllib.parse.quote(Path(final_keys[0]).name)}"
+    final_asset = next((a for a in media_assets if a['category'] == 'final'), None)
+    if not final_asset and (final_keys := storage.list_keys(f'{talk.id}/final')):
+        url = f'/studio/media/{talk.id}/final/{urllib.parse.quote(Path(final_keys[0]).name)}'
         final_asset = {
-            "label": "Master Video (Final)",
-            "category": "final",
-            "url": url,
+            'label': 'Master Video (Final)',
+            'category': 'final',
+            'url': url,
         }
         media_assets.append(final_asset)
 
-    preview_urls = [a["url"] for a in media_assets]
+    preview_urls = [a['url'] for a in media_assets]
 
     is_other_organizer_talk = bool(
         user
@@ -942,27 +980,27 @@ def studio(
     is_from_admin = bool(
         user
         and user.role == AuthRole.ADMIN
-        and (request.query_params.get("from") == "admin" or is_other_organizer_talk)
+        and (request.query_params.get('from') == 'admin' or is_other_organizer_talk)
     )
 
     back_url = (
-        (f"/admin/events/{talk.event_id}" if talk.event_id else "/admin/events")
+        (f'/admin/events/{talk.event_id}' if talk.event_id else '/admin/events')
         if is_from_admin
-        else "/studio"
+        else '/studio'
     )
 
     return templates.TemplateResponse(
         request,
-        "studio.html.jinja",
+        'studio.html.jinja',
         {
-            "talk": talk,
-            "milestones": get_evaluated_milestones(talk.status),
-            "duration_seconds": duration_seconds,
-            "media_assets": media_assets,
-            "final_asset": final_asset,
-            "preview_urls": preview_urls,
-            "all_statuses": ALL_STATUSES,
-            "is_speaker": (
+            'talk': talk,
+            'milestones': get_evaluated_milestones(talk.status),
+            'duration_seconds': duration_seconds,
+            'media_assets': media_assets,
+            'final_asset': final_asset,
+            'preview_urls': preview_urls,
+            'all_statuses': ALL_STATUSES,
+            'is_speaker': (
                 (
                     sso_user.role == AuthRole.SPEAKER
                     or bool(
@@ -982,48 +1020,48 @@ def studio(
                     )
                 )
             ),
-            "is_other_organizer_talk": is_other_organizer_talk,
-            "is_from_admin": is_from_admin,
-            "back_url": back_url,
+            'is_other_organizer_talk': is_other_organizer_talk,
+            'is_from_admin': is_from_admin,
+            'back_url': back_url,
         },
-        headers={"Cache-Control": "no-store"},
+        headers={'Cache-Control': 'no-store'},
     )
 
 
-@router.get("/events", response_class=HTMLResponse)
+@router.get('/events', response_class=HTMLResponse)
 def list_studio_events(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not authorized to access event management",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not authorized to access event management',
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
         return RedirectResponse(
-            url="/login?next=/studio/events",
-            status_code=status.HTTP_302_FOUND,
+            url='/login?next=/studio/events',
+            status_code=HTTPStatus.FOUND,
         )
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
-        is_secure = (request.url.scheme == "https") or (
-            settings.environment.lower() in ("production", "prod")
+        is_secure = (request.url.scheme == 'https') or (
+            settings.environment.lower() in ('production', 'prod')
         )
         resp = RedirectResponse(
-            url="/studio",
-            status_code=status.HTTP_302_FOUND,
+            url='/studio',
+            status_code=HTTPStatus.FOUND,
         )
         resp.set_cookie(
-            key="flash_error",
-            value="You do not have the permission to access that page",
+            key='flash_error',
+            value='You do not have the permission to access that page',
             max_age=10,
-            path="/",
+            path='/',
             httponly=True,
-            samesite="lax",
+            samesite='lax',
             secure=is_secure,
         )
         return resp
@@ -1040,15 +1078,15 @@ def _parse_speaker_review_window_hours(raw_hours: str | None) -> int | None:
     if raw_hours is None:
         return None
     cleaned = str(raw_hours).strip()
-    if not cleaned or cleaned.lower() in ("default", "none"):
+    if not cleaned or cleaned.lower() in ('default', 'none'):
         return None
     try:
         hours = int(cleaned)
     except (ValueError, TypeError) as exc:
-        raise ValueError("Speaker review window must be a positive integer") from exc
+        raise ValueError('Speaker review window must be a positive integer') from exc
 
     if hours <= 0:
-        raise ValueError("Speaker review window must be a positive integer")
+        raise ValueError('Speaker review window must be a positive integer')
     return hours
 
 
@@ -1088,8 +1126,8 @@ def _get_available_timezones() -> list[str]:
         if tzs:
             return tzs
     except OSError as exc:
-        logger.warning("Failed to load system timezones: %s", exc)
-    return ["UTC"]
+        logger.warning('Failed to load system timezones: %s', exc)
+    return ['UTC']
 
 
 def _render_studio_events_page(
@@ -1097,7 +1135,7 @@ def _render_studio_events_page(
     user: models.User,
     db: Session,
     error: str | None = None,
-    status_code: int = status.HTTP_200_OK,
+    status_code: int = HTTPStatus.OK,
 ) -> HTMLResponse:
     events = list(
         db.scalars(
@@ -1108,48 +1146,48 @@ def _render_studio_events_page(
         )
     )
     global_hours = get_setting(
-        "speaker_magic_link_expire_hours",
+        'speaker_magic_link_expire_hours',
         default=settings.speaker_magic_link_expire_hours,
         db=db,
     )
     return templates.TemplateResponse(
         request,
-        "events.html.jinja",
+        'events.html.jinja',
         {
-            "events": events,
-            "error": error,
-            "global_speaker_magic_link_expire_hours": int(global_hours),
-            "available_timezones": _get_available_timezones(),
+            'events': events,
+            'error': error,
+            'global_speaker_magic_link_expire_hours': int(global_hours),
+            'available_timezones': _get_available_timezones(),
         },
         status_code=status_code,
-        headers={"Cache-Control": "no-store"},
+        headers={'Cache-Control': 'no-store'},
     )
 
 
-@router.post("/events", response_class=HTMLResponse)
+@router.post('/events', response_class=HTMLResponse)
 def create_studio_event(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-    name: Annotated[str, Form()] = "",
-    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
-    start_date: Annotated[str, Form()] = "",
-    end_date: Annotated[str, Form()] = "",
-    timezone: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = '',
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = '',
+    start_date: Annotated[str, Form()] = '',
+    end_date: Annotated[str, Form()] = '',
+    timezone: Annotated[str, Form()] = '',
 ) -> Response:
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not authorized to access event management",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not authorized to access event management',
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url='/login', status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
@@ -1159,8 +1197,8 @@ def create_studio_event(
             request,
             user,
             db,
-            error="Event name is required.",
-            status_code=status.HTTP_400_BAD_REQUEST,
+            error='Event name is required.',
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     try:
@@ -1174,7 +1212,7 @@ def create_studio_event(
             and parsed_end_date
             and parsed_end_date < parsed_start_date
         ):
-            raise ValueError("End date must be greater than or equal to start date.")
+            raise ValueError('End date must be greater than or equal to start date.')
         parsed_timezone = _parse_timezone(timezone)
     except ValueError as exc:
         return _render_studio_events_page(
@@ -1182,7 +1220,7 @@ def create_studio_event(
             user,
             db,
             error=str(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
         )
 
     event = models.Event(
@@ -1198,56 +1236,54 @@ def create_studio_event(
     db.refresh(event)
 
     return RedirectResponse(
-        url="/studio/events",
-        status_code=status.HTTP_303_SEE_OTHER,
+        url='/studio/events',
+        status_code=HTTPStatus.SEE_OTHER,
     )
 
 
-@router.post("/events/{event_id}/edit", response_class=HTMLResponse)
+@router.post('/events/{event_id}/edit', response_class=HTMLResponse)
 def edit_studio_event(
     request: Request,
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
-    name: Annotated[str, Form()] = "",
-    speaker_magic_link_expire_hours: Annotated[str, Form()] = "",
-    start_date: Annotated[str, Form()] = "",
-    end_date: Annotated[str, Form()] = "",
-    timezone: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = '',
+    speaker_magic_link_expire_hours: Annotated[str, Form()] = '',
+    start_date: Annotated[str, Form()] = '',
+    end_date: Annotated[str, Form()] = '',
+    timezone: Annotated[str, Form()] = '',
 ) -> RedirectResponse:
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not authorized to access event management",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not authorized to access event management',
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url='/login', status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
     event = db.scalar(select(models.Event).where(models.Event.id == event_id))
     if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Event not found')
 
     if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not authorized to edit this event",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='User is not authorized to edit this event',
         )
 
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event name cannot be empty",
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail='Event name cannot be empty',
         )
 
     event.name = clean_name
@@ -1259,41 +1295,41 @@ def edit_studio_event(
         parsed_start = _parse_date(start_date)
         parsed_end = _parse_date(end_date)
         if parsed_start and parsed_end and parsed_end < parsed_start:
-            raise ValueError("End date must be greater than or equal to start date.")
+            raise ValueError('End date must be greater than or equal to start date.')
         event.start_date = parsed_start
         event.end_date = parsed_end
         event.timezone = _parse_timezone(timezone)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=HTTPStatus.BAD_REQUEST,
             detail=str(exc),
         ) from exc
 
     db.commit()
-    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url='/studio/events', status_code=HTTPStatus.SEE_OTHER)
 
 
-@router.post("/events/{event_id}/delete", response_class=HTMLResponse)
+@router.post('/events/{event_id}/delete', response_class=HTMLResponse)
 def delete_studio_event(
     request: Request,
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
 ) -> RedirectResponse:
-    cookie_token = request.cookies.get("veditor_session")
+    cookie_token = request.cookies.get('veditor_session')
     if cookie_token and decode_sso_token(cookie_token) is not None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="SSO sessions are not authorized to access event management",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='SSO sessions are not authorized to access event management',
         )
 
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
-        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url='/login', status_code=HTTPStatus.FOUND)
 
     if user.role not in (AuthRole.ORGANIZER, AuthRole.ADMIN):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=HTTPStatus.FORBIDDEN,
             detail="Operation requires minimum role 'organizer'",
         )
 
@@ -1301,14 +1337,12 @@ def delete_studio_event(
         select(models.Event).where(models.Event.id == event_id).with_for_update()
     )
     if not event:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Event not found"
-        )
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Event not found')
 
     if user.role != AuthRole.ADMIN and event.created_by_user_id != user.id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not authorized to delete this event",
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='User is not authorized to delete this event',
         )
 
     talks = list(event.talks)
@@ -1322,21 +1356,21 @@ def delete_studio_event(
 
     db.delete(event)
     db.commit()
-    return RedirectResponse(url="/studio/events", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url='/studio/events', status_code=HTTPStatus.SEE_OTHER)
 
 
 router.add_api_route(
-    "/room/attach-recording",
+    '/room/attach-recording',
     attach_room_recording,
-    methods=["POST"],
+    methods=['POST'],
     response_model=schemas.RoomRecordingAttachResponse,
-    status_code=status.HTTP_200_OK,
+    status_code=HTTPStatus.OK,
     include_in_schema=False,
 )
 
 router.add_api_route(
-    "/room/days",
+    '/room/days',
     get_room_days,
-    methods=["GET"],
+    methods=['GET'],
     include_in_schema=False,
 )
