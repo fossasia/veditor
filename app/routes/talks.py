@@ -647,9 +647,14 @@ def submit_cut_bounds(
         )
     raw_key = raw_keys[0]
 
+    original_status = talk.status
+    original_cut_start = talk.cut_start
+    original_cut_end = talk.cut_end
+
     talk.cut_start = cut_start_s
     talk.cut_end = cut_end_s
     advance(talk, TalkStatus.CUTTING)
+    review = None
     if payload.note:
         user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
         review = models.Review(
@@ -659,7 +664,8 @@ def submit_cut_bounds(
             user_id=user_id,
         )
         db.add(review)
-    db.flush()
+    db.commit()
+    db.refresh(talk)
 
     try:
         light_queue.enqueue(
@@ -669,11 +675,15 @@ def submit_cut_bounds(
             job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
         )
     except Exception:
-        db.rollback()
+        talk.status = original_status
+        talk.cut_start = original_cut_start
+        talk.cut_end = original_cut_end
+        talk.updated_at = datetime.now(UTC)
+        if review is not None:
+            db.delete(review)
+        db.commit()
         raise
 
-    db.commit()
-    db.refresh(talk)
     return schemas.TalkRead.model_validate(talk)
 
 
