@@ -105,18 +105,20 @@
     <div class="v-modal-card">
       <div class="v-modal-header">
         <h3 class="v-modal-title" id="modal-request-organizer-title">Request Organizer Access</h3>
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-close-request-organizer" data-modal-close aria-label="Close dialog">&times;</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-close-request-organizer" data-modal-close aria-label="Close dialog">✕</button>
       </div>
       <div class="v-modal-body">
-        <p class="v-modal-desc modal-description">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
-        <label for="organizer-request-note" class="v-modal-label form-label">Note <span class="text-muted">(optional)</span></label>
-        <textarea id="organizer-request-note" class="form-input" rows="3" maxlength="500" placeholder="e.g. I am organizing FOSSASIA Summit 2027 and need to upload recordings..."></textarea>
-        <p class="form-hint" id="organizer-request-note-chars">0 / 500</p>
-        <p class="form-error hidden" id="organizer-request-error"></p>
+        <p class="v-modal-desc">Organizer access lets you create events, register talks, and ingest recordings. Optionally describe your role or the event you are organizing.</p>
+        <div class="v-modal-field">
+          <label for="organizer-request-note" class="v-modal-label">Note <span class="text-muted">(optional)</span></label>
+          <textarea id="organizer-request-note" class="input-field" rows="3" placeholder="e.g. I am organizing FOSSASIA Summit 2027 and need to upload recordings..."></textarea>
+          <p class="form-hint" id="organizer-request-note-chars">0 / 500</p>
+          <p class="form-error hidden" id="organizer-request-error"></p>
+        </div>
       </div>
       <div class="v-modal-footer">
-        <button class="btn btn-secondary" id="btn-cancel-request-organizer" type="button" data-modal-close>Cancel</button>
-        <button class="btn btn-primary" id="btn-submit-request-organizer" type="button">Submit Request</button>
+        <button class="btn btn-ghost btn-sm" id="btn-cancel-request-organizer" type="button" data-modal-close>Cancel</button>
+        <button class="btn btn-primary btn-sm" id="btn-submit-request-organizer" type="button">Submit Request</button>
       </div>
     </div>
   </dialog>
@@ -163,6 +165,7 @@
         >
       </div>
 
+      <label class="sr-only" for="status-select">Filter by status</label>
       <select id="status-select" class="select-field" name="status_filter">
         <option value="">All Statuses</option>
         {% for s in all_statuses %}
@@ -170,6 +173,30 @@
             {{ s | replace('_', ' ') | title }}
           </option>
         {% endfor %}
+      </select>
+
+      {% if room is none %}
+      <label class="sr-only" for="room-filter-select">Filter by room</label>
+      <select id="room-filter-select" class="select-field" name="room_filter">
+        <option value="">All Rooms</option>
+        {% for r in all_rooms %}
+          <option value="{{ r }}" {% if r == room_filter %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
+      <label class="sr-only" for="sort-by-select">Sort talks by</label>
+      <select id="sort-by-select" class="select-field" name="sort_by">
+        <option value="start" {% if sort_by == 'start' %}selected{% endif %}>Sort by start time</option>
+        <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Sort by title</option>
+        <option value="room" {% if sort_by == 'room' %}selected{% endif %}>Sort by room</option>
+        <option value="status" {% if sort_by == 'status' %}selected{% endif %}>Sort by status</option>
+      </select>
+
+      <label class="sr-only" for="sort-dir-select">Sort direction</label>
+      <select id="sort-dir-select" class="select-field" name="sort_dir">
+        <option value="desc" {% if sort_dir == 'desc' %}selected{% endif %}>Descending</option>
+        <option value="asc" {% if sort_dir == 'asc' %}selected{% endif %}>Ascending</option>
       </select>
 
       {% if event_id %}
@@ -183,7 +210,7 @@
         Filter
       </button>
 
-      {% if q or status_filter %}
+      {% if q or status_filter or room_filter or sort_by != 'start' or sort_dir != 'desc' %}
         <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost" id="clear-btn">Clear</a>
       {% endif %}
     </form>
@@ -319,7 +346,7 @@
     </table>
     {% else %}
     <div class="empty-state-wrap">
-      {% if q or status_filter %}
+      {% if q or status_filter or room_filter or sort_by != 'start' or sort_dir != 'desc' %}
         <p class="empty-state-title">No matching talks</p>
         <p class="empty-state-desc">No talks match your current filter or search criteria.</p>
         <a href="{{ filter_action }}{% if event_id %}?event_id={{ event_id }}{% endif %}" class="btn btn-ghost btn-sm empty-state-btn">Clear Filters</a>
