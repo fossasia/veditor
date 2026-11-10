@@ -1553,12 +1553,6 @@ html[data-theme="dark"] .role-request-banner.role-request-pending {
   color: var(--v-text-primary, #f8fafc);
 }
 
-#modal-request-organizer .modal-description {
-  font-size: 0.875rem;
-  color: var(--v-text-muted);
-  margin-bottom: 1rem;
-}
-
 #organizer-request-note {
   width: 100%;
   resize: vertical;
