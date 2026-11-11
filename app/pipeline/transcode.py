@@ -22,10 +22,12 @@ from av.audio.stream import AudioStream
 from av.packet import Packet
 from av.video.stream import VideoStream
 
+from .concat import _can_stream_copy, _concat_stream_copy
 from .loudness import (
     DEFAULT_LRA,
     DEFAULT_TRUE_PEAK,
     _mux_packet_with_monotonic_dts,
+    rescale_pts,
 )
 
 
@@ -40,7 +42,7 @@ class TranscodePreset:
     video_codec: str = 'libx264'
     crf: int | None = 22
     video_bitrate: int | None = None
-    preset_speed: str = 'medium'
+    preset_speed: str = 'veryfast'
     audio_codec: str = 'aac'
     audio_bitrate: int = 192_000
     container_format: str = 'mp4'
@@ -67,7 +69,7 @@ PRESET_720P = TranscodePreset(
     name='720p',
     video_codec='libx264',
     crf=23,
-    preset_speed='medium',
+    preset_speed='veryfast',
     audio_codec='aac',
     audio_bitrate=128_000,
     container_format='mp4',
@@ -93,7 +95,7 @@ PRESET_1440P = TranscodePreset(
     name='1440p',
     video_codec='libx264',
     crf=21,
-    preset_speed='medium',
+    preset_speed='veryfast',
     audio_codec='aac',
     audio_bitrate=256_000,
     container_format='mp4',
@@ -126,6 +128,7 @@ def transcode(
     intro_path: Path | str | None = None,
     outro_path: Path | str | None = None,
     target_lufs: float | None = None,
+    allow_stream_copy: bool = True,
 ) -> None:
     """Encode media to final publish quality using the given preset.
 
@@ -266,40 +269,185 @@ def transcode(
     if active_preset.container_format == 'mp4':
         container_options['movflags'] = 'faststart'
 
-    with av.open(
-        str(out_path),
-        mode='w',
-        format=active_preset.container_format,
-        options=container_options if container_options else None,
-    ) as out_container:
+    can_stream_copy_video = False
+    can_stream_copy_audio = False
+
+    if allow_stream_copy and start_seconds == 0.0 and end_seconds is None:
+        if len(segments) == 1 and in_v is not None:
+            v_ctx = in_v.codec_context
+            v_codec = v_ctx.name.lower() if v_ctx and v_ctx.name else ''
+            target_v_codec = active_preset.video_codec.lower()
+            codec_matches = (
+                (v_codec in ('h264', 'avc1') and target_v_codec in ('libx264', 'h264'))
+                or (
+                    v_codec in ('hevc', 'h265')
+                    and target_v_codec in ('libx265', 'hevc', 'h265')
+                )
+                or (v_codec == target_v_codec)
+            )
+            pix_fmt_val = v_ctx.pix_fmt if v_ctx else None
+            pix_matches = pix_fmt_val == active_preset.pix_fmt or (
+                pix_fmt_val == 'yuv420p' and active_preset.pix_fmt == 'yuv420p'
+            )
+            res_matches = (
+                active_preset.max_width is None
+                or (v_ctx.width or 0) <= active_preset.max_width
+            ) and (
+                active_preset.max_height is None
+                or (v_ctx.height or 0) <= active_preset.max_height
+            )
+            is_standard_crf = active_preset.video_bitrate is None and (
+                active_preset.crf is None
+                or active_preset.crf == PRESET_1080P_DEFAULT.crf
+            )
+            if codec_matches and pix_matches and res_matches and is_standard_crf:
+                can_stream_copy_video = True
+
+            if can_stream_copy_video:
+                if in_a is None:
+                    can_stream_copy_audio = True
+                elif target_lufs is None:
+                    a_ctx = in_a.codec_context
+                    a_codec = a_ctx.name.lower() if a_ctx and a_ctx.name else ''
+                    target_a_codec = active_preset.audio_codec.lower()
+                    if (
+                        a_codec in ('aac', 'mp4a')
+                        and target_a_codec in ('aac', 'libfdk_aac')
+                    ) or (a_codec == target_a_codec):
+                        can_stream_copy_audio = True
+
+        elif len(segments) > 1 and target_lufs is None:
+            seg_paths = [p for _, p, _, _ in segments]
+            if _can_stream_copy(seg_paths):
+                can_stream_copy_video = True
+                can_stream_copy_audio = True
+
+    if len(segments) > 1 and can_stream_copy_video and can_stream_copy_audio:
+        _concat_stream_copy(
+            [p for _, p, _, _ in segments], out_path, canonical_cut_path=in_path
+        )
+        if on_progress:
+            on_progress(1.0)
+        return
+
+    if len(segments) == 1 and can_stream_copy_video and can_stream_copy_audio:
+        with (
+            av.open(str(in_path)) as in_c,
+            av.open(
+                str(out_path),
+                mode='w',
+                format=active_preset.container_format,
+                options=container_options if container_options else None,
+            ) as out_container,
+        ):
+            out_v = (
+                out_container.add_stream_from_template(in_c.streams.video[0])
+                if in_c.streams.video
+                else None
+            )
+            out_a = (
+                out_container.add_stream_from_template(in_c.streams.audio[0])
+                if in_c.streams.audio
+                else None
+            )
+
+            stream_map: dict[int, av.stream.Stream] = {}
+            if in_c.streams.video and out_v:
+                stream_map[in_c.streams.video[0].index] = out_v
+            if in_c.streams.audio and out_a:
+                stream_map[in_c.streams.audio[0].index] = out_a
+
+            last_dts: dict[int, int] = {}
+            stream_first_pts: dict[int, float] = {}
+            last_reported_pct = 0.0
+
+            streams_to_demux = [
+                s
+                for s in (in_c.streams.video[:1] + in_c.streams.audio[:1])
+                if s is not None
+            ]
+            for packet in in_c.demux(*streams_to_demux):
+                if packet.stream.index not in stream_map:
+                    continue
+
+                if on_progress and total_duration_s > 0:
+                    ts = packet.pts if packet.pts is not None else packet.dts
+                    if ts is not None:
+                        stream_idx = packet.stream.index
+                        tb = (
+                            float(packet.stream.time_base)
+                            if packet.stream.time_base
+                            else (1.0 / av.time_base)
+                        )
+                        current_ts_s = float(ts * tb)
+                        if stream_idx not in stream_first_pts:
+                            stream_first_pts[stream_idx] = current_ts_s
+                        seg_elapsed_s = max(
+                            0.0, current_ts_s - stream_first_pts[stream_idx]
+                        )
+                        pct = min(0.99, max(0.0, seg_elapsed_s / total_duration_s))
+                        reported_pct = round(pct, 4)
+                        if reported_pct > last_reported_pct:
+                            on_progress(reported_pct)
+                            last_reported_pct = reported_pct
+
+                out_s = stream_map[packet.stream.index]
+                if packet.dts is None and packet.pts is None:
+                    continue
+                rescale_pts(packet, packet.stream.time_base, out_s.time_base)
+                packet.stream = out_s
+                _mux_packet_with_monotonic_dts(
+                    out_container, packet, out_s.index, last_dts
+                )
+
+        if on_progress:
+            on_progress(1.0)
+        return
+
+    with (
+        av.open(str(in_path)) as in_ref_c,
+        av.open(
+            str(out_path),
+            mode='w',
+            format=active_preset.container_format,
+            options=container_options if container_options else None,
+        ) as out_container,
+    ):
         out_video = None
         out_audio = None
         video_time_base = Fraction(1, 1) / fps
 
         # 1. Configure Video Stream if present
         if video_streams:
-            video_options: dict[str, str] = {}
-            if active_preset.crf is not None:
-                video_options['crf'] = str(active_preset.crf)
-            if active_preset.preset_speed:
-                video_options['preset'] = active_preset.preset_speed
-            active_threads = threads if threads is not None else active_preset.threads
-            if active_threads is not None:
-                video_options['threads'] = str(active_threads)
+            if can_stream_copy_video and in_ref_c.streams.video:
+                out_video = out_container.add_stream_from_template(
+                    in_ref_c.streams.video[0]
+                )
+            else:
+                video_options: dict[str, str] = {}
+                if active_preset.crf is not None:
+                    video_options['crf'] = str(active_preset.crf)
+                if active_preset.preset_speed:
+                    video_options['preset'] = active_preset.preset_speed
+                active_threads = (
+                    threads if threads is not None else active_preset.threads
+                )
+                if active_threads is not None:
+                    video_options['threads'] = str(active_threads)
 
-            out_video = cast(
-                VideoStream,
-                out_container.add_stream(
-                    active_preset.video_codec,
-                    rate=fps,
-                    options=video_options,
-                ),
-            )
-            out_video.width = out_width
-            out_video.height = out_height
-            out_video.pix_fmt = active_preset.pix_fmt
-            if active_preset.video_bitrate:
-                out_video.bit_rate = active_preset.video_bitrate
+                out_video = cast(
+                    VideoStream,
+                    out_container.add_stream(
+                        active_preset.video_codec,
+                        rate=fps,
+                        options=video_options,
+                    ),
+                )
+                out_video.width = out_width
+                out_video.height = out_height
+                out_video.pix_fmt = active_preset.pix_fmt
+                if active_preset.video_bitrate:
+                    out_video.bit_rate = active_preset.video_bitrate
 
         # 2. Configure Audio Stream if present
         audio_layout = 'stereo' if target_lufs is not None else layout_name
@@ -476,6 +624,16 @@ def transcode(
                                 last_reported_pct = reported_pct
 
                     if packet.stream.type == 'video' and out_video is not None:
+                        if can_stream_copy_video and in_v is not None:
+                            if packet.dts is None and packet.pts is None:
+                                continue
+                            rescale_pts(packet, in_v.time_base, out_video.time_base)
+                            packet.stream = out_video
+                            _mux_packet_with_monotonic_dts(
+                                out_container, packet, out_video.index, last_dts
+                            )
+                            continue
+
                         vpacket = cast('Packet[VideoStream]', packet)
                         try:
                             decoded_frames = vpacket.decode()
@@ -623,8 +781,8 @@ def transcode(
                 except av.BlockingIOError, av.EOFError:
                     break
 
-        # Flush both encoders
-        if out_video is not None:
+        # Flush encoders
+        if out_video is not None and not can_stream_copy_video:
             for enc_packet in out_video.encode():
                 _mux_packet_with_monotonic_dts(
                     out_container, enc_packet, out_video.index, last_dts

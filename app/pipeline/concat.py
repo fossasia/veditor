@@ -44,8 +44,13 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 video_props: list[tuple[Any, ...]] = []
                 for v in video_streams:
                     ctx = v.codec_context
-                    rate = v.average_rate or v.guessed_rate
-                    fps_val = round(float(rate), 2) if rate else None
+                    rate = (
+                        v.base_rate
+                        or v.codec_context.framerate
+                        or v.average_rate
+                        or v.guessed_rate
+                    )
+                    fps_val = round(float(rate)) if rate and float(rate) > 0 else None
                     video_props.append(
                         (
                             ctx.name,
@@ -489,10 +494,10 @@ def concat(
 
     def _persist(src: Path) -> str:
         if storage_backend is not None:
-            storage_backend.put(output_key, src)
+            storage_backend.link_or_copy(output_key, src)
             stored = storage_backend.get(output_key)
             return str(stored)
-        LocalDiskBackend(out_p.parent).put(out_p.name, src)
+        LocalDiskBackend(out_p.parent).link_or_copy(out_p.name, src)
         return str(out_p)
 
     if intro_p is None and outro_p is None:

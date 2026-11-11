@@ -92,6 +92,26 @@ def _annexb_to_avcc(data: bytes) -> bytes:
     return bytes(out)
 
 
+def _normalize_x264_profile(profile_str: str | None) -> str | None:
+    """Map ffprobe/PyAV profile string to a valid libx264 profile option."""
+    if not profile_str:
+        return None
+    p = profile_str.lower().strip()
+    if 'baseline' in p:
+        return 'baseline'
+    if 'main' in p:
+        return 'main'
+    if '444' in p:
+        return 'high444'
+    if '422' in p:
+        return 'high422'
+    if '10' in p:
+        return 'high10'
+    if 'high' in p:
+        return 'high'
+    return None
+
+
 class CutStrategy(str, Enum):
     STREAM_COPY = 'stream_copy'
     SMART_CUT = 'smart_cut'
@@ -462,12 +482,26 @@ def _cut_smart(
 
         # Collect keyframe timestamps
         keyframes: list[float] = []
+        if start_seconds > 30.0:
+            seek_target = int((start_seconds - 30.0) * av.time_base)
+            in_container.seek(seek_target, backward=True, any_frame=False)
         for packet in in_container.demux(in_v):
             if packet.is_keyframe and packet.pts is not None:
                 ts = float(packet.pts * in_v.time_base)
                 keyframes.append(ts)
                 if ts > end_seconds + 5.0:
                     break
+
+        if not any(k <= start_seconds + epsilon for k in keyframes):
+            # Fallback in case GOP was > 30s: scan from beginning
+            keyframes.clear()
+            in_container.seek(0, backward=True, any_frame=False)
+            for packet in in_container.demux(in_v):
+                if packet.is_keyframe and packet.pts is not None:
+                    ts = float(packet.pts * in_v.time_base)
+                    keyframes.append(ts)
+                    if ts > end_seconds + 5.0:
+                        break
 
         if not keyframes:
             keyframes = [0.0]
@@ -644,7 +678,9 @@ def _cut_smart(
             if threads is not None:
                 head_options['threads'] = str(threads)
             if in_v.profile:
-                head_options['profile'] = in_v.profile.lower().split()[0]
+                norm_profile = _normalize_x264_profile(in_v.profile)
+                if norm_profile:
+                    head_options['profile'] = norm_profile
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             head_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
@@ -743,7 +779,9 @@ def _cut_smart(
             if threads is not None:
                 tail_options['threads'] = str(threads)
             if in_v.profile:
-                tail_options['profile'] = in_v.profile.lower().split()[0]
+                norm_profile = _normalize_x264_profile(in_v.profile)
+                if norm_profile:
+                    tail_options['profile'] = norm_profile
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             tail_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
