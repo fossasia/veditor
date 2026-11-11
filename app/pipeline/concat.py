@@ -31,6 +31,7 @@ def _can_stream_copy(segments: list[Path]) -> bool:
 
     ref_video_props: list[tuple[Any, ...]] | None = None
     ref_audio_props: list[tuple[Any, ...]] | None = None
+    ref_avg_rates: list[Any] = []
 
     for seg_p in segments:
         try:
@@ -79,9 +80,18 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 if ref_video_props is None and ref_audio_props is None:
                     ref_video_props = video_props
                     ref_audio_props = audio_props
+                    ref_avg_rates = [v.average_rate for v in video_streams]
                 else:
                     if video_props != ref_video_props or audio_props != ref_audio_props:
                         return False
+                    for ref_ar, cur_v in zip(ref_avg_rates, video_streams):
+                        cur_ar = cur_v.average_rate
+                        if (
+                            ref_ar
+                            and cur_ar
+                            and abs(float(ref_ar) - float(cur_ar)) > 0.5
+                        ):
+                            return False
         except (av.FFmpegError, ValueError, OSError) as _:
             return False
 

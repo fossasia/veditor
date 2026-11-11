@@ -92,11 +92,19 @@ def _annexb_to_avcc(data: bytes) -> bytes:
     return bytes(out)
 
 
-def _normalize_x264_profile(profile_str: str | None) -> str | None:
-    """Map ffprobe/PyAV profile string to a valid libx264 profile option."""
+def _normalize_encoder_profile(
+    profile_str: str | None, encoder: str = 'libx264'
+) -> str | None:
+    """Map ffprobe/PyAV profile string to a valid encoder profile option."""
     if not profile_str:
         return None
     p = profile_str.lower().replace(':', '').replace(' ', '').strip()
+    if 'libx265' in encoder or 'hevc' in encoder:
+        if '10' in p:
+            return 'main10'
+        if 'main' in p:
+            return 'main'
+        return None
     if '444' in p:
         return 'high444'
     if '422' in p:
@@ -110,6 +118,9 @@ def _normalize_x264_profile(profile_str: str | None) -> str | None:
     if 'high' in p:
         return 'high'
     return None
+
+
+_normalize_x264_profile = _normalize_encoder_profile
 
 
 class CutStrategy(str, Enum):
@@ -679,11 +690,13 @@ def _cut_smart(
             head_options = {'preset': 'ultrafast'}
             if threads is not None:
                 head_options['threads'] = str(threads)
+            encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             if in_v.profile:
-                norm_profile = _normalize_x264_profile(in_v.profile)
+                norm_profile = _normalize_encoder_profile(
+                    in_v.profile, encoder=encoder_name
+                )
                 if norm_profile:
                     head_options['profile'] = norm_profile
-            encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             head_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )
@@ -780,11 +793,13 @@ def _cut_smart(
             tail_options = {'preset': 'ultrafast'}
             if threads is not None:
                 tail_options['threads'] = str(threads)
+            encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             if in_v.profile:
-                norm_profile = _normalize_x264_profile(in_v.profile)
+                norm_profile = _normalize_encoder_profile(
+                    in_v.profile, encoder=encoder_name
+                )
                 if norm_profile:
                     tail_options['profile'] = norm_profile
-            encoder_name = _resolve_video_encoder(in_v.codec_context.name)
             tail_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )

@@ -420,7 +420,10 @@ def transcode(
                         continue
                     rescale_pts(packet, packet.stream.time_base, out_s.time_base)
                     if out_s.index not in stream_initial_dts:
-                        stream_initial_dts[out_s.index] = packet.dts or packet.pts or 0
+                        first_ts = packet.dts if packet.dts is not None else packet.pts
+                        stream_initial_dts[out_s.index] = (
+                            first_ts if first_ts is not None else 0
+                        )
                     init_dts = stream_initial_dts[out_s.index]
                     if packet.dts is not None:
                         packet.dts -= init_dts
@@ -666,10 +669,15 @@ def transcode(
                         if can_stream_copy_video and in_v is not None:
                             if packet.dts is None and packet.pts is None:
                                 continue
-                            rescale_pts(packet, packet.stream.time_base, out_video.time_base)
+                            rescale_pts(
+                                packet, packet.stream.time_base, out_video.time_base
+                            )
                             if out_video.index not in stream_initial_dts:
+                                first_ts = (
+                                    packet.dts if packet.dts is not None else packet.pts
+                                )
                                 stream_initial_dts[out_video.index] = (
-                                    packet.dts or packet.pts or 0
+                                    first_ts if first_ts is not None else 0
                                 )
                             init_dts = stream_initial_dts[out_video.index]
                             if packet.dts is not None:

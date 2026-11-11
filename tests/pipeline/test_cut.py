@@ -393,7 +393,7 @@ def test_cut_frame_accurate_flushes_resampler(tmp_path: Path) -> None:
 
 
 def test_normalize_x264_profile() -> None:
-    """Verify that _normalize_x264_profile handles colon-separated and complex profiles."""
+    """Verify that _normalize_encoder_profile handles colon-separated and complex profiles."""
     assert _normalize_x264_profile('High 4:2:2') == 'high422'
     assert _normalize_x264_profile('High 4:4:4') == 'high444'
     assert _normalize_x264_profile('High 10') == 'high10'
@@ -402,3 +402,10 @@ def test_normalize_x264_profile() -> None:
     assert _normalize_x264_profile('High') == 'high'
     assert _normalize_x264_profile(None) is None
     assert _normalize_x264_profile('unknown_format') is None
+
+    from app.pipeline.cut import _normalize_encoder_profile
+
+    assert _normalize_encoder_profile('Main 10', encoder='libx265') == 'main10'
+    assert _normalize_encoder_profile('Main', encoder='libx265') == 'main'
+    assert _normalize_encoder_profile('Main 10', encoder='hevc') == 'main10'
+    assert _normalize_encoder_profile('Unknown', encoder='libx265') is None
