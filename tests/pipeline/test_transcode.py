@@ -493,6 +493,7 @@ def test_transcode_video_stream_copy_with_target_lufs(tmp_path: Path) -> None:
     info = open_and_inspect(output_clip)
     assert info.has_video is True
     assert info.has_audio is True
+    assert info.duration is not None
     assert abs(info.duration - 1.0) <= 0.5
 
 

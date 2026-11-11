@@ -528,8 +528,8 @@ def transcode(
 
         video_frame_count = 0
         audio_sample_count = 0
-        last_dts: dict[int, int] = {}
-        stream_initial_dts: dict[int, int] = {}
+        last_dts = {}
+        stream_initial_dts = {}
 
         def emit_video_frame(frame: av.VideoFrame) -> None:
             nonlocal video_frame_count
@@ -581,7 +581,7 @@ def transcode(
 
         for seg_idx, (_seg_type, seg_path, seg_start, seg_end) in enumerate(segments):
             seg_accumulated_duration_s = sum(segment_durations[:seg_idx])
-            stream_first_pts: dict[int, float] = {}
+            stream_first_pts = {}
             streams_past_end: set[int] = set()
             seg_had_video = False
             seg_had_audio = False
