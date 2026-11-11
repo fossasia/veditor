@@ -46,11 +46,11 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                     ctx = v.codec_context
                     rate = (
                         v.base_rate
-                        or v.codec_context.framerate
+                        or (v.codec_context.framerate if v.codec_context else None)
                         or v.average_rate
                         or v.guessed_rate
                     )
-                    fps_val = round(float(rate)) if rate and float(rate) > 0 else None
+                    fps_val = rate if rate and rate > 0 else None
                     video_props.append(
                         (
                             ctx.name,

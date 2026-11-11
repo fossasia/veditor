@@ -5,6 +5,7 @@ import pytest
 
 from app.pipeline.cut import (
     CutStrategy,
+    _normalize_x264_profile,
     _resolve_audio_encoder,
     _resolve_video_encoder,
     cut,
@@ -389,3 +390,15 @@ def test_cut_frame_accurate_flushes_resampler(tmp_path: Path) -> None:
 
     assert flushed == [True]
     assert out.is_file()
+
+
+def test_normalize_x264_profile() -> None:
+    """Verify that _normalize_x264_profile handles colon-separated and complex profiles."""
+    assert _normalize_x264_profile('High 4:2:2') == 'high422'
+    assert _normalize_x264_profile('High 4:4:4') == 'high444'
+    assert _normalize_x264_profile('High 10') == 'high10'
+    assert _normalize_x264_profile('Constrained Baseline') == 'baseline'
+    assert _normalize_x264_profile('Main') == 'main'
+    assert _normalize_x264_profile('High') == 'high'
+    assert _normalize_x264_profile(None) is None
+    assert _normalize_x264_profile('unknown_format') is None

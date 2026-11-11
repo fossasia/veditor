@@ -96,17 +96,17 @@ def _normalize_x264_profile(profile_str: str | None) -> str | None:
     """Map ffprobe/PyAV profile string to a valid libx264 profile option."""
     if not profile_str:
         return None
-    p = profile_str.lower().strip()
-    if 'baseline' in p:
-        return 'baseline'
-    if 'main' in p:
-        return 'main'
+    p = profile_str.lower().replace(':', '').replace(' ', '').strip()
     if '444' in p:
         return 'high444'
     if '422' in p:
         return 'high422'
     if '10' in p:
         return 'high10'
+    if 'baseline' in p:
+        return 'baseline'
+    if 'main' in p:
+        return 'main'
     if 'high' in p:
         return 'high'
     return None
@@ -492,7 +492,9 @@ def _cut_smart(
                 if ts > end_seconds + 5.0:
                     break
 
-        if not any(k <= start_seconds + epsilon for k in keyframes):
+        if start_seconds > 30.0 and not any(
+            k <= start_seconds + epsilon for k in keyframes
+        ):
             # Fallback in case GOP was > 30s: scan from beginning
             keyframes.clear()
             in_container.seek(0, backward=True, any_frame=False)
