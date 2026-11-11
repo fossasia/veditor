@@ -128,6 +128,16 @@ def handle_needs_work(
 ) -> schemas.ReviewResponse:
     if talk.status == TalkStatus.DONE:
         talk.final_cleaned_at = None
+        # Custom bumper files are permanently deleted by cleanup_bumpers() during
+        # job_transcode, so they no longer exist in storage or on disk. Reset to
+        # 'generated' so job_intro / job_outro regenerate title slates from talk
+        # metadata on re-assembly, preventing StorageKeyNotFoundError in job_concat.
+        if talk.intro_source == 'custom':
+            talk.intro_source = 'generated'
+            talk.custom_intro_path = None
+        if talk.outro_source == 'custom':
+            talk.outro_source = 'generated'
+            talk.custom_outro_path = None
         db.execute(
             delete(models.Job).where(
                 models.Job.talk_id == talk.id,
