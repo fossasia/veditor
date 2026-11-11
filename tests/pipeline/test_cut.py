@@ -5,6 +5,7 @@ import pytest
 
 from app.pipeline.cut import (
     CutStrategy,
+    _normalize_encoder_profile,
     _normalize_x264_profile,
     _resolve_audio_encoder,
     _resolve_video_encoder,
@@ -402,8 +403,6 @@ def test_normalize_x264_profile() -> None:
     assert _normalize_x264_profile('High') == 'high'
     assert _normalize_x264_profile(None) is None
     assert _normalize_x264_profile('unknown_format') is None
-
-    from app.pipeline.cut import _normalize_encoder_profile
 
     assert _normalize_encoder_profile('Main 10', encoder='libx265') == 'main10'
     assert _normalize_encoder_profile('Main', encoder='libx265') == 'main'

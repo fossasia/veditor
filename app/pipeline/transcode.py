@@ -380,6 +380,7 @@ def transcode(
                 if in_c.streams.audio and out_a:
                     stream_map[in_c.streams.audio[0].index] = out_a
 
+                out_container.start_encoding()
                 last_dts: dict[int, int] = {}
                 stream_initial_dts: dict[int, int] = {}
                 stream_first_pts: dict[int, float] = {}
@@ -526,6 +527,7 @@ def transcode(
             aformat_node.link_to(sink_node)
             audio_graph.configure()
 
+        out_container.start_encoding()
         video_frame_count = 0
         audio_sample_count = 0
         last_dts = {}
