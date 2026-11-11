@@ -864,13 +864,20 @@ def test_job_cut_fails_closed_when_newer_job_query_errors(
         with new_session() as sess:
             if call_count > 1:
                 orig_query = sess.query
+                orig_scalar = sess.scalar
 
                 def query_raise(model: Any, *args: Any, **kwargs: Any) -> Any:
                     if model == Job:
                         raise RuntimeError('Database query failure')
                     return orig_query(model, *args, **kwargs)
 
+                def scalar_raise(statement: Any, *args: Any, **kwargs: Any) -> Any:
+                    if 'jobs' in str(statement).lower():
+                        raise RuntimeError('Database query failure')
+                    return orig_scalar(statement, *args, **kwargs)
+
                 sess.query = query_raise  # type: ignore[method-assign,assignment]
+                sess.scalar = scalar_raise  # type: ignore[method-assign]
             yield sess
 
     with (

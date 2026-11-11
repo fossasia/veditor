@@ -750,20 +750,18 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             storage.put(staging_cut_key, tmp_out)
 
             with new_session() as db:
-                talk = (
-                    db.query(Talk).filter(Talk.id == talk_id).with_for_update().first()
+                talk = db.scalar(
+                    select(Talk).where(Talk.id == talk_id).with_for_update()
                 )
                 job = db.get(Job, job_id) if job_id is not None else None
                 newer_cut_job = None
                 if job_id is not None:
-                    job_res = (
-                        db.query(Job)
-                        .filter(
+                    job_res = db.scalar(
+                        select(Job).where(
                             Job.talk_id == talk_id,
                             Job.kind.in_([JobKind.CUT, 'cut_multi']),
                             Job.id > job_id,
                         )
-                        .first()
                     )
                     if job_res is not None and getattr(job_res, 'id', 0) > job_id:
                         newer_cut_job = job_res
