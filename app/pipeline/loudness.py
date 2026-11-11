@@ -214,3 +214,106 @@ def normalize(
                 _mux_packet_with_monotonic_dts(
                     out_container, enc_packet, out_audio.index, last_dts
                 )
+
+
+def synthesize_silent_audio(input_path: Path | str, output_path: Path | str) -> None:
+    """Add a silent stereo AAC audio track to a media file.
+
+    Used as a fallback when the input has no audio stream. The audio track is
+    generated with libavfilter's `anullsrc` source filter and the video stream
+    (if present) is preserved via lossless stream copy.
+
+    Args:
+        input_path: Path to the source recording.
+        output_path: Destination path for the output file with silent audio.
+
+    Raises:
+        FileNotFoundError: If input_path does not exist.
+        ValueError: If input and output paths are identical, or the duration
+            cannot be determined.
+    """
+    in_path = Path(input_path)
+    out_path = Path(output_path)
+
+    if not in_path.is_file():
+        raise FileNotFoundError(f'Input file not found: {in_path}')
+
+    if in_path.resolve() == out_path.resolve():
+        raise ValueError(
+            f'Input and output paths must be different to prevent file truncation: {in_path}'
+        )
+
+    # storage-boundary-exempt: creating parent directory for pipeline output
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with av.open(str(in_path)) as in_container:
+        video_streams = list(in_container.streams.video)
+
+        with av.open(str(out_path), mode='w') as out_container:
+            src_video = video_streams[0] if video_streams else None
+            out_video = (
+                out_container.add_stream_from_template(src_video)
+                if src_video is not None
+                else None
+            )
+
+            sample_rate = 44100
+            out_audio = out_container.add_stream('aac', rate=sample_rate)
+            out_audio.layout = 'stereo'
+
+            graph = av.filter.Graph()
+            anullsrc_node = graph.add(
+                'anullsrc', 'channel_layout=stereo:sample_rate=44100'
+            )
+            sink_node = graph.add('abuffersink')
+            anullsrc_node.link_to(sink_node)
+            graph.configure()
+
+            audio_sample_count = 0
+            last_dts: dict[int, int] = {}
+
+            def _encode_silence(frame: av.AudioFrame) -> None:
+                nonlocal audio_sample_count
+                frame.pts = audio_sample_count
+                frame.time_base = Fraction(1, sample_rate)
+                audio_sample_count += frame.samples
+                for enc_packet in out_audio.encode(frame):
+                    _mux_packet_with_monotonic_dts(
+                        out_container, enc_packet, out_audio.index, last_dts
+                    )
+
+            if src_video is not None and out_video is not None:
+                for packet in in_container.demux(src_video):
+                    if packet.dts is None and packet.pts is None:
+                        continue
+                    rescale_pts(packet, src_video.time_base, out_video.time_base)
+                    packet.stream = out_video
+                    _mux_packet_with_monotonic_dts(
+                        out_container, packet, out_video.index, last_dts
+                    )
+            duration_seconds: float | None = None
+            if in_container.duration:
+                duration_seconds = in_container.duration / float(av.time_base)
+            elif src_video is not None and src_video.duration:
+                duration_seconds = float(src_video.duration * src_video.time_base)
+            if duration_seconds is None:
+                raise ValueError(
+                    f'Cannot determine duration for silent audio synthesis: {in_path}'
+                )
+            target_samples = round(duration_seconds * sample_rate)
+
+            # anullsrc is an infinite source; pull frames until the target
+            # duration is reached (equivalent to ffmpeg's -shortest)
+            while audio_sample_count < target_samples:
+                try:
+                    out_frame = graph.pull()
+                except av.FFmpegError, EOFError:
+                    break
+                if isinstance(out_frame, av.AudioFrame):
+                    _encode_silence(out_frame)
+
+            # Flush audio encoder
+            for enc_packet in out_audio.encode():
+                _mux_packet_with_monotonic_dts(
+                    out_container, enc_packet, out_audio.index, last_dts
+                )
