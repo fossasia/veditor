@@ -69,6 +69,7 @@ from ..tasks import (
     STAGE_CONFIG,
     dispatch_assembly,
     job_cut,
+    job_cut_multi,
     job_detect,
     job_ingest,
     job_ingest_room_url,
@@ -619,6 +620,7 @@ def submit_cut_bounds(
             detail=f"Cannot submit cut bounds for talk in status '{talk.status}'",
         )
 
+    parsed_segs = payload.parsed_segments()
     cut_start_s, cut_end_s = payload.parsed_seconds()
 
     if talk.raw_duration_seconds is None:
@@ -647,12 +649,22 @@ def submit_cut_bounds(
         )
     raw_key = raw_keys[0]
 
-    original_status = talk.status
-    original_cut_start = talk.cut_start
-    original_cut_end = talk.cut_end
+    prior_status = talk.status
+    prior_cut_start = talk.cut_start
+    prior_cut_end = talk.cut_end
+    prior_cut_segments = talk.cut_segments
 
-    talk.cut_start = cut_start_s
-    talk.cut_end = cut_end_s
+    if len(parsed_segs) == 1:
+        talk.cut_start = cut_start_s
+        talk.cut_end = cut_end_s
+        talk.cut_segments = [{'start': cut_start_s, 'end': cut_end_s}]
+        cut_fn = job_cut
+    else:
+        talk.cut_start = None
+        talk.cut_end = None
+        talk.cut_segments = [{'start': s[0], 'end': s[1]} for s in parsed_segs]
+        cut_fn = job_cut_multi
+
     advance(talk, TalkStatus.CUTTING)
     review = None
     if payload.note:
@@ -669,20 +681,25 @@ def submit_cut_bounds(
 
     try:
         light_queue.enqueue(
-            job_cut,
+            cut_fn,
             talk.id,
             raw_key,
             job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
         )
-    except Exception:
-        talk.status = original_status
-        talk.cut_start = original_cut_start
-        talk.cut_end = original_cut_end
+    except (OSError, RedisError, RuntimeError) as exc:
+        logger.error('Failed to enqueue cut job for talk %s: %s', talk.id, exc)
+        talk.status = prior_status
+        talk.cut_start = prior_cut_start
+        talk.cut_end = prior_cut_end
+        talk.cut_segments = prior_cut_segments
         talk.updated_at = datetime.now(UTC)
         if review is not None:
             db.delete(review)
         db.commit()
-        raise
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail='Cut processing queue is temporarily unavailable; cut bounds were not queued. Please try again.',
+        ) from exc
 
     return schemas.TalkRead.model_validate(talk)
 
@@ -1072,7 +1089,9 @@ def abort_talk(
     clears DB jobs and reviews, and resets talk status back to 'waiting_for_files'.
     Returns 404 if talk is not found or not authorized for caller's events.
     """
-    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
+    )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Talk not found')
     check_event_access(talk.event_id, user, db)
@@ -1088,6 +1107,7 @@ def abort_talk(
     talk.raw_duration_seconds = None
     talk.cut_start = None
     talk.cut_end = None
+    talk.cut_segments = None
     talk.include_intro = False
     talk.include_outro = False
     talk.intro_source = None
@@ -2390,6 +2410,11 @@ async def attach_room_recording(
             if offset_end > offset_start:
                 talk.cut_start = offset_start
                 talk.cut_end = offset_end
+                talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
+            else:
+                talk.cut_start = None
+                talk.cut_end = None
+                talk.cut_segments = None
 
             talk_ids.append(talk.id)
 
