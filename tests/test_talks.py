@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -712,6 +713,53 @@ def test_submit_cut_bounds_needs_work_accepted(
         mock_enqueue.assert_called_once()
 
 
+def test_submit_cut_bounds_multiple_segments_accepted(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
+    """POST /talks/{id}/cut succeeds with multiple non-overlapping segments."""
+    event = _create_event(db_session)
+    talk = _create_pending_bounds_talk(db_session, event.id)
+    talk.raw_duration_seconds = 3600.0
+    db_session.commit()
+    _create_api_client(db_session, event_ids=[event.id])
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    fake_storage.put(f'{talk.id}/raw/video.mp4', b'raw video')
+
+    with patch('app.routes.talks.light_queue.enqueue') as mock_enqueue:
+        resp = client.post(
+            f'/talks/{talk.id}/cut',
+            json={
+                'segments': [
+                    {'start': '00:05:00', 'end': '00:15:00'},
+                    {'start': '00:20:00', 'end': '00:30:00'},
+                ],
+                'note': 'Cut out the mic malfunction',
+            },
+            headers={'X-API-Key': API_KEY},
+        )
+        assert resp.status_code == 202
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == TalkStatus.CUTTING
+        assert reloaded.cut_start is None
+        assert reloaded.cut_end is None
+        assert reloaded.cut_segments == [
+            {'start': 300.0, 'end': 900.0},
+            {'start': 1200.0, 'end': 1800.0},
+        ]
+        from app.tasks import job_cut_multi
+
+        mock_enqueue.assert_called_once_with(
+            job_cut_multi,
+            talk.id,
+            f'{talk.id}/raw/video.mp4',
+            job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
+        )
+
+
 # --- Full Path Test: recordings -> detect -> pending_approval -> approve -> cut -> preview -> preview halt ---
 
 
@@ -1384,3 +1432,29 @@ def test_handoff_platform_user_on_regular_event_sends_email(
 
         enqueued_jobs = [c[0][0] for c in mock_enqueue.call_args_list]
         assert job_send_speaker_handoff_email in enqueued_jobs
+
+
+def test_submit_cut_bounds_enqueue_failure_restores_prior_status(
+    db_session: Session,
+    fake_storage: FakeStorageBackend,
+) -> None:
+    event = _create_event(db_session)
+    talk = _create_pending_bounds_talk(db_session, event.id)
+    _create_api_client(db_session, event_ids=[event.id])
+    fake_storage.put(f'{talk.id}/raw/raw.mp4', b'data')
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    with patch(
+        'app.routes.talks.light_queue.enqueue', side_effect=RedisError('Redis down')
+    ):
+        resp = client.post(
+            f'/talks/{talk.id}/cut',
+            json={'cut_start': '00:00:01', 'cut_end': '00:00:05'},
+            headers={'X-API-Key': API_KEY},
+        )
+        assert resp.status_code == 503
+
+        db_session.expire_all()
+        reloaded = db_session.get(models.Talk, talk.id)
+        assert reloaded is not None
+        assert reloaded.status == TalkStatus.PENDING_BOUNDS

@@ -28,6 +28,23 @@ def _record_review_and_advance(
     db: Session,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
+    if payload.decision == schemas.ReviewDecision.approve:
+        if talk.status in (
+            TalkStatus.ASSEMBLING,
+            TalkStatus.TRANSCODING,
+            TalkStatus.UPLOADING,
+            TalkStatus.DONE,
+        ):
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"Cannot approve talk: state has already advanced to '{talk.status}'",
+            )
+        if (talk.cut_start is None or talk.cut_end is None) and not talk.cut_segments:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail='Cannot approve a talk without cut bounds.',
+            )
+
     try:
         review = models.Review(
             talk_id=talk.id,
@@ -38,19 +55,18 @@ def _record_review_and_advance(
         db.add(review)
 
         if payload.decision == schemas.ReviewDecision.approve:
-            if talk.cut_start is None or talk.cut_end is None:
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail='Cannot approve a talk without cut bounds.',
+            segments = talk.cut_segments or [
+                {'start': talk.cut_start or 0.0, 'end': talk.cut_end or 0.0}
+            ]
+            for seg in segments:
+                db.add(
+                    models.ApprovedCut(
+                        talk_id=talk.id,
+                        cut_start=seg['start'],
+                        cut_end=seg['end'],
+                        review=review,
+                    )
                 )
-            db.add(
-                models.ApprovedCut(
-                    talk_id=talk.id,
-                    cut_start=talk.cut_start,
-                    cut_end=talk.cut_end,
-                    review=review,
-                )
-            )
 
         advance(talk, target_state)
         db.flush()
@@ -139,6 +155,7 @@ def handle_reject(
 ) -> schemas.ReviewResponse:
     talk.cut_start = None
     talk.cut_end = None
+    talk.cut_segments = None
     response = _record_review_and_advance(
         talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
