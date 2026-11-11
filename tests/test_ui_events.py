@@ -1037,6 +1037,49 @@ def test_room_page_supports_status_and_search_filters(
     assert f'{clear_href} class="btn btn-ghost" id="clear-btn"' in resp.text
 
 
+def test_dashboard_room_filter_and_sorting(
+    client: TestClient, db_session: Session
+) -> None:
+    org, _, event, _, talks = _seed_room_talks(db_session)
+    talks['main_1'].title = 'Zeta Opening'
+    talks['main_2'].title = 'Alpha Closing'
+    talks['workshop'].title = 'ÉCOLE Session'
+    db_session.commit()
+    authenticate_client(client, org)
+
+    resp = client.get(
+        f'/studio?event_id={event.id}&room_filter=Main%20Stage&sort_by=title&sort_dir=asc'
+    )
+    assert resp.status_code == 200
+    assert 'Zeta Opening' in resp.text
+    assert 'Alpha Closing' in resp.text
+    assert 'ÉCOLE Session' not in resp.text
+    assert 'Roomless Lightning Talk' not in resp.text
+    assert resp.text.index('Alpha Closing') < resp.text.index('Zeta Opening')
+    assert 'name="room_filter"' in resp.text
+    assert 'name="sort_by"' in resp.text
+    assert 'name="sort_dir"' in resp.text
+    assert 'id="clear-btn"' in resp.text
+
+    # Invalid values are ignored safely and retain the default start-time order.
+    invalid = client.get(
+        f'/studio?event_id={event.id}&sort_by=not_a_column&sort_dir=sideways'
+    )
+    assert invalid.status_code == 200
+    assert invalid.text.index('Roomless Lightning Talk') < invalid.text.index(
+        'ÉCOLE Session'
+    )
+
+    unicode_search = client.get(f'/studio?event_id={event.id}&q=%C3%A9cole')
+    assert unicode_search.status_code == 200
+    assert 'ÉCOLE Session' in unicode_search.text
+    assert 'Zeta Opening' not in unicode_search.text
+
+    nul_search = client.get(f'/studio?event_id={event.id}&q=%00')
+    assert nul_search.status_code == 200
+    assert 'Zeta Opening' in nul_search.text
+
+
 def test_event_page_shows_event_title_header(
     client: TestClient, db_session: Session
 ) -> None:

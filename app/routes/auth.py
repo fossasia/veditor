@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
 from sqlalchemy import select, update
@@ -759,13 +759,51 @@ def verify_email_resend_submit(
     )
 
 
-@router.post('/users/request-organizer', response_model=schemas.UserRead)
+@router.post(
+    '/users/request-organizer',
+    response_model=schemas.UserRead,
+    summary='Request organizer role elevation',
+    description=(
+        'Allow a standard user to request organizer role elevation. '
+        'An optional justification note may be provided. If non-empty, '
+        'the note must contain at least 20 characters and at most 500 characters.'
+    ),
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            'description': 'Validation error: non-empty note is shorter than 20 characters or exceeds 500 characters.',
+            'content': {
+                'application/json': {
+                    'schema': {
+                        'type': 'object',
+                        'properties': {
+                            'detail': {
+                                'anyOf': [
+                                    {'type': 'string'},
+                                    {
+                                        'type': 'array',
+                                        'items': {
+                                            '$ref': '#/components/schemas/ValidationError'
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+)
 def request_organizer_role(
     payload: schemas.OrganizerRequestCreate,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> models.User:
-    """Allow a standard user to request organizer role elevation."""
+    """Allow a standard user to request organizer role elevation.
+
+    An optional justification note may be provided. If non-empty, the note
+    must be at least 20 characters and at most 500 characters.
+    """
     cookie_token = request.cookies.get('veditor_session')
     if (
         cookie_token and decode_sso_token(cookie_token) is not None
@@ -794,6 +832,11 @@ def request_organizer_role(
 
     requested_at = datetime.now(UTC)
     note_val = (payload.note or '').strip() or None
+    if note_val and len(note_val) < 20:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail='Note must be at least 20 characters.',
+        )
 
     result = db.execute(
         update(models.User)
