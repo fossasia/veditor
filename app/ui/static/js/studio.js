@@ -64,41 +64,46 @@ if (shellInit) {
   }
 }
 
-const video           = document.getElementById('main-video');
-const noPreview       = document.getElementById('no-preview-msg');
-const timecode        = document.getElementById('timecode-display');
+const video = document.getElementById('main-video');
+const noPreview = document.getElementById('no-preview-msg');
+const timecode = document.getElementById('timecode-display');
 const durationDisplay = document.getElementById('duration-display');
-const speedSel        = document.getElementById('speed-select');
-const jumpInput       = document.getElementById('jump-time-input');
+const speedSel = document.getElementById('speed-select');
+const jumpInput = document.getElementById('jump-time-input');
 
 // Seek buttons
-const btnPlay         = document.getElementById('btn-play');
-const iconPlay        = document.getElementById('icon-play');
-const iconPause       = document.getElementById('icon-pause');
-const btnSkipBack     = document.getElementById('btn-skip-back');
-const btnSkipFwd      = document.getElementById('btn-skip-fwd');
-const btnSeekBigBack  = document.getElementById('btn-seek-big-back');
-const btnSeekBigFwd   = document.getElementById('btn-seek-big-fwd');
+const btnPlay = document.getElementById('btn-play');
+const iconPlay = document.getElementById('icon-play');
+const iconPause = document.getElementById('icon-pause');
+const btnSkipBack = document.getElementById('btn-skip-back');
+const btnSkipFwd = document.getElementById('btn-skip-fwd');
+const btnSeekBigBack = document.getElementById('btn-seek-big-back');
+const btnSeekBigFwd = document.getElementById('btn-seek-big-fwd');
 const btnSeekMegaBack = document.getElementById('btn-seek-mega-back');
-const btnSeekMegaFwd  = document.getElementById('btn-seek-mega-fwd');
-const btnPrevFrame    = document.getElementById('btn-prev-frame');
-const btnNextFrame    = document.getElementById('btn-next-frame');
-const btnMute         = document.getElementById('btn-mute');
+const btnSeekMegaFwd = document.getElementById('btn-seek-mega-fwd');
+const btnPrevFrame = document.getElementById('btn-prev-frame');
+const btnNextFrame = document.getElementById('btn-next-frame');
+const btnMute = document.getElementById('btn-mute');
 
 // Timeline elements
-const tlTrack         = document.getElementById('timeline-track');
-const tlWaveform      = document.getElementById('tl-waveform');
-const tlStartMarker   = document.getElementById('tl-start-marker');
-const tlEndMarker     = document.getElementById('tl-end-marker');
-const tlPlayhead      = document.getElementById('tl-playhead');
-const inputInPoint    = document.getElementById('input-in-point');
-const inputOutPoint   = document.getElementById('input-out-point');
-const btnSetIn        = document.getElementById('btn-set-in');
-const btnSetOut       = document.getElementById('btn-set-out');
-const btnPlayCut      = document.getElementById('btn-play-cut');
+const tlTrack = document.getElementById('timeline-track');
+const tlWaveform = document.getElementById('tl-waveform');
+const tlStartMarker = document.getElementById('tl-start-marker');
+const tlEndMarker = document.getElementById('tl-end-marker');
+const tlPlayhead = document.getElementById('tl-playhead');
+const inputInPoint = document.getElementById('input-in-point');
+const inputOutPoint = document.getElementById('input-out-point');
+const btnSetIn = document.getElementById('btn-set-in');
+const btnSetOut = document.getElementById('btn-set-out');
+const btnPlayCut = document.getElementById('btn-play-cut');
+const btnAddSegment = document.getElementById('btn-add-segment');
+const btnSplitSegment = document.getElementById('btn-split-segment');
+const MAX_CUT_SEGMENTS = 50;
 
-let inPointSec  = 0;
+let inPointSec = 0;
 let outPointSec = 0;
+let cutSegments = [];
+let activeSegmentIndex = 0;
 let boundsEdited = false;
 let isPlayingCut = false;
 let currentWaveformPeaks = [];
@@ -106,14 +111,36 @@ let waveformAbortController = null;
 
 const initShellBounds = getStudioShell();
 if (initShellBounds) {
+  let loadedSegments = null;
+  if (initShellBounds.dataset.cutSegments) {
+    try {
+      const parsed = JSON.parse(initShellBounds.dataset.cutSegments);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        loadedSegments = parsed
+          .map(s => ({ start: parseFloat(s.start) || 0, end: parseFloat(s.end) || 0 }))
+          .filter(s => s.end > s.start);
+      }
+    } catch (_) {}
+  }
+
   const start = parseFloat(initShellBounds.dataset.cutStart) || 0;
   const end = parseFloat(initShellBounds.dataset.cutEnd) || 0;
+
+  if (loadedSegments && loadedSegments.length > 0) {
+    cutSegments = loadedSegments;
+  } else if (end > start) {
+    cutSegments = [{ start, end }];
+  } else {
+    cutSegments = [{ start: 0, end: 0 }];
+  }
+
   if (getActiveVideoCategory() === 'preview') {
     inPointSec = 0;
     outPointSec = Math.max(0, end - start);
+    cutSegments = [{ start: inPointSec, end: outPointSec }];
   } else {
-    inPointSec = Math.max(0, start);
-    outPointSec = Math.max(inPointSec, end);
+    inPointSec = cutSegments[0].start;
+    outPointSec = cutSegments[0].end;
   }
 }
 
@@ -126,8 +153,8 @@ function formatTimecode(t) {
   const s = totalS % 60;
   const m = Math.floor(totalS / 60) % 60;
   const h = Math.floor(totalS / 3600);
-  return [h, m, s].map(v => String(v).padStart(2, '0')).join(':') +
-    '.' + String(cs).padStart(2, '0');
+  return [h, m, s].map(v => String(v).padStart(2, '0')).join(':')
+    + '.' + String(cs).padStart(2, '0');
 }
 
 function parseTimecode(str) {
@@ -189,7 +216,12 @@ function drawWaveform() {
     const contour = new Path2D();
     contour.moveTo(points[0].x, points[0].y);
     for (let i = 0; i < points.length - 1; i++) {
-      contour.quadraticCurveTo(points[i].x, points[i].y, (points[i].x + points[i + 1].x) / 2, (points[i].y + points[i + 1].y) / 2);
+      contour.quadraticCurveTo(
+        points[i].x,
+        points[i].y,
+        (points[i].x + points[i + 1].x) / 2,
+        (points[i].y + points[i + 1].y) / 2,
+      );
     }
     contour.lineTo(points[points.length - 1].x, points[points.length - 1].y);
 
@@ -216,7 +248,9 @@ async function loadWaveformForUrl(videoUrl) {
   if (!talkId || !tlWaveform) return;
 
   if (waveformAbortController) {
-    try { waveformAbortController.abort(); } catch (_) {}
+    try {
+      waveformAbortController.abort();
+    } catch (_) {}
   }
   waveformAbortController = new AbortController();
 
@@ -261,7 +295,12 @@ function initWaveformListeners() {
 
 // ── Background Processing States & Viewport Loader ───────────────
 const ACTIVE_PROCESSING_STATES = [
-  'detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'
+  'detecting',
+  'cutting',
+  'generating_previews',
+  'assembling',
+  'transcoding',
+  'uploading',
 ];
 
 const STAGE_TITLES = {
@@ -309,9 +348,9 @@ function updateStudioLoader(talkStatus, activeJob) {
     return;
   }
 
-  const title = (activeJob && JOB_KIND_TITLES[activeJob.kind]) ||
-    STAGE_TITLES[talkStatus] ||
-    'Processing Video Pipeline';
+  const title = (activeJob && JOB_KIND_TITLES[activeJob.kind])
+    || STAGE_TITLES[talkStatus]
+    || 'Processing Video Pipeline';
 
   const titleEl = document.getElementById('viewport-loader-title');
   const statusLabel = document.getElementById('viewport-loader-status-label');
@@ -320,7 +359,9 @@ function updateStudioLoader(talkStatus, activeJob) {
   const timingEl = document.getElementById('viewport-loader-timing');
 
   if (titleEl) titleEl.textContent = title;
-  if (statusLabel) statusLabel.textContent = (talkStatus || (activeJob && activeJob.kind) || 'Processing').replace(/_/g, ' ');
+  if (statusLabel) {
+    statusLabel.textContent = (talkStatus || (activeJob && activeJob.kind) || 'Processing').replace(/_/g, ' ');
+  }
 
   if (activeJob) {
     const pct = (activeJob.progress_pct !== null && activeJob.progress_pct !== undefined)
@@ -331,7 +372,10 @@ function updateStudioLoader(talkStatus, activeJob) {
     if (fill) fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
 
     if (timingEl) {
-      if (activeJob.estimated_remaining !== null && activeJob.estimated_remaining !== undefined && activeJob.estimated_remaining > 0) {
+      if (
+        activeJob.estimated_remaining !== null && activeJob.estimated_remaining !== undefined
+        && activeJob.estimated_remaining > 0
+      ) {
         timingEl.textContent = `~${Math.round(activeJob.estimated_remaining)} seconds remaining`;
       } else if (activeJob.elapsed_time !== null && activeJob.elapsed_time !== undefined) {
         timingEl.textContent = `${Math.round(activeJob.elapsed_time)} seconds elapsed`;
@@ -420,9 +464,18 @@ function updateTimecode() {
     const pct = (video.currentTime / dur) * 100;
     if (tlPlayhead) tlPlayhead.style.left = `${pct}%`;
 
-    if (isPlayingCut && video.currentTime >= outPointSec) {
-      video.pause();
-      isPlayingCut = false;
+    if (isPlayingCut) {
+      const curTime = video.currentTime;
+      const currentSeg = cutSegments.find(s => curTime >= s.start && curTime < s.end);
+      if (!currentSeg) {
+        const nextSeg = cutSegments.find(s => s.start > curTime);
+        if (nextSeg) {
+          video.currentTime = nextSeg.start;
+        } else {
+          video.pause();
+          isPlayingCut = false;
+        }
+      }
     }
   }
 }
@@ -444,57 +497,338 @@ function updateTimelineTicks() {
       span.className = 'tl-tick';
       span.textContent = formatTickTime(t);
       return span;
-    })
+    }),
   );
 }
 
+function selectActiveSegment(idx) {
+  if (idx < 0 || idx >= cutSegments.length) return;
+  activeSegmentIndex = idx;
+  inPointSec = cutSegments[activeSegmentIndex].start;
+  outPointSec = cutSegments[activeSegmentIndex].end;
+  updateCutMarkersUI();
+}
+
 function updateCutMarkersUI() {
-  const dur = video && video.duration ? video.duration : outPointSec;
+  const dur = video && video.duration ? video.duration : (outPointSec || 10);
   if (!dur || dur <= 0) return;
 
-  const inPct  = Math.max(0, Math.min(100, (inPointSec / dur) * 100));
+  if (cutSegments.length === 0) {
+    cutSegments = [{ start: inPointSec, end: outPointSec || dur }];
+    activeSegmentIndex = 0;
+  }
+  if (activeSegmentIndex >= cutSegments.length) {
+    activeSegmentIndex = cutSegments.length - 1;
+  }
+  const curSeg = cutSegments[activeSegmentIndex];
+  inPointSec = curSeg.start;
+  outPointSec = curSeg.end;
+
+  const inPct = Math.max(0, Math.min(100, (inPointSec / dur) * 100));
   const outPct = Math.max(0, Math.min(100, ((outPointSec || dur) / dur) * 100));
 
-  if (tlStartMarker) tlStartMarker.style.left = `${inPct}%`;
-  if (tlEndMarker)   tlEndMarker.style.left   = `${outPct}%`;
+  if (tlStartMarker) {
+    tlStartMarker.style.left = `${inPct}%`;
+    tlStartMarker.title = `Drag Start Point (Cut ${activeSegmentIndex + 1}) (or press I)`;
+  }
+  if (tlEndMarker) {
+    tlEndMarker.style.left = `${outPct}%`;
+    tlEndMarker.title = `Drag End Point (Cut ${activeSegmentIndex + 1}) (or press O)`;
+  }
+  if (btnSetIn) btnSetIn.title = `Set In-Point for Cut ${activeSegmentIndex + 1} (I)`;
+  if (btnSetOut) btnSetOut.title = `Set Out-Point for Cut ${activeSegmentIndex + 1} (O)`;
 
   const tlContent = document.getElementById('tl-content');
   if (tlContent) {
-    tlContent.style.left  = `${inPct}%`;
+    tlContent.style.left = `${inPct}%`;
     tlContent.style.width = `${Math.max(0, outPct - inPct)}%`;
   }
 
-  if (inputInPoint)  inputInPoint.value  = formatTimecode(inPointSec);
+  const segmentsContainer = document.getElementById('tl-segments-container');
+  if (segmentsContainer) {
+    segmentsContainer.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const segDiv = document.createElement('div');
+        const sPct = Math.max(0, Math.min(100, (seg.start / dur) * 100));
+        const ePct = Math.max(0, Math.min(100, (seg.end / dur) * 100));
+        segDiv.className = `tl-segment-block${idx === activeSegmentIndex ? ' is-active' : ''}`;
+        segDiv.style.left = `${sPct}%`;
+        segDiv.style.width = `${Math.max(0, ePct - sPct)}%`;
+        segDiv.title = `Cut ${idx + 1}: ${formatTimecode(seg.start)} - ${formatTimecode(seg.end)}`;
+        segDiv.addEventListener('pointerdown', () => {
+          selectActiveSegment(idx);
+        });
+        return segDiv;
+      })
+    );
+  }
+
+  if (inputInPoint) inputInPoint.value = formatTimecode(inPointSec);
   if (inputOutPoint) inputOutPoint.value = formatTimecode(outPointSec);
 
-  const reviewIn = document.getElementById('review-in-point');
-  const reviewOut = document.getElementById('review-out-point');
-  const reviewDur = document.getElementById('review-duration');
-  if (reviewIn) reviewIn.textContent = formatTimecode(inPointSec);
-  if (reviewOut) reviewOut.textContent = formatTimecode(outPointSec);
-  if (reviewDur) {
-    const diff = Math.max(0, outPointSec - inPointSec);
-    reviewDur.textContent = formatTimecode(diff);
+  const segmentsList = document.getElementById('segments-list');
+  if (segmentsList) {
+    segmentsList.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const tab = document.createElement('div');
+        tab.className = `segment-tab${idx === activeSegmentIndex ? ' active' : ''}`;
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('aria-selected', idx === activeSegmentIndex ? 'true' : 'false');
+        tab.tabIndex = 0;
+
+        const titleSpan = document.createElement('span');
+        const segDur = Math.max(0, seg.end - seg.start);
+        titleSpan.textContent = `Cut ${idx + 1} (${formatSelectedDuration(segDur)})`;
+        tab.appendChild(titleSpan);
+
+        const activateTab = () => {
+          selectActiveSegment(idx);
+          if (video && isFinite(video.duration)) {
+            video.currentTime = seg.start;
+          }
+        };
+
+        tab.addEventListener('click', (e) => {
+          if (e.target.closest('.segment-tab-del')) return;
+          activateTab();
+        });
+
+        tab.addEventListener('keydown', (e) => {
+          if (e.target.closest('.segment-tab-del')) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activateTab();
+          }
+        });
+
+        if (cutSegments.length > 1) {
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'segment-tab-del';
+          delBtn.title = `Delete Cut ${idx + 1}`;
+          delBtn.setAttribute('aria-label', `Delete Cut ${idx + 1}`);
+          delBtn.textContent = '×';
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteSegment(idx);
+          });
+          tab.appendChild(delBtn);
+        }
+        return tab;
+      })
+    );
+    if (cutSegments.length === 1) {
+      const hint = document.createElement('span');
+      hint.className = 'segment-hint';
+      hint.textContent = 'Use "Add Cut" or press S to split cuts';
+      segmentsList.appendChild(hint);
+    }
   }
+
+  const subList = document.getElementById('submission-timestamps-list');
+  if (subList) {
+    subList.replaceChildren(
+      ...cutSegments.map((seg, idx) => {
+        const pill = document.createElement('div');
+        pill.className = 'timestamp-range-pill';
+        const inSpan = document.createElement('span');
+        inSpan.className = 'timestamp-val';
+        inSpan.textContent = formatTimecode(seg.start);
+        if (idx === 0) inSpan.id = 'review-in-point';
+
+        const outSpan = document.createElement('span');
+        outSpan.className = 'timestamp-val';
+        outSpan.textContent = formatTimecode(seg.end);
+        if (idx === cutSegments.length - 1) outSpan.id = 'review-out-point';
+
+        const unitIn = document.createElement('div');
+        unitIn.className = 'timestamp-unit';
+        const labelIn = document.createElement('span');
+        labelIn.className = 'timestamp-label';
+        labelIn.textContent = `Cut ${idx + 1} In`;
+        unitIn.appendChild(labelIn);
+        unitIn.appendChild(inSpan);
+
+        const arrow = document.createElement('span');
+        arrow.className = 'timestamp-arrow';
+        arrow.textContent = '→';
+
+        const unitOut = document.createElement('div');
+        unitOut.className = 'timestamp-unit';
+        const labelOut = document.createElement('span');
+        labelOut.className = 'timestamp-label';
+        labelOut.textContent = `Cut ${idx + 1} Out`;
+        unitOut.appendChild(labelOut);
+        unitOut.appendChild(outSpan);
+
+        pill.appendChild(unitIn);
+        pill.appendChild(arrow);
+        pill.appendChild(unitOut);
+        return pill;
+      })
+    );
+  }
+
+  const reviewDur = document.getElementById('review-duration');
+  const totalDuration = cutSegments.reduce((sum, s) => sum + Math.max(0, s.end - s.start), 0);
+  if (reviewDur) reviewDur.textContent = formatTimecode(totalDuration);
+
+  const reviewDurLabel = document.getElementById('review-duration-label');
+  if (reviewDurLabel) {
+    reviewDurLabel.textContent = cutSegments.length > 1
+      ? `Total Cut Duration (${cutSegments.length} cuts):`
+      : 'Cut Duration:';
+  }
+
   const cutDurationBadge = document.getElementById('cut-duration-badge');
   if (cutDurationBadge) {
-    const cutDuration = Math.max(0, outPointSec - inPointSec);
-    cutDurationBadge.textContent = `Selected Cut: ${formatSelectedDuration(cutDuration)}`;
+    if (cutSegments.length > 1) {
+      cutDurationBadge.textContent = `Total Cut (${cutSegments.length} cuts): ${formatSelectedDuration(totalDuration)}`;
+    } else {
+      cutDurationBadge.textContent = `Selected Cut: ${formatSelectedDuration(totalDuration)}`;
+    }
+  }
+
+  const btnAdd = document.getElementById('btn-add-segment');
+  const btnSplit = document.getElementById('btn-split-segment');
+  const atMaxSegments = cutSegments.length >= MAX_CUT_SEGMENTS;
+  if (btnAdd && !isStudioViewOnly()) {
+    btnAdd.disabled = atMaxSegments;
+    btnAdd.title = atMaxSegments ? `Maximum limit of ${MAX_CUT_SEGMENTS} cut segments reached` : 'Add another cut segment';
+  }
+  if (btnSplit && !isStudioViewOnly()) {
+    btnSplit.disabled = atMaxSegments;
+    btnSplit.title = atMaxSegments ? `Maximum limit of ${MAX_CUT_SEGMENTS} cut segments reached` : 'Split current cut at playhead (S)';
   }
 }
 
 function setInPoint(timeSec) {
   if (isStudioViewOnly()) return;
-  const max = (video?.duration > 0) ? video.duration : Infinity;
-  inPointSec = Math.max(0, Math.min(timeSec, outPointSec > 0 ? outPointSec - 0.1 : max));
+  const dur = (video?.duration > 0) ? video.duration : Infinity;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+
+  const prevEnd = activeSegmentIndex > 0 ? cutSegments[activeSegmentIndex - 1].end : 0;
+  const maxIn = cur.end > 0 ? cur.end - 0.1 : dur;
+  cur.start = Math.max(prevEnd, Math.min(timeSec, maxIn));
+  inPointSec = cur.start;
   boundsEdited = true;
   updateCutMarkersUI();
 }
 
 function setOutPoint(timeSec) {
   if (isStudioViewOnly()) return;
-  const max = (video?.duration > 0) ? video.duration : Infinity;
-  outPointSec = Math.min(max, Math.max(timeSec, inPointSec + 0.1));
+  const dur = (video?.duration > 0) ? video.duration : Infinity;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+
+  const minOut = cur.start + 0.1;
+  const nextStart = activeSegmentIndex < cutSegments.length - 1 ? cutSegments[activeSegmentIndex + 1].start : dur;
+  cur.end = Math.min(nextStart, Math.max(timeSec, minOut));
+  outPointSec = cur.end;
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function addSegment() {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length >= MAX_CUT_SEGMENTS) {
+    if (window.Modal) {
+      Modal.alert({
+        title: 'Segment Limit Reached',
+        message: `A talk can have at most ${MAX_CUT_SEGMENTS} cut segments. Please remove or merge segments before adding another.`,
+        variant: 'warning',
+      });
+    }
+    return;
+  }
+  const dur = (video?.duration > 0) ? video.duration : 10;
+  cutSegments.sort((a, b) => a.start - b.start);
+
+  const t = video && isFinite(video.currentTime) ? video.currentTime : 0;
+  let newStart = -1;
+  let newEnd = -1;
+
+  const insideSeg = cutSegments.some(s => t >= s.start && t < s.end);
+  if (!insideSeg && t < dur - 0.5) {
+    const nextSeg = cutSegments.find(s => s.start > t);
+    const maxE = nextSeg ? nextSeg.start : dur;
+    if (maxE > t + 0.2) {
+      newStart = t;
+      newEnd = Math.min(maxE, t + Math.min(300, (maxE - t)));
+    }
+  }
+
+  if (newStart === -1) {
+    const lastSeg = cutSegments[cutSegments.length - 1];
+    if (lastSeg && lastSeg.end < dur - 0.5) {
+      newStart = lastSeg.end;
+      newEnd = dur;
+    }
+  }
+
+  if (newStart === -1) {
+    for (let i = 0; i < cutSegments.length - 1; i++) {
+      if (cutSegments[i + 1].start - cutSegments[i].end > 1.0) {
+        newStart = cutSegments[i].end;
+        newEnd = cutSegments[i + 1].start;
+        break;
+      }
+    }
+  }
+
+  if (newStart === -1 || newEnd <= newStart) {
+    if (window.Modal) {
+      Modal.alert({ title: 'No Available Space', message: 'No gap remaining on timeline to add a new cut segment. Adjust or split existing cuts.', variant: 'warning' });
+    }
+    return;
+  }
+
+  const newSeg = { start: newStart, end: newEnd };
+  cutSegments.push(newSeg);
+  cutSegments.sort((a, b) => a.start - b.start);
+  activeSegmentIndex = cutSegments.indexOf(newSeg);
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function splitCurrentSegment() {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length >= MAX_CUT_SEGMENTS) {
+    if (window.Modal) {
+      Modal.alert({
+        title: 'Segment Limit Reached',
+        message: `A talk can have at most ${MAX_CUT_SEGMENTS} cut segments. Please remove or merge segments before splitting.`,
+        variant: 'warning',
+      });
+    }
+    return;
+  }
+  const t = video ? video.currentTime : 0;
+  const cur = cutSegments[activeSegmentIndex];
+  if (!cur) return;
+  if (t <= cur.start + 0.5 || t >= cur.end - 0.5) {
+    if (window.Modal) {
+      Modal.alert({ title: 'Cannot Split Here', message: 'Move the playhead inside the active cut segment (at least 0.5s from start/end) to split it.', variant: 'warning' });
+    }
+    return;
+  }
+
+  const newSeg = { start: t, end: cur.end };
+  cur.end = t;
+  cutSegments.splice(activeSegmentIndex + 1, 0, newSeg);
+  activeSegmentIndex++;
+  boundsEdited = true;
+  updateCutMarkersUI();
+}
+
+function deleteSegment(idx) {
+  if (isStudioViewOnly()) return;
+  if (cutSegments.length <= 1) return;
+  cutSegments.splice(idx, 1);
+  if (activeSegmentIndex > idx || activeSegmentIndex >= cutSegments.length) {
+    activeSegmentIndex = Math.max(0, activeSegmentIndex - 1);
+  }
   boundsEdited = true;
   updateCutMarkersUI();
 }
@@ -517,7 +851,9 @@ if (tlTrack) {
     if (tlStartMarker && (e.target === tlStartMarker || tlStartMarker.contains(e.target))) return;
     if (tlEndMarker && (e.target === tlEndMarker || tlEndMarker.contains(e.target))) return;
     activeTrackPointerId = e.pointerId;
-    try { tlTrack.setPointerCapture(activeTrackPointerId); } catch (_) {}
+    try {
+      tlTrack.setPointerCapture(activeTrackPointerId);
+    } catch (_) {}
     seekTrackFromEvent(e);
   });
 
@@ -528,7 +864,9 @@ if (tlTrack) {
 
   function stopTrackScrub(e) {
     if (activeTrackPointerId === null || e.pointerId !== activeTrackPointerId) return;
-    try { tlTrack.releasePointerCapture(activeTrackPointerId); } catch (_) {}
+    try {
+      tlTrack.releasePointerCapture(activeTrackPointerId);
+    } catch (_) {}
     activeTrackPointerId = null;
   }
 
@@ -565,7 +903,9 @@ function setupMarkerDrag(markerEl, isStart) {
 
     function onPointerUp(ev) {
       if (ev.pointerId !== activePointerId) return;
-      try { markerEl.releasePointerCapture(activePointerId); } catch (_) {}
+      try {
+        markerEl.releasePointerCapture(activePointerId);
+      } catch (_) {}
       activePointerId = null;
       markerEl.removeEventListener('pointermove', onPointerMove);
       markerEl.removeEventListener('pointerup', onPointerUp);
@@ -606,10 +946,23 @@ if (inputOutPoint) {
   });
 }
 
+if (btnAddSegment) {
+  btnAddSegment.addEventListener('click', () => addSegment());
+}
+
+if (btnSplitSegment) {
+  btnSplitSegment.addEventListener('click', () => splitCurrentSegment());
+}
+
 if (btnPlayCut) {
   btnPlayCut.addEventListener('click', () => {
     if (!video || !video.src) return;
-    video.currentTime = inPointSec;
+    if (cutSegments.length === 0) return;
+    const curTime = video.currentTime;
+    const insideSeg = cutSegments.find(s => curTime >= s.start && curTime < s.end);
+    if (!insideSeg) {
+      video.currentTime = cutSegments[activeSegmentIndex]?.start || cutSegments[0].start;
+    }
     isPlayingCut = true;
     video.play().catch(() => {});
   });
@@ -631,8 +984,8 @@ if (jumpInput) {
 // ── Player Controls: Fine, Big & Mega Seeks ─────────────────────
 function togglePlay() {
   if (!video || !video.src) return;
-  if (video.paused) { video.play().catch(() => {}); }
-  else { video.pause(); }
+  if (video.paused) video.play().catch(() => {});
+  else video.pause();
 }
 
 function seekBy(seconds) {
@@ -657,12 +1010,39 @@ if (video) {
     if (!boundsEdited) {
       const shell = getStudioShell() || shellInit;
       const isRaw = getActiveVideoCategory() === 'raw';
-      const rawStart = isRaw ? parseFloat(shell?.dataset?.cutStart) : NaN;
-      const rawEnd = isRaw ? parseFloat(shell?.dataset?.cutEnd) : NaN;
-      inPointSec = (!isNaN(rawStart) && rawStart >= 0) ? Math.min(rawStart, duration - 0.1) : 0;
-      outPointSec = (!isNaN(rawEnd) && rawEnd > inPointSec) ? Math.min(duration, rawEnd) : duration;
-    } else if (outPointSec <= 0 || outPointSec > duration) {
-      outPointSec = duration;
+      let loadedSegments = null;
+      if (isRaw && shell?.dataset?.cutSegments) {
+        try {
+          const parsed = JSON.parse(shell.dataset.cutSegments);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedSegments = parsed
+              .map(s => ({
+                start: Math.max(0, Math.min(parseFloat(s.start) || 0, duration)),
+                end: Math.max(0, Math.min(parseFloat(s.end) || 0, duration)),
+              }))
+              .filter(s => s.end > s.start);
+          }
+        } catch (_) {}
+      }
+
+      if (loadedSegments && loadedSegments.length > 0) {
+        cutSegments = loadedSegments;
+      } else {
+        const rawStart = isRaw ? parseFloat(shell?.dataset?.cutStart) : NaN;
+        const rawEnd = isRaw ? parseFloat(shell?.dataset?.cutEnd) : NaN;
+        const s = (!isNaN(rawStart) && rawStart >= 0) ? Math.min(rawStart, duration - 0.1) : 0;
+        const e = (!isNaN(rawEnd) && rawEnd > s) ? Math.min(duration, rawEnd) : duration;
+        cutSegments = [{ start: s, end: e }];
+      }
+      activeSegmentIndex = 0;
+      inPointSec = cutSegments[0].start;
+      outPointSec = cutSegments[0].end;
+    } else {
+      for (const seg of cutSegments) {
+        if (seg.end > duration) seg.end = duration;
+      }
+      inPointSec = cutSegments[activeSegmentIndex]?.start || 0;
+      outPointSec = cutSegments[activeSegmentIndex]?.end || duration;
     }
     // Seek playhead to pre-seeded inPoint so the speaker sees their talk start, not 00:00.
     if (!boundsEdited && inPointSec > 0 && video.duration > inPointSec) {
@@ -685,16 +1065,30 @@ if (video) {
   video.addEventListener('durationchange', updateTimelineTicks);
 }
 
-if (btnPlay)         btnPlay.addEventListener('click', togglePlay);
-if (btnSkipBack)     btnSkipBack.addEventListener('click', () => seekBy(-5));
-if (btnSkipFwd)      btnSkipFwd.addEventListener('click', () => seekBy(5));
-if (btnSeekBigBack)  btnSeekBigBack.addEventListener('click', () => seekBy(-60));
-if (btnSeekBigFwd)   btnSeekBigFwd.addEventListener('click', () => seekBy(60));
+if (btnPlay) btnPlay.addEventListener('click', togglePlay);
+if (btnSkipBack) btnSkipBack.addEventListener('click', () => seekBy(-5));
+if (btnSkipFwd) btnSkipFwd.addEventListener('click', () => seekBy(5));
+if (btnSeekBigBack) btnSeekBigBack.addEventListener('click', () => seekBy(-60));
+if (btnSeekBigFwd) btnSeekBigFwd.addEventListener('click', () => seekBy(60));
 if (btnSeekMegaBack) btnSeekMegaBack.addEventListener('click', () => seekBy(-300));
-if (btnSeekMegaFwd)  btnSeekMegaFwd.addEventListener('click', () => seekBy(300));
+if (btnSeekMegaFwd) btnSeekMegaFwd.addEventListener('click', () => seekBy(300));
 
-if (btnPrevFrame)    btnPrevFrame.addEventListener('click', () => { if(video && video.src) { video.pause(); seekBy(-0.5); } });
-if (btnNextFrame)    btnNextFrame.addEventListener('click', () => { if(video && video.src) { video.pause(); seekBy(0.5); } });
+if (btnPrevFrame) {
+  btnPrevFrame.addEventListener('click', () => {
+    if (video && video.src) {
+      video.pause();
+      seekBy(-0.5);
+    }
+  });
+}
+if (btnNextFrame) {
+  btnNextFrame.addEventListener('click', () => {
+    if (video && video.src) {
+      video.pause();
+      seekBy(0.5);
+    }
+  });
+}
 
 function toggleMute() {
   if (!video) return;
@@ -709,7 +1103,7 @@ function updateMuteUI() {
 }
 
 if (btnMute) btnMute.addEventListener('click', toggleMute);
-if (video)   video.addEventListener('volumechange', updateMuteUI);
+if (video) video.addEventListener('volumechange', updateMuteUI);
 
 if (speedSel) {
   speedSel.addEventListener('change', () => {
@@ -719,7 +1113,7 @@ if (speedSel) {
 
 // Global hotkeys
 document.addEventListener('keydown', e => {
-  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
   if (e.code === 'Space') {
     e.preventDefault();
     togglePlay();
@@ -729,6 +1123,8 @@ document.addEventListener('keydown', e => {
     if (video && btnSetIn) setInPoint(video.currentTime);
   } else if (e.code === 'KeyO') {
     if (video && btnSetOut) setOutPoint(video.currentTime);
+  } else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
+    if (video && btnSplitSegment) splitCurrentSegment();
   } else if (e.code === 'ArrowLeft') {
     if (video && video.src) seekBy(e.shiftKey ? -60 : -5);
   } else if (e.code === 'ArrowRight') {
@@ -769,17 +1165,27 @@ window.approveTalk = async function(id) {
   const talkStatus = getTalkStatus();
 
   if (['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'].includes(talkStatus)) {
-    await Modal.alert({ title: 'Processing in Background', message: `Talk is currently processing in background (${talkStatus}). Please wait for this stage to finish.` });
+    await Modal.alert({
+      title: 'Processing in Background',
+      message: `Talk is currently processing in background (${talkStatus}). Please wait for this stage to finish.`,
+    });
     return;
   }
   if (talkStatus === 'waiting_for_files') {
-    await Modal.alert({ title: 'Video Recording Required', message: 'Please upload a video recording before approving.' });
+    await Modal.alert({
+      title: 'Video Recording Required',
+      message: 'Please upload a video recording before approving.',
+    });
     return;
   }
 
   setBtnBusy(btn, true, 'Processing...');
 
-  const targetStage = talkStatus === 'preview' ? 'transcoding' : (talkStatus === 'pending_bounds' || talkStatus === 'needs_work' ? 'cutting' : (talkStatus === 'pending_intro_outro' ? 'assembling' : talkStatus));
+  const targetStage = talkStatus === 'preview'
+    ? 'transcoding'
+    : (talkStatus === 'pending_bounds' || talkStatus === 'needs_work'
+      ? 'cutting'
+      : (talkStatus === 'pending_intro_outro' ? 'assembling' : talkStatus));
   showStudioLoader(targetStage);
 
   const progressWrap = document.getElementById('pipeline-progress-wrap');
@@ -799,18 +1205,36 @@ window.approveTalk = async function(id) {
     if (talkStatus === 'pending_approval') {
       await postAPI(`/talks/${id}/approve`, { decision: 'approve' });
     } else if (talkStatus === 'pending_bounds' || talkStatus === 'needs_work') {
+      const isPreview = getActiveVideoCategory() === 'preview';
+      if (isPreview && cutSegments && cutSegments.length > 1) {
+        throw new Error('Multi-segment cuts cannot be edited or submitted from the preview source. Please switch to the Raw Recording source.');
+      }
       const dur = (video?.duration > 0) ? video.duration : (outPointSec || 10);
-      const clampedIn = Math.max(0, Math.min(inPointSec, dur - 0.1));
-      const clampedOut = Math.min(dur, Math.max(outPointSec, clampedIn + 0.1));
-      const base = getActiveVideoCategory() === 'preview' ? (parseFloat(getStudioShell()?.dataset?.cutStart) || 0) : 0;
-      const cutPayload = { cut_start: formatTimecode(clampedIn + base), cut_end: formatTimecode(clampedOut + base) };
+      const base = isPreview ? (parseFloat(getStudioShell()?.dataset?.cutStart) || 0) : 0;
+      const formattedSegments = (cutSegments && cutSegments.length > 0 ? cutSegments : [{ start: inPointSec, end: outPointSec }]).map(s => {
+        const clampedIn = Math.max(0, Math.min(s.start, dur - 0.1));
+        const clampedOut = Math.min(dur, Math.max(s.end, clampedIn + 0.1));
+        return {
+          start: formatTimecode(clampedIn + base),
+          end: formatTimecode(clampedOut + base),
+        };
+      });
+      const cutPayload = {
+        segments: formattedSegments,
+        cut_start: formattedSegments[0].start,
+        cut_end: formattedSegments[formattedSegments.length - 1].end,
+      };
       if (notes) cutPayload.note = notes;
       await postAPI(`/talks/${id}/cut`, cutPayload);
     } else if (talkStatus === 'preview') {
       await postAPI(`/talks/${id}/review`, { decision: 'approve', note: notes || 'Approved in review studio' });
     } else if (talkStatus === 'pending_intro_outro') {
-      const includeIntro = document.getElementById('check-include-intro') ? document.getElementById('check-include-intro').checked : false;
-      const includeOutro = document.getElementById('check-include-outro') ? document.getElementById('check-include-outro').checked : false;
+      const includeIntro = document.getElementById('check-include-intro')
+        ? document.getElementById('check-include-intro').checked
+        : false;
+      const includeOutro = document.getElementById('check-include-outro')
+        ? document.getElementById('check-include-outro').checked
+        : false;
       const introSource = document.querySelector('input[name="intro_source"]:checked')?.value || 'generated';
       const outroSource = document.querySelector('input[name="outro_source"]:checked')?.value || 'generated';
       let customIntroPath = document.getElementById('custom-intro-path')?.value?.trim() || null;
@@ -833,8 +1257,12 @@ window.approveTalk = async function(id) {
         return (await res.json()).path;
       }
 
-      if (includeIntro && introSource === 'custom') customIntroPath = await uploadCustomBumper('intro', customIntroPath);
-      if (includeOutro && outroSource === 'custom') customOutroPath = await uploadCustomBumper('outro', customOutroPath);
+      if (includeIntro && introSource === 'custom') {
+        customIntroPath = await uploadCustomBumper('intro', customIntroPath);
+      }
+      if (includeOutro && outroSource === 'custom') {
+        customOutroPath = await uploadCustomBumper('outro', customOutroPath);
+      }
 
       const speakerEmailInput = document.getElementById('handoff-speaker-email');
       const emailVal = speakerEmailInput ? speakerEmailInput.value.trim() : '';
@@ -855,7 +1283,11 @@ window.approveTalk = async function(id) {
     if (progressDesc) progressDesc.textContent = 'Pipeline complete! Reloading studio...';
     setTimeout(() => location.reload(), 400);
   } catch (err) {
-    await Modal.alert({ title: 'Pipeline Action Failed', message: `Pipeline action failed: ${err.message}`, variant: 'danger' });
+    await Modal.alert({
+      title: 'Pipeline Action Failed',
+      message: `Pipeline action failed: ${err.message}`,
+      variant: 'danger',
+    });
     if (progressWrap) progressWrap.style.display = 'none';
     setBtnBusy(btn, false);
     pendingApprovalStage = null;
@@ -901,7 +1333,6 @@ window.resendHandoffEmail = async function(id) {
     setBtnBusy(btn, false);
   }
 };
-
 
 window.abortTalk = function(id) {
   if (isStudioViewOnly()) return;
@@ -982,7 +1413,7 @@ window.rejectTalk = async function(id) {
     title: 'Reject Talk',
     message: 'Reject this talk?',
     confirmText: 'Reject',
-    variant: 'danger'
+    variant: 'danger',
   });
   if (!confirmed) return;
   const btn = document.getElementById('btn-reject');
@@ -1059,7 +1490,7 @@ window.handleVideoFileUpload = async function(e, talkId) {
             resolve(null);
           };
         });
-        if (measuredDuration && measuredDuration > maxAllowed) {
+        if (Number.isFinite(measuredDuration) && measuredDuration > maxAllowed) {
           const fmt = (s) => {
             const h = Math.floor(s / 3600);
             const m = Math.floor((s % 3600) / 60);
@@ -1130,7 +1561,12 @@ function initAdminViewOnlyMode() {
   const desc = document.getElementById('banner-mode-text');
   const toggleBtn = document.getElementById('btn-toggle-edit-mode');
   const modal = document.getElementById('admin-confirm-edit-modal');
-  const toggleModal = show => { if (modal) { if (show) Modal.open(modal); else Modal.close(modal); } };
+  const toggleModal = show => {
+    if (modal) {
+      if (show) Modal.open(modal);
+      else Modal.close(modal);
+    }
+  };
 
   function applyLockState(unlocked) {
     shell.classList.toggle('is-view-only', !unlocked);
@@ -1166,11 +1602,11 @@ function initAdminViewOnlyMode() {
       '[data-edit-control], .upload-pending-container input, .upload-pending-container button, .timeline-inputs-bar input, .timeline-inputs-bar button, .review-box input, .review-box button, .review-box textarea, .studio-panel-body input, .studio-panel-body button, .studio-panel-body textarea';
     shell.querySelectorAll(editControlsSelector).forEach(el => {
       if (
-        el.closest('#admin-view-only-banner') ||
-        el.closest('#admin-confirm-edit-modal') ||
-        el.closest('.studio-panel-header') ||
-        el.id === 'btn-toggle-right-panel' ||
-        el.id === 'btn-expand-right-panel'
+        el.closest('#admin-view-only-banner')
+        || el.closest('#admin-confirm-edit-modal')
+        || el.closest('.studio-panel-header')
+        || el.id === 'btn-toggle-right-panel'
+        || el.id === 'btn-expand-right-panel'
       ) {
         return;
       }
@@ -1219,8 +1655,14 @@ function initAdminViewOnlyMode() {
 
   if (cancelBtn) cancelBtn.addEventListener('click', () => toggleModal(false));
   if (closeXBtn) closeXBtn.addEventListener('click', () => toggleModal(false));
-  if (modal) modal.addEventListener('click', e => { if (e.target === modal) toggleModal(false); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal && !modal.hidden) toggleModal(false); });
+  if (modal) {
+    modal.addEventListener('click', e => {
+      if (e.target === modal) toggleModal(false);
+    });
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal && !modal.hidden) toggleModal(false);
+  });
 
   if (confirmBtn) {
     confirmBtn.addEventListener('click', () => {
@@ -1255,7 +1697,9 @@ function renderRecentJobs(jobs) {
     const isRunning = job.status === 'running';
     const isDone = job.status === 'done' || job.status === 'success';
     const isFailed = job.status === 'failed';
-    const badgeClass = isDone ? 'badge-done' : (isRunning ? 'badge-processing' : (isFailed ? 'badge-danger' : 'badge-waiting'));
+    const badgeClass = isDone
+      ? 'badge-done'
+      : (isRunning ? 'badge-processing' : (isFailed ? 'badge-danger' : 'badge-waiting'));
 
     const card = document.createElement('div');
     card.className = 'job-card';
@@ -1668,7 +2112,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Auto-poll status when in background processing states
-  const activeProcessingStates = ['detecting', 'cutting', 'generating_previews', 'assembling', 'transcoding', 'uploading'];
+  const activeProcessingStates = [
+    'detecting',
+    'cutting',
+    'generating_previews',
+    'assembling',
+    'transcoding',
+    'uploading',
+  ];
   const currentTalkStatus = getTalkStatus();
   const currentTalkId = getTalkId();
 
@@ -1709,7 +2160,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     editModal.querySelectorAll('.btn-close-edit-talk, .dashboard-modal-close').forEach(b => {
-      b.addEventListener('click', () => { Modal.close(editModal); });
+      b.addEventListener('click', () => {
+        Modal.close(editModal);
+      });
     });
 
     const submitBtn = document.getElementById('btn-submit-edit-talk-studio');
@@ -1764,7 +2217,11 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           window.location.reload();
         } catch (err) {
-          await Modal.alert({ title: 'Update Failed', message: `Failed to update talk: ${err.message}`, variant: 'danger' });
+          await Modal.alert({
+            title: 'Update Failed',
+            message: `Failed to update talk: ${err.message}`,
+            variant: 'danger',
+          });
           submitBtn.disabled = false;
           submitBtn.textContent = origText;
         }
@@ -1790,27 +2247,38 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-
 // ---------------------------------------------------------------------------
 // Organizer Role Request Flow
 // ---------------------------------------------------------------------------
 function initOrganizerRequest() {
   const btnRequest = document.getElementById('btn-request-organizer');
-  const modal      = document.getElementById('modal-request-organizer');
-  const btnClose   = document.getElementById('btn-close-request-organizer');
-  const btnCancel  = document.getElementById('btn-cancel-request-organizer');
-  const btnSubmit  = document.getElementById('btn-submit-request-organizer');
-  const noteInput  = document.getElementById('organizer-request-note');
-  const noteChars  = document.getElementById('organizer-request-note-chars');
-  const errorEl    = document.getElementById('organizer-request-error');
-  const banner     = document.getElementById('role-request-banner');
+  const modal = document.getElementById('modal-request-organizer');
+  const btnClose = document.getElementById('btn-close-request-organizer');
+  const btnCancel = document.getElementById('btn-cancel-request-organizer');
+  const btnSubmit = document.getElementById('btn-submit-request-organizer');
+  const noteInput = document.getElementById('organizer-request-note');
+  const noteChars = document.getElementById('organizer-request-note-chars');
+  const errorEl = document.getElementById('organizer-request-error');
+  const banner = document.getElementById('role-request-banner');
 
   if (!btnRequest || !modal) return;
 
+  function getCodePoints(str) {
+    return Array.from(str || '');
+  }
+
+  let lastVal = '';
+
   function openModal() {
-    if (noteInput) noteInput.value = '';
+    if (noteInput) {
+      noteInput.value = '';
+      lastVal = '';
+    }
     if (noteChars) noteChars.textContent = '0 / 500';
-    if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
     Modal.open(modal);
     if (noteInput) noteInput.focus();
   }
@@ -1825,13 +2293,68 @@ function initOrganizerRequest() {
 
   if (noteInput && noteChars) {
     noteInput.addEventListener('input', () => {
-      noteChars.textContent = `${noteInput.value.length} / 500`;
+      const currentCP = getCodePoints(noteInput.value);
+      if (currentCP.length > 500) {
+        const lastCP = getCodePoints(lastVal);
+        let prefixLen = 0;
+        while (prefixLen < lastCP.length && prefixLen < currentCP.length && lastCP[prefixLen] === currentCP[prefixLen]) {
+          prefixLen++;
+        }
+        let suffixLen = 0;
+        while (
+          suffixLen < (lastCP.length - prefixLen) &&
+          suffixLen < (currentCP.length - prefixLen) &&
+          lastCP[lastCP.length - 1 - suffixLen] === currentCP[currentCP.length - 1 - suffixLen]
+        ) {
+          suffixLen++;
+        }
+        const prefix = lastCP.slice(0, prefixLen);
+        const suffix = suffixLen > 0 ? lastCP.slice(lastCP.length - suffixLen) : [];
+        const inserted = currentCP.slice(prefixLen, currentCP.length - suffixLen);
+        const allowed = Math.max(0, 500 - (prefix.length + suffix.length));
+        const accepted = inserted.slice(0, allowed);
+        noteInput.value = [...prefix, ...accepted, ...suffix].join('');
+        const newCaret = [...prefix, ...accepted].join('').length;
+        if (typeof noteInput.setSelectionRange === 'function') {
+          noteInput.setSelectionRange(newCaret, newCaret);
+        }
+      }
+      lastVal = noteInput.value;
+      const untrimmedCount = getCodePoints(noteInput.value).length;
+      noteChars.textContent = `${untrimmedCount} / 500`;
+      if (errorEl && !errorEl.classList.contains('hidden')) {
+        const trimmedCount = getCodePoints(noteInput.value.trim()).length;
+        if (trimmedCount === 0 || trimmedCount >= 20) {
+          errorEl.textContent = '';
+          errorEl.classList.add('hidden');
+        }
+      }
     });
   }
 
   if (btnSubmit) {
     btnSubmit.addEventListener('click', async () => {
-      if (errorEl) { errorEl.textContent = ''; errorEl.classList.add('hidden'); }
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.classList.add('hidden');
+      }
+      const trimmedNote = noteInput ? noteInput.value.trim() : '';
+      const trimmedCount = getCodePoints(trimmedNote).length;
+      if (trimmedCount > 0 && trimmedCount < 20) {
+        if (errorEl) {
+          errorEl.textContent = 'Note must be at least 20 characters.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+      const rawCount = getCodePoints(noteInput ? noteInput.value : '').length;
+      if (rawCount > 500) {
+        if (errorEl) {
+          errorEl.textContent = 'Note must be at most 500 characters.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
       btnSubmit.disabled = true;
       btnSubmit.textContent = 'Submitting…';
       try {
@@ -1839,7 +2362,7 @@ function initOrganizerRequest() {
         const resp = await fetchFn('/users/request-organizer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ note: noteInput ? noteInput.value.trim() : '' }),
+          body: JSON.stringify({ note: trimmedNote }),
         });
         let data = {};
         try {
@@ -1868,15 +2391,24 @@ function initOrganizerRequest() {
             `;
           }
         } else {
-          const msg = (typeof data.detail === 'string' && data.detail.trim())
-            ? data.detail
-            : 'Failed to submit request. Please try again.';
-          if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove('hidden'); }
+          let msg = 'Failed to submit request. Please try again.';
+          if (typeof data.detail === 'string' && data.detail.trim()) {
+            msg = data.detail;
+          } else if (Array.isArray(data.detail) && data.detail[0]?.msg) {
+            msg = data.detail[0].msg.replace(/^Value error,\s*/i, '');
+          }
+          if (errorEl) {
+            errorEl.textContent = msg;
+            errorEl.classList.remove('hidden');
+          }
           btnSubmit.disabled = false;
           btnSubmit.textContent = 'Submit Request';
         }
       } catch (_err) {
-        if (errorEl) { errorEl.textContent = 'Network error. Please try again.'; errorEl.classList.remove('hidden'); }
+        if (errorEl) {
+          errorEl.textContent = 'Network error. Please try again.';
+          errorEl.classList.remove('hidden');
+        }
         btnSubmit.disabled = false;
         btnSubmit.textContent = 'Submit Request';
       }
