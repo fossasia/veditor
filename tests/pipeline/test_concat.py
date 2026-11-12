@@ -275,6 +275,45 @@ def test_can_stream_copy_validation(tmp_path: Path) -> None:
     assert _can_stream_copy([]) is False
 
 
+def test_can_stream_copy_rejects_divergent_average_framerate(tmp_path: Path) -> None:
+    """Verify _can_stream_copy rejects clips with matching base_rate but divergent average framerates."""
+    c1 = generate_clip(
+        1.0,
+        has_video=True,
+        has_audio=False,
+        resolution=(320, 240),
+        fps=24,
+        output_dir=tmp_path,
+    )
+    # Generate clip with same base_rate (24) but variable/lower average framerate (15 fps) without audio
+    p_vfr = tmp_path / 'vfr.mp4'
+    with av.open(str(p_vfr), mode='w') as c:
+        v = c.add_stream('libx264', rate=24)
+        v.width = 320
+        v.height = 240
+        v.pix_fmt = 'yuv420p'
+        for i in range(15):
+            frame = av.VideoFrame(320, 240, 'yuv420p')
+            frame.pts = int(i * (24 / 15))
+            for pkt in v.encode(frame):
+                c.mux(pkt)
+        for pkt in v.encode():
+            c.mux(pkt)
+
+    with av.open(str(c1)) as c1_in, av.open(str(p_vfr)) as vfr_in:
+        v1 = c1_in.streams.video[0]
+        v2 = vfr_in.streams.video[0]
+        assert v1.codec_context.name == v2.codec_context.name
+        assert v1.width == v2.width
+        assert v1.height == v2.height
+        assert v1.pix_fmt == v2.pix_fmt
+        rate1 = float(v1.average_rate or 24)
+        rate2 = float(v2.average_rate or 15)
+        assert abs(rate1 - rate2) > 0.5
+
+    assert _can_stream_copy([c1, p_vfr]) is False
+
+
 def test_concat_audio_only_intro_pads_video_black_frames(tmp_path: Path) -> None:
     """Verify that concatenating an audio-only intro with a video/audio cut pads black frames so timelines align."""
     intro_path = generate_clip(
