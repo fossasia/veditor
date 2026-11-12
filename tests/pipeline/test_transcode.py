@@ -361,8 +361,9 @@ def test_transcode_rejects_invalid_threads(tmp_path: Path) -> None:
 
 
 def test_preset_1080p_default_preset_speed() -> None:
-    """Verify PRESET_1080P_DEFAULT uses veryfast preset speed."""
+    """Verify PRESET_1080P_DEFAULT uses veryfast preset speed and 96k speech audio bitrate."""
     assert PRESET_1080P_DEFAULT.preset_speed == 'veryfast'
+    assert PRESET_1080P_DEFAULT.audio_bitrate == 96_000
 
 
 def test_transcode_start_and_end_seconds(tmp_path: Path) -> None:

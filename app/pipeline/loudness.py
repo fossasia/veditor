@@ -147,6 +147,7 @@ def normalize(
 
             # 2. Configure normalized audio stream
             out_audio = out_container.add_stream('aac', rate=sample_rate)
+            out_audio.bit_rate = 96_000
             out_audio.layout = layout_name
 
             # Streams to demux in a single interleaved pass

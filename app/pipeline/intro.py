@@ -283,6 +283,7 @@ def _render_video_and_audio(
 
         # Configure audio stream
         out_a = out_container.add_stream('aac', rate=sample_rate)
+        out_a.bit_rate = 96_000
         out_a.layout = 'stereo'
 
         # Encode video frames
