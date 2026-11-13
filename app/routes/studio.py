@@ -969,6 +969,13 @@ def studio(
         }
         media_assets.append(final_asset)
 
+    if talk.status in (TalkStatus.PENDING_BOUNDS, TalkStatus.NEEDS_WORK):
+        media_assets.sort(key=lambda a: 0 if a['category'] == 'raw' else 1)
+    elif talk.status == TalkStatus.PREVIEW:
+        media_assets.sort(key=lambda a: 0 if a['category'] == 'preview' else 1)
+    else:
+        media_assets.sort(key=lambda a: 0 if a['category'] == 'final' else 1)
+
     preview_urls = [a['url'] for a in media_assets]
 
     is_speaker = (

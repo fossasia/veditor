@@ -31,6 +31,7 @@ def _can_stream_copy(segments: list[Path]) -> bool:
 
     ref_video_props: list[tuple[Any, ...]] | None = None
     ref_audio_props: list[tuple[Any, ...]] | None = None
+    ref_avg_rates: list[Any] = []
 
     for seg_p in segments:
         try:
@@ -44,8 +45,13 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 video_props: list[tuple[Any, ...]] = []
                 for v in video_streams:
                     ctx = v.codec_context
-                    rate = v.average_rate or v.guessed_rate
-                    fps_val = round(float(rate), 2) if rate else None
+                    rate = (
+                        v.base_rate
+                        or (v.codec_context.framerate if v.codec_context else None)
+                        or v.average_rate
+                        or v.guessed_rate
+                    )
+                    fps_val = rate if rate and rate > 0 else None
                     video_props.append(
                         (
                             ctx.name,
@@ -74,9 +80,18 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 if ref_video_props is None and ref_audio_props is None:
                     ref_video_props = video_props
                     ref_audio_props = audio_props
+                    ref_avg_rates = [v.average_rate for v in video_streams]
                 else:
                     if video_props != ref_video_props or audio_props != ref_audio_props:
                         return False
+                    for ref_ar, cur_v in zip(ref_avg_rates, video_streams):
+                        cur_ar = cur_v.average_rate
+                        if (
+                            ref_ar
+                            and cur_ar
+                            and abs(float(ref_ar) - float(cur_ar)) > 0.5
+                        ):
+                            return False
         except (av.FFmpegError, ValueError, OSError) as _:
             return False
 
@@ -489,10 +504,10 @@ def concat(
 
     def _persist(src: Path) -> str:
         if storage_backend is not None:
-            storage_backend.put(output_key, src)
+            storage_backend.link_or_copy(output_key, src)
             stored = storage_backend.get(output_key)
             return str(stored)
-        LocalDiskBackend(out_p.parent).put(out_p.name, src)
+        LocalDiskBackend(out_p.parent).link_or_copy(out_p.name, src)
         return str(out_p)
 
     if intro_p is None and outro_p is None:

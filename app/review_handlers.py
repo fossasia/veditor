@@ -7,6 +7,7 @@ from http import HTTPStatus
 
 from fastapi import HTTPException
 from redis.exceptions import RedisError
+from sqlalchemy import delete
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -141,6 +142,33 @@ def handle_needs_work(
     storage: StorageBackend | None = None,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
+    if talk.status == TalkStatus.DONE:
+        talk.final_cleaned_at = None
+        # Custom bumper files are permanently deleted by cleanup_bumpers() during
+        # job_transcode, so they no longer exist in storage or on disk. Reset to
+        # 'generated' so job_intro / job_outro regenerate title slates from talk
+        # metadata on re-assembly, preventing StorageKeyNotFoundError in job_concat.
+        if talk.intro_source == 'custom':
+            talk.intro_source = 'generated'
+            talk.custom_intro_path = None
+        if talk.outro_source == 'custom':
+            talk.outro_source = 'generated'
+            talk.custom_outro_path = None
+        db.execute(
+            delete(models.Job).where(
+                models.Job.talk_id == talk.id,
+                models.Job.kind.in_(
+                    [
+                        JobKind.INTRO,
+                        JobKind.OUTRO,
+                        JobKind.CONCAT,
+                        JobKind.LOUDNESS,
+                        JobKind.TRANSCODE,
+                        JobKind.PUBLISH,
+                    ]
+                ),
+            )
+        )
     return _record_review_and_advance(
         talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
