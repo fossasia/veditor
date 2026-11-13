@@ -361,8 +361,9 @@ def test_transcode_rejects_invalid_threads(tmp_path: Path) -> None:
 
 
 def test_preset_1080p_default_preset_speed() -> None:
-    """Verify PRESET_1080P_DEFAULT uses veryfast preset speed."""
+    """Verify PRESET_1080P_DEFAULT uses veryfast preset speed and 96k speech audio bitrate."""
     assert PRESET_1080P_DEFAULT.preset_speed == 'veryfast'
+    assert PRESET_1080P_DEFAULT.audio_bitrate == 96_000
 
 
 def test_transcode_start_and_end_seconds(tmp_path: Path) -> None:
@@ -457,6 +458,57 @@ def test_transcode_resilient_to_corrupt_packet(tmp_path: Path) -> None:
 
     with patch.object(av.packet.Packet, 'decode', faulty_decode):
         transcode(source_clip, output_clip)
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    info = open_and_inspect(output_clip)
+    assert info.duration is not None
+    assert abs(info.duration - 2.0) <= 0.5
+
+
+def test_transcode_multisegment_preset_mismatch_downscales(tmp_path: Path) -> None:
+    """Verify that multi-segment input with a smaller preset downscales instead of stream-copying."""
+    cut_clip = generate_clip(1.0, resolution=(1920, 1080), output_dir=tmp_path)
+    intro_clip = generate_clip(1.0, resolution=(1920, 1080), output_dir=tmp_path)
+    output_clip = tmp_path / 'multisegment_480p.mp4'
+
+    transcode(cut_clip, output_clip, intro_path=intro_clip, preset=PRESET_480P)
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    with av.open(str(output_clip)) as c:
+        v = c.streams.video[0]
+        assert v.width <= 854
+        assert v.height <= 480
+
+
+def test_transcode_video_stream_copy_with_target_lufs(tmp_path: Path) -> None:
+    """Verify single-segment video stream copy with audio re-encode sets seg_had_video without black padding."""
+    source_clip = generate_clip(1.0, resolution=(1920, 1080), output_dir=tmp_path)
+    output_clip = tmp_path / 'mixed_stream_copy.mp4'
+
+    transcode(source_clip, output_clip, target_lufs=-16.0)
+
+    assert output_clip.is_file()
+    assert_playable(output_clip)
+    info = open_and_inspect(output_clip)
+    assert info.has_video is True
+    assert info.has_audio is True
+    assert info.duration is not None
+    assert abs(info.duration - 1.0) <= 0.5
+
+
+def test_transcode_stream_copy_remux_error_fallback(tmp_path: Path) -> None:
+    """Verify that stream-copy remuxing errors cleanly fallback to the decode/encode pipeline."""
+    source_clip = generate_clip(1.0, resolution=(1920, 1080), output_dir=tmp_path)
+    intro_clip = generate_clip(1.0, resolution=(1920, 1080), output_dir=tmp_path)
+    output_clip = tmp_path / 'fallback_after_remux_err.mp4'
+
+    with patch(
+        'app.pipeline.transcode._concat_stream_copy',
+        side_effect=ValueError('remux corrupt'),
+    ):
+        transcode(source_clip, output_clip, intro_path=intro_clip)
 
     assert output_clip.is_file()
     assert_playable(output_clip)
