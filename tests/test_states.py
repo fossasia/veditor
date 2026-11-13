@@ -1,14 +1,20 @@
+from datetime import datetime
+
 import pytest
 
+from app.consts import TalkStatus
 from app.states import TRANSITIONS, InvalidTransitionError, advance
 
 
 class DummyTalk:
-    def __init__(self, status):
+    status: TalkStatus
+    updated_at: datetime
+
+    def __init__(self, status: TalkStatus) -> None:
         self.status = status
 
 
-def test_advance_legal_transitions():
+def test_advance_legal_transitions() -> None:
     for current_state, next_states in TRANSITIONS.items():
         for next_state in next_states:
             talk = DummyTalk(current_state)
@@ -17,40 +23,40 @@ def test_advance_legal_transitions():
             assert talk.status == next_state
 
 
-def test_advance_updates_talk_updated_at():
-    talk = DummyTalk("waiting_for_files")
-    assert not hasattr(talk, "updated_at")
-    advance(talk, "detecting")
-    assert hasattr(talk, "updated_at")
+def test_advance_updates_talk_updated_at() -> None:
+    talk = DummyTalk(TalkStatus.WAITING_FILES)
+    assert not hasattr(talk, 'updated_at')
+    advance(talk, TalkStatus.DETECTING)
+    assert hasattr(talk, 'updated_at')
     assert talk.updated_at is not None
     assert talk.updated_at.tzinfo is not None
 
     # Also test transition to terminal 'done' from valid predecessor 'uploading'
-    talk.status = "uploading"
+    talk.status = TalkStatus.UPLOADING
     prev_time = talk.updated_at
-    advance(talk, "done")
-    assert talk.status == "done"
+    advance(talk, TalkStatus.DONE)
+    assert talk.status == TalkStatus.DONE
     assert talk.updated_at >= prev_time
 
 
-def test_advance_illegal_transitions():
+def test_advance_illegal_transitions() -> None:
     # Test at least one illegal transition per state
     illegal_moves = {
-        "waiting_for_files": "cutting",
-        "detecting": "cutting",
-        "pending_approval": "cutting",  # must go via pending_bounds now
-        "pending_bounds": "pending_approval",
-        "cutting": "needs_work",
-        "generating_previews": "transcoding",
-        "preview": "transcoding",  # must go via pending_intro_outro now
-        "pending_intro_outro": "transcoding",  # must go via assembling now
-        "assembling": "done",
-        "transcoding": "done",
-        "uploading": "rejected",
-        "needs_work": "preview",
-        "done": "waiting_for_files",
-        "rejected": "waiting_for_files",
-        "broken": "waiting_for_files",
+        TalkStatus.WAITING_FILES: TalkStatus.CUTTING,
+        TalkStatus.DETECTING: TalkStatus.CUTTING,
+        TalkStatus.PENDING_APPROVAL: TalkStatus.CUTTING,  # must go via pending_bounds now
+        TalkStatus.PENDING_BOUNDS: TalkStatus.PENDING_APPROVAL,
+        TalkStatus.CUTTING: TalkStatus.NEEDS_WORK,
+        TalkStatus.GENERATING_PREVIEWS: TalkStatus.TRANSCODING,
+        TalkStatus.PREVIEW: TalkStatus.TRANSCODING,  # must go via pending_intro_outro now
+        TalkStatus.PENDING_INTRO_OUTRO: TalkStatus.TRANSCODING,  # must go via assembling now
+        TalkStatus.ASSEMBLING: TalkStatus.DONE,
+        TalkStatus.TRANSCODING: TalkStatus.DONE,
+        TalkStatus.UPLOADING: TalkStatus.REJECTED,
+        TalkStatus.NEEDS_WORK: TalkStatus.PREVIEW,
+        TalkStatus.DONE: TalkStatus.WAITING_FILES,
+        TalkStatus.REJECTED: TalkStatus.WAITING_FILES,
+        TalkStatus.BROKEN: TalkStatus.WAITING_FILES,
     }
 
     for current_state, invalid_next in illegal_moves.items():
@@ -63,56 +69,56 @@ def test_advance_illegal_transitions():
         assert talk.status == current_state  # State should not mutate
 
 
-def test_phase4_happy_path():
+def test_phase4_happy_path() -> None:
     """Full happy path: waiting_for_files → detecting → pending_approval → pending_bounds → cutting → generating_previews → preview."""
-    talk = DummyTalk("waiting_for_files")
+    talk = DummyTalk(TalkStatus.WAITING_FILES)
     for state in (
-        "detecting",
-        "pending_approval",
-        "pending_bounds",
-        "cutting",
-        "generating_previews",
-        "preview",
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.PENDING_BOUNDS,
+        TalkStatus.CUTTING,
+        TalkStatus.GENERATING_PREVIEWS,
+        TalkStatus.PREVIEW,
     ):
         advance(talk, state)
         assert talk.status == state
 
 
-def test_pending_approval_to_rejected():
-    talk = DummyTalk("pending_approval")
-    advance(talk, "rejected")
-    assert talk.status == "rejected"
+def test_pending_approval_to_rejected() -> None:
+    talk = DummyTalk(TalkStatus.PENDING_APPROVAL)
+    advance(talk, TalkStatus.REJECTED)
+    assert talk.status == TalkStatus.REJECTED
 
 
-def test_rejected_is_terminal():
-    talk = DummyTalk("rejected")
+def test_rejected_is_terminal() -> None:
+    talk = DummyTalk(TalkStatus.REJECTED)
     with pytest.raises(InvalidTransitionError):
-        advance(talk, "waiting_for_files")
+        advance(talk, TalkStatus.WAITING_FILES)
 
 
-def test_explicit_paths_per_acceptance_criteria():
+def test_explicit_paths_per_acceptance_criteria() -> None:
     # preview → needs_work → cutting (Phase 5+ loop — still wired, just not built yet)
-    talk = DummyTalk("preview")
-    advance(talk, "needs_work")
-    assert talk.status == "needs_work"
-    advance(talk, "cutting")
-    assert talk.status == "cutting"
+    talk = DummyTalk(TalkStatus.PREVIEW)
+    advance(talk, TalkStatus.NEEDS_WORK)
+    assert talk.status == TalkStatus.NEEDS_WORK
+    advance(talk, TalkStatus.CUTTING)
+    assert talk.status == TalkStatus.CUTTING
 
     # preview → pending_bounds (used by needs_work)
-    talk_reset = DummyTalk("preview")
-    advance(talk_reset, "pending_bounds")
-    assert talk_reset.status == "pending_bounds"
+    talk_reset = DummyTalk(TalkStatus.PREVIEW)
+    advance(talk_reset, TalkStatus.PENDING_BOUNDS)
+    assert talk_reset.status == TalkStatus.PENDING_BOUNDS
 
     # preview → rejected (terminal review rejection)
-    talk_rejected = DummyTalk("preview")
-    advance(talk_rejected, "rejected")
-    assert talk_rejected.status == "rejected"
+    talk_rejected = DummyTalk(TalkStatus.PREVIEW)
+    advance(talk_rejected, TalkStatus.REJECTED)
+    assert talk_rejected.status == TalkStatus.REJECTED
 
     # preview → pending_intro_outro → assembling → transcoding (Phase 5 intro/outro selection)
-    talk_intro_outro = DummyTalk("preview")
-    advance(talk_intro_outro, "pending_intro_outro")
-    assert talk_intro_outro.status == "pending_intro_outro"
-    advance(talk_intro_outro, "assembling")
-    assert talk_intro_outro.status == "assembling"
-    advance(talk_intro_outro, "transcoding")
-    assert talk_intro_outro.status == "transcoding"
+    talk_intro_outro = DummyTalk(TalkStatus.PREVIEW)
+    advance(talk_intro_outro, TalkStatus.PENDING_INTRO_OUTRO)
+    assert talk_intro_outro.status == TalkStatus.PENDING_INTRO_OUTRO
+    advance(talk_intro_outro, TalkStatus.ASSEMBLING)
+    assert talk_intro_outro.status == TalkStatus.ASSEMBLING
+    advance(talk_intro_outro, TalkStatus.TRANSCODING)
+    assert talk_intro_outro.status == TalkStatus.TRANSCODING

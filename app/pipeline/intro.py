@@ -15,16 +15,19 @@ import av
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+
 logger = logging.getLogger(__name__)
 
 
-def _get_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+def _get_font(
+    size: int, bold: bool = False
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Loads a scalable TrueType font with graceful fallback and clamped size."""
     clamped_size = max(1, size)
     font_candidates = (
-        ["DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "DejaVuSans.ttf"]
+        ['DejaVuSans-Bold.ttf', 'LiberationSans-Bold.ttf', 'DejaVuSans.ttf']
         if bold
-        else ["DejaVuSans.ttf", "LiberationSans-Regular.ttf"]
+        else ['DejaVuSans.ttf', 'LiberationSans-Regular.ttf']
     )
     for name in font_candidates:
         try:
@@ -39,13 +42,13 @@ def _get_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 def _wrap_text_to_width(
     text: str,
-    font: ImageFont.ImageFont,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_pixel_width: int,
     draw: ImageDraw.ImageDraw,
 ) -> str:
     """Wraps text across lines by measuring rendered bounding box pixel width."""
     lines: list[str] = []
-    for paragraph in text.split("\n"):
+    for paragraph in text.split('\n'):
         clean_para = paragraph.strip()
         if not clean_para:
             continue
@@ -54,7 +57,7 @@ def _wrap_text_to_width(
             continue
         current_line = words[0]
         for word in words[1:]:
-            test_line = f"{current_line} {word}"
+            test_line = f'{current_line} {word}'
             bbox = draw.textbbox((0, 0), test_line, font=font)
             w = bbox[2] - bbox[0]
             if w <= max_pixel_width:
@@ -63,7 +66,7 @@ def _wrap_text_to_width(
                 lines.append(current_line)
                 current_line = word
         lines.append(current_line)
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 
 def _create_title_slate_image(
@@ -76,7 +79,7 @@ def _create_title_slate_image(
 ) -> np.ndarray:
     """Renders an intro title slate RGB numpy array."""
     width, height = resolution
-    img = Image.new("RGB", (width, height), color=(15, 23, 42))
+    img = Image.new('RGB', (width, height), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
 
     # 1. Subtle vertical gradient background (deep slate -> dark indigo)
@@ -103,7 +106,7 @@ def _create_title_slate_image(
         if lp.is_file():
             try:
                 with Image.open(lp) as logo_img:
-                    logo_rgba = logo_img.convert("RGBA")
+                    logo_rgba = logo_img.convert('RGBA')
                     max_logo_w = max(1, int(width * 0.22))
                     max_logo_h = max(1, int(height * 0.16))
                     logo_rgba.thumbnail(
@@ -113,7 +116,7 @@ def _create_title_slate_image(
                     img.paste(logo_rgba, (logo_x, content_y), mask=logo_rgba)
                     max_text_width = max(1, logo_x - content_x - int(width * 0.04))
             except (OSError, ValueError) as exc:
-                logger.warning("Failed to composite logo image %s: %s", logo_path, exc)
+                logger.warning('Failed to composite logo image %s: %s', logo_path, exc)
 
     y_offset = content_y
 
@@ -128,7 +131,7 @@ def _create_title_slate_image(
             font=event_font,
             fill=(56, 189, 248),  # Sky blue accent
         )
-        event_lines = event_wrapped.count("\n") + 1
+        event_lines = event_wrapped.count('\n') + 1
         y_offset += event_lines * int(height * 0.05) + int(height * 0.03)
 
     # 4. Draw Talk Title (wrapped to actual pixel width)
@@ -140,18 +143,18 @@ def _create_title_slate_image(
         fill=(255, 255, 255),  # Pure white
         spacing=max(1, int(height * 0.015)),
     )
-    title_lines = title_text.count("\n") + 1
+    title_lines = title_text.count('\n') + 1
     y_offset += title_lines * int(height * 0.075) + int(height * 0.04)
 
     # 5. Draw Speaker Names
     if isinstance(speakers, (list, tuple)):
-        speaker_str = ", ".join(speakers)
+        speaker_str = ', '.join(speakers)
     else:
         speaker_str = str(speakers)
 
     if speaker_str:
         speaker_wrapped = _wrap_text_to_width(
-            f"Speaker: {speaker_str}", speaker_font, max_text_width, draw
+            f'Speaker: {speaker_str}', speaker_font, max_text_width, draw
         )
         draw.text(
             (content_x, y_offset),
@@ -159,7 +162,7 @@ def _create_title_slate_image(
             font=speaker_font,
             fill=(203, 213, 225),  # Light slate
         )
-        speaker_lines = speaker_wrapped.count("\n") + 1
+        speaker_lines = speaker_wrapped.count('\n') + 1
         y_offset += speaker_lines * int(height * 0.055) + int(height * 0.02)
 
     # 6. Draw Room & Date
@@ -186,11 +189,11 @@ def _get_audio_samples(
     if jingle_path:
         jp = Path(jingle_path)
         if not jp.is_file():
-            raise FileNotFoundError(f"Audio jingle file not found: {jp}")
+            raise FileNotFoundError(f'Audio jingle file not found: {jp}')
 
         resampler = av.AudioResampler(
-            format="s16p",
-            layout="stereo",
+            format='s16p',
+            layout='stereo',
             rate=sample_rate,
         )
         resampled_left: list[np.ndarray] = []
@@ -263,28 +266,28 @@ def _render_video_and_audio(
     total_audio_samples = audio_samples.shape[1]
 
     with av.open(
-        str(out_path), mode="w", format="mp4", options={"movflags": "faststart"}
+        str(out_path), mode='w', format='mp4', options={'movflags': 'faststart'}
     ) as out_container:
         # Configure video stream
-        video_options: dict[str, str] = {"crf": "20", "preset": "veryfast"}
+        video_options: dict[str, str] = {'crf': '20', 'preset': 'veryfast'}
         if threads is not None:
-            video_options["threads"] = str(threads)
+            video_options['threads'] = str(threads)
         out_v = out_container.add_stream(
-            "libx264",
+            'libx264',
             rate=fps,
             options=video_options,
         )
         out_v.width = resolution[0]
         out_v.height = resolution[1]
-        out_v.pix_fmt = "yuv420p"
+        out_v.pix_fmt = 'yuv420p'
 
         # Configure audio stream
-        out_a = out_container.add_stream("aac", rate=sample_rate)
-        out_a.layout = "stereo"
+        out_a = out_container.add_stream('aac', rate=sample_rate)
+        out_a.layout = 'stereo'
 
         # Encode video frames
         for frame_idx in range(total_video_frames):
-            v_frame = av.VideoFrame.from_ndarray(slate_ndarray, format="rgb24")
+            v_frame = av.VideoFrame.from_ndarray(slate_ndarray, format='rgb24')
             v_frame.pts = frame_idx
             v_frame.time_base = Fraction(1, fps)
             for packet in out_v.encode(v_frame):
@@ -301,7 +304,7 @@ def _render_video_and_audio(
             if chunk.shape[1] == 0:
                 continue
 
-            a_frame = av.AudioFrame.from_ndarray(chunk, format="s16p", layout="stereo")
+            a_frame = av.AudioFrame.from_ndarray(chunk, format='s16p', layout='stereo')
             a_frame.sample_rate = sample_rate
             a_frame.pts = audio_pts
             a_frame.time_base = Fraction(1, sample_rate)
@@ -318,10 +321,10 @@ def generate_intro_clip(
     output_path: Path | str,
     talk_metadata: dict[str, Any] | str | None = None,
     *,
-    title: str = "",
-    speakers: list[str] | str = "",
-    event_name: str = "",
-    room_date: str = "",
+    title: str = '',
+    speakers: list[str] | str = '',
+    event_name: str = '',
+    room_date: str = '',
     logo_path: Path | str | None = None,
     audio_jingle_path: Path | str | None = None,
     duration_seconds: float = 4.0,
@@ -351,69 +354,69 @@ def generate_intro_clip(
         talk_metadata = None
 
     if isinstance(talk_metadata, dict):
-        title = talk_metadata.get("title", title)
-        speakers = talk_metadata.get("speakers", speakers)
-        event_name = talk_metadata.get("event_name", event_name)
-        room_date = talk_metadata.get("room_date", room_date)
+        title = talk_metadata.get('title', title)
+        speakers = talk_metadata.get('speakers', speakers)
+        event_name = talk_metadata.get('event_name', event_name)
+        room_date = talk_metadata.get('room_date', room_date)
 
         # Derive duration from talk metadata
-        if "duration_seconds" in talk_metadata:
-            duration_seconds = float(talk_metadata["duration_seconds"])
-        elif "duration" in talk_metadata:
-            duration_seconds = float(talk_metadata["duration"])
+        if 'duration_seconds' in talk_metadata:
+            duration_seconds = float(talk_metadata['duration_seconds'])
+        elif 'duration' in talk_metadata:
+            duration_seconds = float(talk_metadata['duration'])
 
         # Derive target resolution from talk/video metadata
-        if "resolution" in talk_metadata:
-            resolution = tuple(talk_metadata["resolution"])  # type: ignore
-        elif "width" in talk_metadata and "height" in talk_metadata:
-            resolution = (int(talk_metadata["width"]), int(talk_metadata["height"]))
-        elif "video_metadata" in talk_metadata and isinstance(
-            talk_metadata["video_metadata"], dict
+        if 'resolution' in talk_metadata:
+            resolution = tuple(talk_metadata['resolution'])
+        elif 'width' in talk_metadata and 'height' in talk_metadata:
+            resolution = (int(talk_metadata['width']), int(talk_metadata['height']))
+        elif 'video_metadata' in talk_metadata and isinstance(
+            talk_metadata['video_metadata'], dict
         ):
-            vm = talk_metadata["video_metadata"]
-            if "resolution" in vm:
-                resolution = tuple(vm["resolution"])  # type: ignore
-            elif "width" in vm and "height" in vm:
-                resolution = (int(vm["width"]), int(vm["height"]))
+            vm = talk_metadata['video_metadata']
+            if 'resolution' in vm:
+                resolution = tuple(vm['resolution'])
+            elif 'width' in vm and 'height' in vm:
+                resolution = (int(vm['width']), int(vm['height']))
 
         # Derive framerate from talk/video metadata
-        if "fps" in talk_metadata:
-            fps = int(talk_metadata["fps"])
-        elif "framerate" in talk_metadata:
-            fps = int(talk_metadata["framerate"])
-        elif "video_metadata" in talk_metadata and isinstance(
-            talk_metadata["video_metadata"], dict
+        if 'fps' in talk_metadata:
+            fps = int(talk_metadata['fps'])
+        elif 'framerate' in talk_metadata:
+            fps = int(talk_metadata['framerate'])
+        elif 'video_metadata' in talk_metadata and isinstance(
+            talk_metadata['video_metadata'], dict
         ):
-            vm = talk_metadata["video_metadata"]
-            if "fps" in vm:
-                fps = int(vm["fps"])
-            elif "framerate" in vm:
-                fps = int(vm["framerate"])
+            vm = talk_metadata['video_metadata']
+            if 'fps' in vm:
+                fps = int(vm['fps'])
+            elif 'framerate' in vm:
+                fps = int(vm['framerate'])
 
-        if "logo_path" in talk_metadata:
-            logo_path = talk_metadata["logo_path"]
-        if "audio_jingle_path" in talk_metadata:
-            audio_jingle_path = talk_metadata["audio_jingle_path"]
+        if 'logo_path' in talk_metadata:
+            logo_path = talk_metadata['logo_path']
+        if 'audio_jingle_path' in talk_metadata:
+            audio_jingle_path = talk_metadata['audio_jingle_path']
 
     # Guard against empty string paths
-    if logo_path == "":
+    if logo_path == '':
         logo_path = None
-    if audio_jingle_path == "":
+    if audio_jingle_path == '':
         audio_jingle_path = None
 
     if duration_seconds <= 0:
-        raise ValueError(f"duration_seconds must be positive, got {duration_seconds}")
+        raise ValueError(f'duration_seconds must be positive, got {duration_seconds}')
     if fps <= 0:
-        raise ValueError(f"fps must be positive, got {fps}")
+        raise ValueError(f'fps must be positive, got {fps}')
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be positive, got {threads}")
+        raise ValueError(f'threads must be positive, got {threads}')
     if resolution[0] < 16 or resolution[1] < 16:
-        raise ValueError(f"resolution must be at least 16x16, got {resolution}")
+        raise ValueError(f'resolution must be at least 16x16, got {resolution}')
 
     if logo_path is not None:
         lp = Path(logo_path)
         if not lp.is_file():
-            raise FileNotFoundError(f"Logo file not found: {lp}")
+            raise FileNotFoundError(f'Logo file not found: {lp}')
 
     slate_ndarray = _create_title_slate_image(
         title=title,

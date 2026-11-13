@@ -1,10 +1,12 @@
 import uuid
-from typing import Annotated
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.auth import (
     CurrentUser,
@@ -20,7 +22,7 @@ from app.auth import (
     verify_event_access,
 )
 from app.consts import AuthRole
-from app.db import SessionLocal, get_db
+from app.db import get_db
 from app.main import app
 from app.models import Client, Event, Talk, User
 from app.security import (
@@ -30,10 +32,69 @@ from app.security import (
 )
 
 
+def _create_user(db: Session, **overrides: Any) -> User:
+    data = {
+        'email': f'user-{uuid.uuid4().hex[:8]}@example.com',
+        'hashed_password': 'x',
+        'role': 'organizer',
+        'is_active': True,
+    }
+    data.update(overrides)
+    user = User(**data)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _create_client(
+    db: Session,
+    *,
+    api_key: str | None = None,
+    event_ids: list[int] | None = None,
+    **overrides: Any,
+) -> Client:
+    data = {
+        'name': 'Test Client',
+        'hashed_key': hash_api_key(api_key) if api_key else uuid.uuid4().hex,
+        'event_ids': list(event_ids or []),
+    }
+    data.update(overrides)
+    client_row = Client(**data)
+    db.add(client_row)
+    db.commit()
+    db.refresh(client_row)
+    return client_row
+
+
+def _create_event(
+    db: Session, *, name: str = 'Test Event', created_by_user_id: int | None = None
+) -> Event:
+    event = Event(name=name, created_by_user_id=created_by_user_id)
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _create_talk(db: Session, event_id: int, *, status: str = 'done') -> Talk:
+    talk = Talk(
+        event_id=event_id,
+        title=f'Talk {uuid.uuid4().hex[:8]}',
+        start=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
+        status=status,
+    )
+    db.add(talk)
+    db.commit()
+    db.refresh(talk)
+    return talk
+
+
 def test_hash_api_key() -> None:
-    key1 = "some-random-key"
-    key2 = "some-random-key"
-    key3 = "another-key"
+    key1 = 'some-random-key'
+    key2 = 'some-random-key'
+    key3 = 'another-key'
     assert hash_api_key(key1) == hash_api_key(key2)
     assert hash_api_key(key1) != hash_api_key(key3)
     # Ensure it's 64 chars for SHA-256
@@ -44,27 +105,27 @@ def test_get_client_missing_key() -> None:
     with pytest.raises(HTTPException) as excinfo:
         get_client(None, MagicMock())
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert excinfo.value.detail == "Missing API Key"
+    assert excinfo.value.detail == 'Missing API Key'
 
 
-def test_get_client_invalid_key() -> None:
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-
+def test_get_client_invalid_key(db_session: Session) -> None:
     with pytest.raises(HTTPException) as excinfo:
-        get_client("invalid-key", mock_db)
+        get_client('invalid-key', db_session)
 
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert excinfo.value.detail == "Invalid API Key"
+    assert excinfo.value.detail == 'Invalid API Key'
 
 
-def test_get_client_valid_key() -> None:
-    mock_client = Client(id=1, hashed_key="hashed", event_ids=[1, 2])
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_client
+def test_get_client_valid_key(db_session: Session) -> None:
+    client_row = _create_client(
+        db_session,
+        api_key='valid-key',
+        event_ids=[1, 2],
+        last_used_at=datetime.now(UTC),
+    )
 
-    client = get_client("valid-key", mock_db)
-    assert client == mock_client
+    resolved = get_client('valid-key', db_session)
+    assert resolved.id == client_row.id
 
 
 def test_verify_event_access_in_scope() -> None:
@@ -78,7 +139,7 @@ def test_verify_event_access_out_of_scope() -> None:
     with pytest.raises(HTTPException) as excinfo:
         verify_event_access(4, mock_client)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
-    assert excinfo.value.detail == "Client is not authorized to access this event"
+    assert excinfo.value.detail == 'Client is not authorized to access this event'
 
 
 # ---------------------------------------------------------------------------
@@ -89,15 +150,15 @@ def test_verify_event_access_out_of_scope() -> None:
 def test_current_user_model_attributes() -> None:
     user = CurrentUser(
         user_id=1,
-        email="user@example.com",
-        role="organizer",
-        source="jwt",
+        email='user@example.com',
+        role=AuthRole.ORGANIZER,
+        source='jwt',
         event_ids=[],
     )
     assert user.user_id == 1
-    assert user.email == "user@example.com"
-    assert user.role == "organizer"
-    assert user.source == "jwt"
+    assert user.email == 'user@example.com'
+    assert user.role == AuthRole.ORGANIZER
+    assert user.source == 'jwt'
     assert user.event_ids == []
     assert not user.is_machine
     assert not user.is_admin
@@ -105,8 +166,8 @@ def test_current_user_model_attributes() -> None:
     machine = CurrentUser(
         user_id=None,
         email=None,
-        role="admin",
-        source="api_key",
+        role=AuthRole.ADMIN,
+        source='api_key',
         event_ids=[10, 20],
     )
     assert machine.is_machine
@@ -119,218 +180,200 @@ def test_current_user_model_attributes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_current_user_api_key_valid() -> None:
-    mock_client = Client(id=1, hashed_key=hash_api_key("secret-key"), event_ids=[42])
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_client
+def test_get_current_user_api_key_valid(db_session: Session) -> None:
+    _create_client(db_session, api_key='secret-key', event_ids=[42])
 
-    user = get_current_user(request=MagicMock(), api_key="secret-key", db=mock_db)
-    assert user.source == "api_key"
-    assert user.role == "admin"
+    user = get_current_user(request=MagicMock(), api_key='secret-key', db=db_session)
+    assert user.source == 'api_key'
+    assert user.role == AuthRole.ADMIN
     assert user.user_id is None
     assert user.email is None
     assert user.event_ids == [42]
     assert user.is_machine
 
 
-def test_get_current_user_cookie_api_key_valid() -> None:
-    mock_client = Client(
-        id=1, hashed_key=hash_api_key("secret-cookie-key"), event_ids=[42]
-    )
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_client
+def test_get_current_user_cookie_api_key_valid(db_session: Session) -> None:
+    _create_client(db_session, api_key='secret-cookie-key', event_ids=[42])
 
     user = get_current_user(
-        request=MagicMock(), cookie_api_key="secret-cookie-key", db=mock_db
+        request=MagicMock(), cookie_api_key='secret-cookie-key', db=db_session
     )
-    assert user.source == "api_key"
-    assert user.role == "admin"
+    assert user.source == 'api_key'
+    assert user.role == AuthRole.ADMIN
     assert user.user_id is None
     assert user.email is None
     assert user.event_ids == [42]
     assert user.is_machine
 
 
-def test_get_current_user_api_key_invalid() -> None:
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-
+def test_get_current_user_api_key_invalid(db_session: Session) -> None:
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=MagicMock(), api_key="bad-key", db=mock_db)
+        get_current_user(request=MagicMock(), api_key='bad-key', db=db_session)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert excinfo.value.detail == "Invalid API Key"
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
+    assert excinfo.value.detail == 'Invalid API Key'
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
 
 
-def test_get_current_user_session_cookie_valid() -> None:
-    token = create_session_token(user_id=7, role="organizer")
-    mock_user = User(id=7, email="org@example.com", role="organizer", is_active=True)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_user
+def test_get_current_user_session_cookie_valid(db_session: Session) -> None:
+    user_row = _create_user(
+        db_session, email='org@example.com', role=AuthRole.ORGANIZER
+    )
+    token = create_session_token(user_id=user_row.id, role=AuthRole.ORGANIZER)
 
-    user = get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
-    assert user.source == "cookie"
-    assert user.user_id == 7
-    assert user.email == "org@example.com"
-    assert user.role == "organizer"
+    user = get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
+    assert user.source == 'cookie'
+    assert user.user_id == user_row.id
+    assert user.email == 'org@example.com'
+    assert user.role == AuthRole.ORGANIZER
     assert user.event_ids == []
     assert not user.is_machine
 
 
-def test_get_current_user_session_cookie_invalid() -> None:
-    mock_db = MagicMock()
+def test_get_current_user_session_cookie_invalid(db_session: Session) -> None:
     with pytest.raises(HTTPException) as excinfo:
         get_current_user(
-            request=MagicMock(), cookie_token="not.a.valid.jwt", db=mock_db
+            request=MagicMock(), cookie_token='not.a.valid.jwt', db=db_session
         )
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "Invalid or expired session token" in excinfo.value.detail
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
+    assert 'Invalid or expired session token' in excinfo.value.detail
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
 
 
-def test_get_current_user_session_cookie_user_inactive() -> None:
-    token = create_session_token(user_id=7, role="user")
-    mock_user = User(id=7, email="inactive@example.com", role="user", is_active=False)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_user
-
-    with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
-    assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "inactive" in excinfo.value.detail.lower()
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
-
-
-def test_get_current_user_session_cookie_user_not_found() -> None:
-    token = create_session_token(user_id=99, role="user")
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
+def test_get_current_user_session_cookie_user_inactive(db_session: Session) -> None:
+    user_row = _create_user(
+        db_session, email='inactive@example.com', role=AuthRole.USER, is_active=False
+    )
+    token = create_session_token(user_id=user_row.id, role=AuthRole.USER)
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=MagicMock(), cookie_token=token, db=mock_db)
+        get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "not found" in excinfo.value.detail.lower()
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
-    assert "not found" in excinfo.value.detail.lower()
+    assert 'inactive' in excinfo.value.detail.lower()
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
 
 
-def test_get_current_user_bearer_token_valid() -> None:
-    token = create_access_token(user_id=15, email="dev@example.com", role="admin")
+def test_get_current_user_session_cookie_user_not_found(db_session: Session) -> None:
+    missing_id = 10_000_000
+    token = create_session_token(user_id=missing_id, role=AuthRole.USER)
+
+    with pytest.raises(HTTPException) as excinfo:
+        get_current_user(request=MagicMock(), cookie_token=token, db=db_session)
+    assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert 'not found' in excinfo.value.detail.lower()
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
+
+
+def test_get_current_user_bearer_token_valid(db_session: Session) -> None:
+    user_row = _create_user(db_session, email='dev@example.com', role=AuthRole.ADMIN)
+    token = create_access_token(
+        user_id=user_row.id, email='dev@example.com', role=AuthRole.ADMIN
+    )
     mock_creds = MagicMock()
     mock_creds.credentials = token
-    mock_user = User(id=15, email="dev@example.com", role="admin", is_active=True)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
-    user = get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
-    assert user.source == "jwt"
-    assert user.user_id == 15
-    assert user.email == "dev@example.com"
-    assert user.role == "admin"
+    user = get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=db_session)
+    assert user.source == 'jwt'
+    assert user.user_id == user_row.id
+    assert user.email == 'dev@example.com'
+    assert user.role == AuthRole.ADMIN
     assert user.is_admin
 
 
-def test_get_current_user_bearer_token_invalid() -> None:
+def test_get_current_user_bearer_token_invalid(db_session: Session) -> None:
     mock_creds = MagicMock()
-    mock_creds.credentials = "invalid.bearer.token"
-    mock_db = MagicMock()
+    mock_creds.credentials = 'invalid.bearer.token'
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
+        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=db_session)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "Invalid or expired access token" in excinfo.value.detail
+    assert 'Invalid or expired access token' in excinfo.value.detail
 
 
-def test_get_current_user_bearer_token_user_inactive() -> None:
-    token = create_access_token(user_id=15, email="dev@example.com", role="admin")
+def test_get_current_user_bearer_token_user_inactive(db_session: Session) -> None:
+    user_row = _create_user(
+        db_session, email='dev@example.com', role=AuthRole.ADMIN, is_active=False
+    )
+    token = create_access_token(
+        user_id=user_row.id, email='dev@example.com', role=AuthRole.ADMIN
+    )
     mock_creds = MagicMock()
     mock_creds.credentials = token
-    mock_user = User(id=15, email="dev@example.com", role="admin", is_active=False)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_user
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=mock_db)
+        get_current_user(request=MagicMock(), bearer_creds=mock_creds, db=db_session)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "inactive" in excinfo.value.detail.lower()
+    assert 'inactive' in excinfo.value.detail.lower()
 
 
-def test_get_current_user_no_credentials() -> None:
-    mock_db = MagicMock()
+def test_get_current_user_no_credentials(db_session: Session) -> None:
     request = MagicMock()
     request.headers = {}
     request.cookies = {}
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=request, db=mock_db)
+        get_current_user(request=request, db=db_session)
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert excinfo.value.detail == "Not authenticated"
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
+    assert excinfo.value.detail == 'Not authenticated'
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
 
 
-def test_get_current_user_precedence_api_key_over_cookie() -> None:
+def test_get_current_user_precedence_api_key_over_cookie(db_session: Session) -> None:
     # When both API key and cookie are provided, API key is evaluated first.
-    mock_client = Client(id=1, hashed_key=hash_api_key("api-key"), event_ids=[1])
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_client
+    _create_client(db_session, api_key='api-key', event_ids=[1])
 
-    token = create_session_token(user_id=2, role="user")
+    token = create_session_token(user_id=2, role=AuthRole.USER)
     user = get_current_user(
-        request=MagicMock(), api_key="api-key", cookie_token=token, db=mock_db
+        request=MagicMock(), api_key='api-key', cookie_token=token, db=db_session
     )
-    assert user.source == "api_key"
+    assert user.source == 'api_key'
 
 
-def test_get_current_user_fail_fast_on_invalid_api_key() -> None:
+def test_get_current_user_fail_fast_on_invalid_api_key(db_session: Session) -> None:
     # If explicit API key is provided but invalid, fails immediately with 401 instead of falling back.
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-
-    token = create_session_token(user_id=2, role="user")
+    token = create_session_token(user_id=2, role=AuthRole.USER)
     with pytest.raises(HTTPException) as excinfo:
         get_current_user(
-            request=MagicMock(), api_key="bad-key", cookie_token=token, db=mock_db
+            request=MagicMock(), api_key='bad-key', cookie_token=token, db=db_session
         )
     assert excinfo.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert excinfo.value.detail == "Invalid API Key"
+    assert excinfo.value.detail == 'Invalid API Key'
 
 
-def test_get_current_user_precedence_session_over_cookie_api_key() -> None:
+def test_get_current_user_precedence_session_over_cookie_api_key(
+    db_session: Session,
+) -> None:
     # Valid session cookie takes precedence over stale or invalid cookie_api_key.
-    mock_user = User(id=2, email="u@example.com", role="user", is_active=True)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_user
+    user_row = _create_user(db_session, email='u@example.com', role=AuthRole.USER)
 
-    token = create_session_token(user_id=2, role="user")
+    token = create_session_token(user_id=user_row.id, role=AuthRole.USER)
     user = get_current_user(
         request=MagicMock(),
         cookie_token=token,
-        cookie_api_key="stale-or-invalid-key",
-        db=mock_db,
+        cookie_api_key='stale-or-invalid-key',
+        db=db_session,
     )
-    assert user.source == "cookie"
-    assert user.user_id == 2
+    assert user.source == 'cookie'
+    assert user.user_id == user_row.id
 
 
-def test_get_current_user_ignores_stale_cookie_api_key_for_bearer_token() -> None:
-    token = create_access_token(user_id=2, email="u@example.com", role="user")
-    mock_user = User(id=2, email="u@example.com", role="user", is_active=True)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        None,
-        mock_user,
-    ]
+def test_get_current_user_ignores_stale_cookie_api_key_for_bearer_token(
+    db_session: Session,
+) -> None:
+    user_row = _create_user(db_session, email='u@example.com', role=AuthRole.USER)
+    token = create_access_token(
+        user_id=user_row.id, email='u@example.com', role=AuthRole.USER
+    )
     mock_creds = MagicMock()
     mock_creds.credentials = token
 
     user = get_current_user(
         request=MagicMock(),
-        cookie_api_key="stale-or-invalid-key",
+        cookie_api_key='stale-or-invalid-key',
         bearer_creds=mock_creds,
-        db=mock_db,
+        db=db_session,
     )
 
-    assert user.source == "jwt"
-    assert user.user_id == 2
+    assert user.source == 'jwt'
+    assert user.user_id == user_row.id
 
 
 # ---------------------------------------------------------------------------
@@ -343,9 +386,9 @@ def test_require_role_hierarchy() -> None:
     check_org = require_role(AuthRole.ORGANIZER)
     check_admin = require_role(AuthRole.ADMIN)
 
-    regular_user = CurrentUser(role=AuthRole.USER, source="jwt")
-    organizer_user = CurrentUser(role=AuthRole.ORGANIZER, source="jwt")
-    admin_user = CurrentUser(role=AuthRole.ADMIN, source="jwt")
+    regular_user = CurrentUser(role=AuthRole.USER, source='jwt')
+    organizer_user = CurrentUser(role=AuthRole.ORGANIZER, source='jwt')
+    admin_user = CurrentUser(role=AuthRole.ADMIN, source='jwt')
 
     # 'user' requirement allows all
     assert check_user(regular_user) == regular_user
@@ -372,19 +415,19 @@ def test_require_role_hierarchy() -> None:
 
 
 def test_require_admin() -> None:
-    regular_user = CurrentUser(user_id=1, role="user", source="jwt")
-    machine_admin = CurrentUser(role="admin", source="api_key")
-    human_admin = CurrentUser(user_id=2, role="admin", source="cookie")
+    regular_user = CurrentUser(user_id=1, role=AuthRole.USER, source='jwt')
+    machine_admin = CurrentUser(role=AuthRole.ADMIN, source='api_key')
+    human_admin = CurrentUser(user_id=2, role=AuthRole.ADMIN, source='cookie')
 
     with pytest.raises(HTTPException) as excinfo:
         require_admin(regular_user)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
-    assert excinfo.value.detail == "Operation requires a human administrator"
+    assert excinfo.value.detail == 'Operation requires a human administrator'
 
     with pytest.raises(HTTPException) as excinfo:
         require_admin(machine_admin)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
-    assert excinfo.value.detail == "Operation requires a human administrator"
+    assert excinfo.value.detail == 'Operation requires a human administrator'
 
     assert require_admin(human_admin) == human_admin
 
@@ -394,87 +437,99 @@ def test_require_admin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_check_event_access_not_found() -> None:
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-    user = CurrentUser(role="admin", source="jwt")
+def test_check_event_access_not_found(db_session: Session) -> None:
+    user = CurrentUser(role=AuthRole.ADMIN, source='jwt')
+    missing_id = 10_000_000
 
     with pytest.raises(HTTPException) as excinfo:
-        check_event_access(event_id=99, user=user, db=mock_db)
+        check_event_access(event_id=missing_id, user=user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
-    assert excinfo.value.detail == "Event not found"
+    assert excinfo.value.detail == 'Event not found'
 
 
-def test_check_event_access_machine_client_in_scope() -> None:
-    event = Event(id=5, name="PyCon", created_by_user_id=1)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
+def test_check_event_access_machine_client_in_scope(db_session: Session) -> None:
+    owner = _create_user(db_session)
+    event = _create_event(db_session, name='PyCon', created_by_user_id=owner.id)
 
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[4, 5, 6])
-    assert check_event_access(event_id=5, user=client_user, db=mock_db) == event
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source='api_key', event_ids=[event.id]
+    )
+    assert (
+        check_event_access(event_id=event.id, user=client_user, db=db_session) is event
+    )
 
 
-def test_check_event_access_machine_client_not_found() -> None:
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = None
-
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[4, 5, 6])
+def test_check_event_access_machine_client_not_found(db_session: Session) -> None:
+    missing_id = 10_000_000
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source='api_key', event_ids=[missing_id]
+    )
     with pytest.raises(HTTPException) as excinfo:
-        check_event_access(event_id=5, user=client_user, db=mock_db)
+        check_event_access(event_id=missing_id, user=client_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
-    assert excinfo.value.detail == "Event not found"
+    assert excinfo.value.detail == 'Event not found'
 
 
-def test_check_event_access_machine_client_out_of_scope() -> None:
-    event = Event(id=10, name="PyCon", created_by_user_id=1)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
+def test_check_event_access_machine_client_out_of_scope(db_session: Session) -> None:
+    owner = _create_user(db_session)
+    event = _create_event(db_session, name='PyCon', created_by_user_id=owner.id)
 
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[1, 2, 3])
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source='api_key', event_ids=[event.id + 1000]
+    )
     with pytest.raises(HTTPException) as excinfo:
-        check_event_access(event_id=10, user=client_user, db=mock_db)
+        check_event_access(event_id=event.id, user=client_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
-    assert excinfo.value.detail == "Client is not authorized to access this event"
+    assert excinfo.value.detail == 'Client is not authorized to access this event'
 
 
-def test_check_event_access_human_admin_unconditional() -> None:
-    event = Event(id=20, name="FOSSASIA", created_by_user_id=99)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
+def test_check_event_access_human_admin_unconditional(db_session: Session) -> None:
+    owner = _create_user(db_session)
+    admin_user_row = _create_user(
+        db_session, email='admin@example.com', role=AuthRole.ADMIN
+    )
+    event = _create_event(db_session, name='FOSSASIA', created_by_user_id=owner.id)
 
-    admin_user = CurrentUser(user_id=5, role="admin", source="jwt")
-    assert check_event_access(event_id=20, user=admin_user, db=mock_db) == event
-
-
-def test_check_event_access_event_creator() -> None:
-    event = Event(id=30, name="OpenTech", created_by_user_id=12)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
-
-    creator_user = CurrentUser(user_id=12, role="organizer", source="cookie")
-    assert check_event_access(event_id=30, user=creator_user, db=mock_db) == event
+    admin_user = CurrentUser(
+        user_id=admin_user_row.id, role=AuthRole.ADMIN, source='jwt'
+    )
+    assert (
+        check_event_access(event_id=event.id, user=admin_user, db=db_session) is event
+    )
 
 
-def test_check_event_access_non_creator_forbidden() -> None:
-    event = Event(id=30, name="OpenTech", created_by_user_id=12)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
+def test_check_event_access_event_creator(db_session: Session) -> None:
+    owner = _create_user(db_session)
+    event = _create_event(db_session, name='OpenTech', created_by_user_id=owner.id)
 
-    other_user = CurrentUser(user_id=13, role="organizer", source="cookie")
+    creator_user = CurrentUser(
+        user_id=owner.id, role=AuthRole.ORGANIZER, source='cookie'
+    )
+    assert (
+        check_event_access(event_id=event.id, user=creator_user, db=db_session) is event
+    )
+
+
+def test_check_event_access_non_creator_forbidden(db_session: Session) -> None:
+    owner = _create_user(db_session)
+    actor = _create_user(db_session, email='actor@example.com')
+    event = _create_event(db_session, name='OpenTech', created_by_user_id=owner.id)
+
+    other_user = CurrentUser(user_id=actor.id, role=AuthRole.ORGANIZER, source='cookie')
     with pytest.raises(HTTPException) as excinfo:
-        check_event_access(event_id=30, user=other_user, db=mock_db)
+        check_event_access(event_id=event.id, user=other_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
-    assert excinfo.value.detail == "User is not authorized to access this event"
+    assert excinfo.value.detail == 'User is not authorized to access this event'
 
 
-def test_check_event_access_no_creator_regular_user_forbidden() -> None:
-    event = Event(id=40, name="LegacyEvent", created_by_user_id=None)
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = event
+def test_check_event_access_no_creator_regular_user_forbidden(
+    db_session: Session,
+) -> None:
+    event = _create_event(db_session, name='LegacyEvent', created_by_user_id=None)
 
-    reg_user = CurrentUser(user_id=1, role="user", source="jwt")
+    reg_user = CurrentUser(user_id=1, role=AuthRole.USER, source='jwt')
     with pytest.raises(HTTPException) as excinfo:
-        check_event_access(event_id=40, user=reg_user, db=mock_db)
+        check_event_access(event_id=event.id, user=reg_user, db=db_session)
     assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -483,80 +538,63 @@ def test_check_event_access_no_creator_regular_user_forbidden() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fastapi_route_auth_integration() -> None:
+def test_fastapi_route_auth_integration(db_session: Session) -> None:
     test_app = FastAPI()
 
-    mock_event = Event(id=1, name="Test Conf", created_by_user_id=10)
+    owner = _create_user(db_session, email='owner@test.com', role=AuthRole.ORGANIZER)
+    event = _create_event(db_session, name='Test Conf', created_by_user_id=owner.id)
+    _create_client(db_session, api_key='good-key', event_ids=[event.id])
+    regular_user = _create_user(db_session, email='user@test.com', role=AuthRole.USER)
 
-    @test_app.get("/events/{event_id}")
+    @test_app.get('/events/{event_id}')
     def get_event_endpoint(
         event: Annotated[Event, Depends(require_event_access())],
     ) -> dict[str, int | str]:
-        return {"id": event.id, "name": event.name}
+        return {'id': event.id, 'name': event.name}
 
-    @test_app.get("/organizer-only")
+    @test_app.get('/organizer-only')
     def org_endpoint(
         user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
     ) -> dict[str, int | str | None]:
-        return {"user_id": user.user_id, "role": user.role}
+        return {'user_id': user.user_id, 'role': user.role}
 
-    # Override get_db to return a mock DB session
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_event
-    test_app.dependency_overrides[get_db] = lambda: mock_db
+    test_app.dependency_overrides[get_db] = lambda: db_session
 
     client = TestClient(test_app)
 
-    # 1. Unauthenticated request to /events/1 -> 401
-    resp = client.get("/events/1")
+    # 1. Unauthenticated request to /events/{id} -> 401
+    resp = client.get(f'/events/{event.id}')
     assert resp.status_code == 401
-    assert resp.headers.get("www-authenticate") == "Bearer"
+    assert resp.headers.get('www-authenticate') == 'Bearer'
 
     # 2. Authenticated via API key (in scope) -> 200
-    mock_client = Client(id=1, hashed_key=hash_api_key("good-key"), event_ids=[1])
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        mock_client,  # get_current_user client lookup
-        mock_event,  # check_event_access event lookup
-    ]
-    resp = client.get("/events/1", headers={"X-API-Key": "good-key"})
+    resp = client.get(f'/events/{event.id}', headers={'X-API-Key': 'good-key'})
     assert resp.status_code == 200
-    assert resp.json() == {"id": 1, "name": "Test Conf"}
+    assert resp.json() == {'id': event.id, 'name': 'Test Conf'}
 
     # 3. Authenticated via cookie for event creator -> 200
-    session_token = create_session_token(user_id=10, role="organizer")
-    creator_user = User(id=10, email="owner@test.com", role="organizer", is_active=True)
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        creator_user,  # user lookup
-        mock_event,  # event lookup
-    ]
-    resp = client.get("/events/1", cookies={"veditor_session": session_token})
+    session_token = create_session_token(user_id=owner.id, role=AuthRole.ORGANIZER)
+    resp = client.get(f'/events/{event.id}', cookies={'veditor_session': session_token})
     assert resp.status_code == 200
-    assert resp.json()["id"] == 1
+    assert resp.json()['id'] == event.id
 
     # 4. Role check passes for organizer
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        creator_user,
-    ]
-    resp = client.get("/organizer-only", cookies={"veditor_session": session_token})
+    resp = client.get('/organizer-only', cookies={'veditor_session': session_token})
     assert resp.status_code == 200
-    assert resp.json() == {"user_id": 10, "role": "organizer"}
+    assert resp.json() == {'user_id': owner.id, 'role': 'organizer'}
 
     # 5. Role check fails for regular user
-    user_token = create_session_token(user_id=20, role="user")
-    regular_user = User(id=20, email="user@test.com", role="user", is_active=True)
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        regular_user,
-    ]
-    resp = client.get("/organizer-only", cookies={"veditor_session": user_token})
+    user_token = create_session_token(user_id=regular_user.id, role=AuthRole.USER)
+    resp = client.get('/organizer-only', cookies={'veditor_session': user_token})
     assert resp.status_code == 403
 
 
 def test_current_user_is_human_admin() -> None:
-    machine = CurrentUser(role="admin", source="api_key")
+    machine = CurrentUser(role=AuthRole.ADMIN, source='api_key')
     assert machine.is_admin
     assert not machine.is_human_admin
 
-    human_admin = CurrentUser(role="admin", source="jwt", user_id=1)
+    human_admin = CurrentUser(role=AuthRole.ADMIN, source='jwt', user_id=1)
     assert human_admin.is_admin
     assert human_admin.is_human_admin
 
@@ -564,284 +602,270 @@ def test_current_user_is_human_admin() -> None:
 def test_require_event_access_invalid_path_param_format() -> None:
     test_app = FastAPI()
 
-    @test_app.get("/events/{event_id}")
+    @test_app.get('/events/{event_id}')
     def endpoint(
         event: Annotated[Event, Depends(require_event_access())],
     ) -> dict[str, int]:
-        return {"id": event.id}
+        return {'id': event.id}
 
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source='jwt'
     )
 
     client = TestClient(test_app)
-    resp = client.get("/events/not-an-int")
+    resp = client.get('/events/not-an-int')
     assert resp.status_code == 400
-    assert "Invalid event ID" in resp.json()["detail"]
+    assert 'Invalid event ID' in resp.json()['detail']
 
 
-def test_require_event_access_query_param_bypass_prevented() -> None:
+def test_require_event_access_query_param_bypass_prevented(db_session: Session) -> None:
     test_app = FastAPI()
 
     # Route defines {id} as the event path parameter
-    @test_app.get("/events/{id}")
+    @test_app.get('/events/{id}')
     def endpoint(
-        event: Annotated[Event, Depends(require_event_access("id"))],
+        event: Annotated[Event, Depends(require_event_access('id'))],
     ) -> dict[str, int]:
-        return {"id": event.id}
+        return {'id': event.id}
 
-    mock_event_2 = Event(id=2, name="Target Event", created_by_user_id=99)
+    event = _create_event(db_session, name='Target Event')
 
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.side_effect = [
-        mock_event_2,
-    ]
-    test_app.dependency_overrides[get_db] = lambda: mock_db
-    # Caller is authorized for event 1, but requesting /events/2?event_id=1
-    client_user = CurrentUser(role="admin", source="api_key", event_ids=[1])
+    test_app.dependency_overrides[get_db] = lambda: db_session
+    # Caller is authorized for a different event, but requesting the path event
+    client_user = CurrentUser(
+        role=AuthRole.ADMIN, source='api_key', event_ids=[event.id + 1000]
+    )
     test_app.dependency_overrides[get_current_user] = lambda: client_user
 
     client = TestClient(test_app)
-    # Query parameter event_id=1 must NOT bypass path parameter {id}=2
-    resp = client.get("/events/2?event_id=1")
+    # Query parameter event_id must NOT bypass path parameter
+    resp = client.get(f'/events/{event.id}?event_id={event.id + 1000}')
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Client is not authorized to access this event"
+    assert resp.json()['detail'] == 'Client is not authorized to access this event'
 
 
-def test_get_current_user_bearer_invalid_header_format() -> None:
+def test_get_current_user_bearer_invalid_header_format(db_session: Session) -> None:
     request = MagicMock()
-    request.headers = {"Authorization": "Basic dXNlcjpwYXNz"}
+    request.headers = {'Authorization': 'Basic dXNlcjpwYXNz'}
     request.cookies = {}
 
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=request, db=MagicMock())
+        get_current_user(request=request, db=db_session)
     assert excinfo.value.status_code == 401
-    assert "Invalid authorization header format" in excinfo.value.detail
-    assert (excinfo.value.headers or {}).get("WWW-Authenticate") == "Bearer"
+    assert 'Invalid authorization header format' in excinfo.value.detail
+    assert (excinfo.value.headers or {}).get('WWW-Authenticate') == 'Bearer'
 
 
-def test_get_current_user_cookie_fail_fast_over_bearer() -> None:
+def test_get_current_user_cookie_fail_fast_over_bearer(db_session: Session) -> None:
     mock_request = MagicMock()
-    mock_request.headers = {"Authorization": "Bearer valid-looking-token"}
-    mock_request.cookies = {"veditor_session": "malformed.session.token"}
+    mock_request.headers = {'Authorization': 'Bearer valid-looking-token'}
+    mock_request.cookies = {'veditor_session': 'malformed.session.token'}
 
-    mock_db = MagicMock()
     with pytest.raises(HTTPException) as excinfo:
-        get_current_user(request=mock_request, db=mock_db)
+        get_current_user(request=mock_request, db=db_session)
     assert excinfo.value.status_code == 401
-    assert "session token" in excinfo.value.detail.lower()
+    assert 'session token' in excinfo.value.detail.lower()
 
 
-def test_lock_active_admins_mock() -> None:
-    mock_session = MagicMock()
-    mock_session.query.return_value.filter.return_value.order_by.return_value.with_for_update.return_value.all.return_value = [
-        (1,),
-        (2,),
-    ]
-    admin_ids = lock_active_admins(mock_session)
-    assert admin_ids == [1, 2]
+def test_lock_active_admins(db_session: Session) -> None:
+    admin_one = _create_user(
+        db_session, email='admin1@example.com', role=AuthRole.ADMIN
+    )
+    admin_two = _create_user(
+        db_session, email='admin2@example.com', role=AuthRole.ADMIN
+    )
+    _create_user(
+        db_session,
+        email='inactive-admin@example.com',
+        role=AuthRole.ADMIN,
+        is_active=False,
+    )
+
+    admin_ids = lock_active_admins(db_session)
+    assert admin_ids == sorted([admin_one.id, admin_two.id])
 
 
 def test_require_talk_access_invalid_path_param_format() -> None:
     test_app = FastAPI()
 
-    @test_app.get("/talks/{talk_id}")
+    @test_app.get('/talks/{talk_id}')
     def endpoint(
         talk: Annotated[Talk, Depends(require_talk_access())],
     ) -> dict[str, int]:
-        return {"id": talk.id}
+        return {'id': talk.id}
 
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source='jwt'
     )
 
     client = TestClient(test_app)
-    resp = client.get("/talks/not-an-int")
+    resp = client.get('/talks/not-an-int')
     assert resp.status_code == 400
-    assert "Invalid talk ID" in resp.json()["detail"]
+    assert 'Invalid talk ID' in resp.json()['detail']
 
 
-def test_require_talk_access_success_and_unauthorized() -> None:
+def test_require_talk_access_success_and_unauthorized(db_session: Session) -> None:
     test_app = FastAPI()
 
-    @test_app.get("/talks/{id}")
+    @test_app.get('/talks/{id}')
     def endpoint(
-        talk: Annotated[Talk, Depends(require_talk_access("id"))],
+        talk: Annotated[Talk, Depends(require_talk_access('id'))],
     ) -> dict[str, int]:
-        return {"id": talk.id}
+        return {'id': talk.id}
 
-    mock_talk = Talk(id=10, event_id=1, status="done")
-    mock_db = MagicMock()
-    mock_db.query.return_value.filter.return_value.first.return_value = mock_talk
-    test_app.dependency_overrides[get_db] = lambda: mock_db
+    owner = _create_user(db_session)
+    event = _create_event(db_session, created_by_user_id=owner.id)
+    talk = _create_talk(db_session, event.id)
+    test_app.dependency_overrides[get_db] = lambda: db_session
 
     # Authorized user (admin)
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="admin", source="jwt"
+        role=AuthRole.ADMIN, source='jwt'
     )
     client = TestClient(test_app)
-    resp = client.get("/talks/10")
+    resp = client.get(f'/talks/{talk.id}')
     assert resp.status_code == 200
-    assert resp.json() == {"id": 10}
+    assert resp.json() == {'id': talk.id}
 
-    # Unauthorized machine client (talk.event_id 1 not in client event_ids [2])
+    # Unauthorized machine client (talk.event_id not in client event_ids)
     test_app.dependency_overrides[get_current_user] = lambda: CurrentUser(
-        role="organizer", source="api_key", event_ids=[2]
+        role=AuthRole.ORGANIZER, source='api_key', event_ids=[talk.event_id + 1000]
     )
-    resp = client.get("/talks/10")
+    resp = client.get(f'/talks/{talk.id}')
     assert resp.status_code == 403
 
 
-def test_login_routes_next_redirect_and_open_redirect_protection() -> None:
-    db = SessionLocal()
-    app.dependency_overrides[get_db] = lambda: db
-    user = None
+def test_login_routes_next_redirect_and_open_redirect_protection(
+    db_session: Session,
+) -> None:
+    app.dependency_overrides[get_db] = lambda: db_session
 
-    try:
-        user = User(
-            email=f"next_test_{uuid.uuid4().hex[:6]}@example.com",
-            hashed_password=hash_password("Pass1234!"),
-            role="organizer",
-            is_active=True,
-            is_verified=True,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    user = User(
+        email=f'next_test_{uuid.uuid4().hex[:6]}@example.com',
+        hashed_password=hash_password('Pass1234!'),
+        role=AuthRole.ORGANIZER,
+        is_active=True,
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
 
-        client = TestClient(app)
+    client = TestClient(app)
 
-        # 1. Login page passes next parameter to template context
-        resp_page = client.get("/login?next=/studio/events")
-        assert resp_page.status_code == 200
-        assert (
-            '<input type="hidden" name="next" value="/studio/events">' in resp_page.text
-        )
+    # 1. Login page passes next parameter to template context
+    resp_page = client.get('/login?next=/studio/events')
+    assert resp_page.status_code == 200
+    assert '<input type="hidden" name="next" value="/studio/events">' in resp_page.text
 
-        # 2. Login submit with next redirects to the specified route (HTTP 303)
-        resp_next = client.post(
-            "/login",
+    # 2. Login submit with next redirects to the specified route (HTTP 303)
+    resp_next = client.post(
+        '/login',
+        data={
+            'email': user.email,
+            'password': 'Pass1234!',
+            'next': '/studio/events',
+        },
+        follow_redirects=False,
+    )
+    assert resp_next.status_code == 303
+    assert resp_next.headers['location'] == '/studio/events'
+
+    # 3. Missing next parameter defaults to /studio
+    resp_default = client.post(
+        '/login',
+        data={'email': user.email, 'password': 'Pass1234!'},
+        follow_redirects=False,
+    )
+    assert resp_default.status_code == 303
+    assert resp_default.headers['location'] == '/studio'
+
+    # 4. Open-redirect prevention: external URL is rejected and safely defaults to /studio
+    resp_malicious_ext = client.post(
+        '/login',
+        data={
+            'email': user.email,
+            'password': 'Pass1234!',
+            'next': 'https://attacker.com',
+        },
+        follow_redirects=False,
+    )
+    assert resp_malicious_ext.status_code == 303
+    assert resp_malicious_ext.headers['location'] == '/studio'
+
+    # 5. Open-redirect prevention: protocol-relative URL is rejected and safely defaults to /studio
+    resp_malicious_proto = client.post(
+        '/login',
+        data={
+            'email': user.email,
+            'password': 'Pass1234!',
+            'next': '//attacker.com',
+        },
+        follow_redirects=False,
+    )
+    assert resp_malicious_proto.status_code == 303
+    assert resp_malicious_proto.headers['location'] == '/studio'
+
+    # 6. Auth loop prevention: case-insensitive auth paths (/Login, /LOGOUT, /Signup) safely default to /studio
+    for auth_target in ('/Login', '/LOGOUT', '/Signup', '/login/', '/Logout/'):
+        resp_loop = client.post(
+            '/login',
             data={
-                "email": user.email,
-                "password": "Pass1234!",
-                "next": "/studio/events",
+                'email': user.email,
+                'password': 'Pass1234!',
+                'next': auth_target,
             },
             follow_redirects=False,
         )
-        assert resp_next.status_code == 303
-        assert resp_next.headers["location"] == "/studio/events"
+        assert resp_loop.status_code == 303
+        assert resp_loop.headers['location'] == '/studio'
 
-        # 3. Missing next parameter defaults to /studio
-        resp_default = client.post(
-            "/login",
-            data={"email": user.email, "password": "Pass1234!"},
-            follow_redirects=False,
-        )
-        assert resp_default.status_code == 303
-        assert resp_default.headers["location"] == "/studio"
-
-        # 4. Open-redirect prevention: external URL is rejected and safely defaults to /studio
-        resp_malicious_ext = client.post(
-            "/login",
-            data={
-                "email": user.email,
-                "password": "Pass1234!",
-                "next": "https://attacker.com",
-            },
-            follow_redirects=False,
-        )
-        assert resp_malicious_ext.status_code == 303
-        assert resp_malicious_ext.headers["location"] == "/studio"
-
-        # 5. Open-redirect prevention: protocol-relative URL is rejected and safely defaults to /studio
-        resp_malicious_proto = client.post(
-            "/login",
-            data={
-                "email": user.email,
-                "password": "Pass1234!",
-                "next": "//attacker.com",
-            },
-            follow_redirects=False,
-        )
-        assert resp_malicious_proto.status_code == 303
-        assert resp_malicious_proto.headers["location"] == "/studio"
-
-        # 6. Auth loop prevention: case-insensitive auth paths (/Login, /LOGOUT, /Signup) safely default to /studio
-        for auth_target in ("/Login", "/LOGOUT", "/Signup", "/login/", "/Logout/"):
-            resp_loop = client.post(
-                "/login",
-                data={
-                    "email": user.email,
-                    "password": "Pass1234!",
-                    "next": auth_target,
-                },
-                follow_redirects=False,
-            )
-            assert resp_loop.status_code == 303
-            assert resp_loop.headers["location"] == "/studio"
-
-        # 7. Failed login re-renders page preserving next hidden input
-        resp_fail = client.post(
-            "/login",
-            data={
-                "email": user.email,
-                "password": "WrongPassword!",
-                "next": "/studio/talks/10",
-            },
-            follow_redirects=False,
-        )
-        assert resp_fail.status_code == 400
-        assert (
-            '<input type="hidden" name="next" value="/studio/talks/10">'
-            in resp_fail.text
-        )
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        try:
-            db.rollback()
-            if user is not None and getattr(user, "id", None):
-                db.query(User).filter(User.id == user.id).delete()
-                db.commit()
-        finally:
-            db.close()
+    # 7. Failed login re-renders page preserving next hidden input
+    resp_fail = client.post(
+        '/login',
+        data={
+            'email': user.email,
+            'password': 'WrongPassword!',
+            'next': '/studio/talks/10',
+        },
+        follow_redirects=False,
+    )
+    assert resp_fail.status_code == 400
+    assert (
+        '<input type="hidden" name="next" value="/studio/talks/10">' in resp_fail.text
+    )
 
 
-def test_get_client_throttles_last_used_at_updates() -> None:
-    from datetime import UTC, datetime, timedelta
-    from unittest.mock import MagicMock
-
-    mock_db = MagicMock()
+def test_get_client_throttles_last_used_at_updates(db_session: Session) -> None:
     now = datetime.now(UTC)
-    client_recent = Client(
-        id=1,
-        name="Test",
-        hashed_key="some_hash",
+    recent = _create_client(
+        db_session,
+        api_key='recent-key',
         last_used_at=now - timedelta(seconds=60),
     )
-    mock_db.query.return_value.filter.return_value.first.return_value = client_recent
+    recent_last_used = recent.last_used_at
+    assert recent_last_used is not None
 
-    with patch("app.auth.hash_api_key", return_value="some_hash"):
-        resolved = get_client(api_key="valid-key", db=mock_db)
-        assert resolved == client_recent
-        assert not mock_db.commit.called
+    resolved = get_client(api_key='recent-key', db=db_session)
+    assert resolved.id == recent.id
+    db_session.expire_all()
+    reloaded_recent = db_session.get(Client, recent.id)
+    assert reloaded_recent is not None
+    assert reloaded_recent.last_used_at == recent_last_used
 
-    client_stale = Client(
-        id=2,
-        name="Test2",
-        hashed_key="stale_hash",
+    stale = _create_client(
+        db_session,
+        api_key='stale-key',
         last_used_at=now - timedelta(seconds=350),
     )
-    mock_db.query.return_value.filter.return_value.first.return_value = client_stale
+    stale_last_used = stale.last_used_at
+    assert stale_last_used is not None
 
-    with (
-        patch("app.auth.hash_api_key", return_value="stale_hash"),
-        patch("app.auth.SessionLocal") as mock_session_local,
-    ):
-        mock_isolated_session = MagicMock()
-        mock_session_local.return_value.__enter__.return_value = mock_isolated_session
-        resolved2 = get_client(api_key="valid-key", db=mock_db)
-        assert resolved2 == client_stale
-        # Request session is never prematurely committed
-        assert not mock_db.commit.called
-        # Isolated session is committed out-of-band
-        assert mock_isolated_session.commit.called
+    resolved_stale = get_client(api_key='stale-key', db=db_session)
+    assert resolved_stale.id == stale.id
+
+    db_session.expire_all()
+    reloaded_stale = db_session.get(Client, stale.id)
+    assert reloaded_stale is not None
+    assert reloaded_stale.last_used_at is not None
+    assert reloaded_stale.last_used_at > stale_last_used
