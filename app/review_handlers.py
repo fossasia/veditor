@@ -3,13 +3,20 @@
 import logging
 import traceback
 from collections.abc import Callable
+from http import HTTPStatus
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.states import advance
-from app.storage import StorageBackend, cleanup_intermediates
+from . import models, schemas
+from . import tasks as app_tasks
+from .consts import JobKind, JobStatus, TalkStatus
+from .states import advance
+from .storage import StorageBackend, cleanup_intermediates
+from .webhook import dispatch_talk_webhook
+
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +24,27 @@ logger = logging.getLogger(__name__)
 def _record_review_and_advance(
     talk: models.Talk,
     payload: schemas.ReviewRequest,
-    target_state: str,
+    target_state: TalkStatus,
     db: Session,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
+    if payload.decision == schemas.ReviewDecision.approve:
+        if talk.status in (
+            TalkStatus.ASSEMBLING,
+            TalkStatus.TRANSCODING,
+            TalkStatus.UPLOADING,
+            TalkStatus.DONE,
+        ):
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT,
+                detail=f"Cannot approve talk: state has already advanced to '{talk.status}'",
+            )
+        if (talk.cut_start is None or talk.cut_end is None) and not talk.cut_segments:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail='Cannot approve a talk without cut bounds.',
+            )
+
     try:
         review = models.Review(
             talk_id=talk.id,
@@ -31,19 +55,18 @@ def _record_review_and_advance(
         db.add(review)
 
         if payload.decision == schemas.ReviewDecision.approve:
-            if talk.cut_start is None or talk.cut_end is None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot approve a talk without cut bounds.",
+            segments = talk.cut_segments or [
+                {'start': talk.cut_start or 0.0, 'end': talk.cut_end or 0.0}
+            ]
+            for seg in segments:
+                db.add(
+                    models.ApprovedCut(
+                        talk_id=talk.id,
+                        cut_start=seg['start'],
+                        cut_end=seg['end'],
+                        review=review,
+                    )
                 )
-            db.add(
-                models.ApprovedCut(
-                    talk_id=talk.id,
-                    cut_start=talk.cut_start,
-                    cut_end=talk.cut_end,
-                    review=review,
-                )
-            )
 
         advance(talk, target_state)
         db.flush()
@@ -56,14 +79,12 @@ def _record_review_and_advance(
         db.rollback()
         raise
 
-    if target_state == "pending_bounds":
+    if target_state == TalkStatus.PENDING_BOUNDS:
         try:
-            from app.webhook import dispatch_talk_webhook
-
-            dispatch_talk_webhook("talk.bounds_pending", talk, db)
-        except Exception as webhook_err:  # noqa: BLE001
+            dispatch_talk_webhook('talk.bounds_pending', talk, db)
+        except (SQLAlchemyError, RedisError) as webhook_err:
             logger.warning(
-                "Failed to dispatch talk.bounds_pending webhook for talk %s: %s",
+                'Failed to dispatch talk.bounds_pending webhook for talk %s: %s',
                 talk.id,
                 webhook_err,
             )
@@ -78,33 +99,32 @@ def handle_approve(
     storage: StorageBackend | None = None,
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
-    cut_keys = storage.list_keys(f"{talk.id}/cut/") if storage else []
-    cut_key = cut_keys[0] if cut_keys else f"{talk.id}/cut/cut.mp4"
+    cut_keys = storage.list_keys(f'{talk.id}/cut/') if storage else []
+    cut_key = cut_keys[0] if cut_keys else f'{talk.id}/cut/cut.mp4'
 
     response = _record_review_and_advance(
-        talk, payload, "assembling", db, user_id=user_id
+        talk, payload, TalkStatus.ASSEMBLING, db, user_id=user_id
     )
 
-    from app.tasks import dispatch_assembly
-
     try:
-        dispatch_assembly(talk.id, cut_key)
+        app_tasks.dispatch_assembly(talk.id, cut_key)
     except Exception:
-        advance(talk, "broken")
-        log_key = f"{talk.id}/logs/assembly.log" if storage else None
-        if log_key:
+        advance(talk, TalkStatus.BROKEN)
+        log_key: str | None = None
+        if storage is not None:
+            log_key = f'{talk.id}/logs/assembly.log'
             try:
-                storage.put(log_key, traceback.format_exc().encode("utf-8"))
-            except Exception as log_err:  # noqa: BLE001
+                storage.put(log_key, traceback.format_exc().encode('utf-8'))
+            except (OSError, ValueError, TypeError) as log_err:
                 logger.warning(
-                    "Failed to persist dispatch failure log to storage: %s", log_err
+                    'Failed to persist dispatch failure log to storage: %s', log_err
                 )
                 log_key = None
         db.add(
             models.Job(
                 talk_id=talk.id,
-                kind="assembly",
-                status="failed",
+                kind=JobKind.ASSEMBLY,
+                status=JobStatus.FAILED,
                 log_path=log_key,
             )
         )
@@ -122,7 +142,7 @@ def handle_needs_work(
     user_id: int | None = None,
 ) -> schemas.ReviewResponse:
     return _record_review_and_advance(
-        talk, payload, "pending_bounds", db, user_id=user_id
+        talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
 
 
@@ -135,8 +155,9 @@ def handle_reject(
 ) -> schemas.ReviewResponse:
     talk.cut_start = None
     talk.cut_end = None
+    talk.cut_segments = None
     response = _record_review_and_advance(
-        talk, payload, "pending_bounds", db, user_id=user_id
+        talk, payload, TalkStatus.PENDING_BOUNDS, db, user_id=user_id
     )
     if storage is not None:
         cleanup_intermediates(storage, talk.id)

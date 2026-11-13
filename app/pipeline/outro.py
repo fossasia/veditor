@@ -13,12 +13,13 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw
 
-from app.pipeline.intro import (
+from .intro import (
     _get_audio_samples,
     _get_font,
     _render_video_and_audio,
     _wrap_text_to_width,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def _create_outro_slate_image(
 ) -> np.ndarray:
     """Renders a centered outro slate RGB numpy array."""
     width, height = resolution
-    img = Image.new("RGB", (width, height), color=(15, 23, 42))
+    img = Image.new('RGB', (width, height), color=(15, 23, 42))
     draw = ImageDraw.Draw(img)
 
     for y in range(height):
@@ -56,7 +57,7 @@ def _create_outro_slate_image(
         if lp.is_file():
             try:
                 with Image.open(lp) as logo_img:
-                    logo_rgba = logo_img.convert("RGBA")
+                    logo_rgba = logo_img.convert('RGBA')
                     max_logo_w = max(1, int(width * 0.25))
                     max_logo_h = max(1, int(height * 0.18))
                     logo_rgba.thumbnail(
@@ -66,7 +67,7 @@ def _create_outro_slate_image(
                     img.paste(logo_rgba, (logo_x, int(height * 0.12)), mask=logo_rgba)
                     start_y = int(height * 0.38)
             except (OSError, ValueError) as exc:
-                logger.warning("Failed to composite outro logo: %s", exc)
+                logger.warning('Failed to composite outro logo: %s', exc)
 
     if event_name:
         event_wrapped = _wrap_text_to_width(
@@ -77,8 +78,8 @@ def _create_outro_slate_image(
             event_wrapped,
             font=event_font,
             fill=(56, 189, 248),
-            anchor="mm",
-            align="center",
+            anchor='mm',
+            align='center',
         )
         start_y += int(height * 0.13)
 
@@ -91,8 +92,8 @@ def _create_outro_slate_image(
             thank_wrapped,
             font=main_font,
             fill=(255, 255, 255),
-            anchor="mm",
-            align="center",
+            anchor='mm',
+            align='center',
         )
         start_y += int(height * 0.15)
 
@@ -105,8 +106,8 @@ def _create_outro_slate_image(
             links_wrapped,
             font=sub_font,
             fill=(203, 213, 225),
-            anchor="mm",
-            align="center",
+            anchor='mm',
+            align='center',
         )
 
     return np.array(img)
@@ -116,9 +117,9 @@ def generate_outro_clip(
     output_path: Path | str,
     talk_metadata: dict[str, Any] | str | None = None,
     *,
-    event_name: str = "",
-    thank_you_text: str = "Thank You For Watching!",
-    website_or_links: str = "eventyay.com • fossasia.org",
+    event_name: str = '',
+    thank_you_text: str = 'Thank You For Watching!',
+    website_or_links: str = 'eventyay.com • fossasia.org',
     logo_path: Path | str | None = None,
     audio_jingle_path: Path | str | None = None,
     duration_seconds: float = 3.5,
@@ -146,68 +147,68 @@ def generate_outro_clip(
         talk_metadata = None
 
     if isinstance(talk_metadata, dict):
-        event_name = talk_metadata.get("event_name", event_name)
-        thank_you_text = talk_metadata.get("thank_you_text", thank_you_text)
-        website_or_links = talk_metadata.get("website_or_links", website_or_links)
+        event_name = talk_metadata.get('event_name', event_name)
+        thank_you_text = talk_metadata.get('thank_you_text', thank_you_text)
+        website_or_links = talk_metadata.get('website_or_links', website_or_links)
 
         # Derive duration
-        if "duration_seconds" in talk_metadata:
-            duration_seconds = float(talk_metadata["duration_seconds"])
-        elif "duration" in talk_metadata:
-            duration_seconds = float(talk_metadata["duration"])
+        if 'duration_seconds' in talk_metadata:
+            duration_seconds = float(talk_metadata['duration_seconds'])
+        elif 'duration' in talk_metadata:
+            duration_seconds = float(talk_metadata['duration'])
 
         # Derive target resolution
-        if "resolution" in talk_metadata:
-            resolution = tuple(talk_metadata["resolution"])  # type: ignore
-        elif "width" in talk_metadata and "height" in talk_metadata:
-            resolution = (int(talk_metadata["width"]), int(talk_metadata["height"]))
-        elif "video_metadata" in talk_metadata and isinstance(
-            talk_metadata["video_metadata"], dict
+        if 'resolution' in talk_metadata:
+            resolution = tuple(talk_metadata['resolution'])
+        elif 'width' in talk_metadata and 'height' in talk_metadata:
+            resolution = (int(talk_metadata['width']), int(talk_metadata['height']))
+        elif 'video_metadata' in talk_metadata and isinstance(
+            talk_metadata['video_metadata'], dict
         ):
-            vm = talk_metadata["video_metadata"]
-            if "resolution" in vm:
-                resolution = tuple(vm["resolution"])  # type: ignore
-            elif "width" in vm and "height" in vm:
-                resolution = (int(vm["width"]), int(vm["height"]))
+            vm = talk_metadata['video_metadata']
+            if 'resolution' in vm:
+                resolution = tuple(vm['resolution'])
+            elif 'width' in vm and 'height' in vm:
+                resolution = (int(vm['width']), int(vm['height']))
 
         # Derive framerate
-        if "fps" in talk_metadata:
-            fps = int(talk_metadata["fps"])
-        elif "framerate" in talk_metadata:
-            fps = int(talk_metadata["framerate"])
-        elif "video_metadata" in talk_metadata and isinstance(
-            talk_metadata["video_metadata"], dict
+        if 'fps' in talk_metadata:
+            fps = int(talk_metadata['fps'])
+        elif 'framerate' in talk_metadata:
+            fps = int(talk_metadata['framerate'])
+        elif 'video_metadata' in talk_metadata and isinstance(
+            talk_metadata['video_metadata'], dict
         ):
-            vm = talk_metadata["video_metadata"]
-            if "fps" in vm:
-                fps = int(vm["fps"])
-            elif "framerate" in vm:
-                fps = int(vm["framerate"])
+            vm = talk_metadata['video_metadata']
+            if 'fps' in vm:
+                fps = int(vm['fps'])
+            elif 'framerate' in vm:
+                fps = int(vm['framerate'])
 
-        if "logo_path" in talk_metadata:
-            logo_path = talk_metadata["logo_path"]
-        if "audio_jingle_path" in talk_metadata:
-            audio_jingle_path = talk_metadata["audio_jingle_path"]
+        if 'logo_path' in talk_metadata:
+            logo_path = talk_metadata['logo_path']
+        if 'audio_jingle_path' in talk_metadata:
+            audio_jingle_path = talk_metadata['audio_jingle_path']
 
     # Guard against empty string paths
-    if logo_path == "":
+    if logo_path == '':
         logo_path = None
-    if audio_jingle_path == "":
+    if audio_jingle_path == '':
         audio_jingle_path = None
 
     if duration_seconds <= 0:
-        raise ValueError(f"duration_seconds must be positive, got {duration_seconds}")
+        raise ValueError(f'duration_seconds must be positive, got {duration_seconds}')
     if fps <= 0:
-        raise ValueError(f"fps must be positive, got {fps}")
+        raise ValueError(f'fps must be positive, got {fps}')
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be positive, got {threads}")
+        raise ValueError(f'threads must be positive, got {threads}')
     if resolution[0] < 16 or resolution[1] < 16:
-        raise ValueError(f"resolution must be at least 16x16, got {resolution}")
+        raise ValueError(f'resolution must be at least 16x16, got {resolution}')
 
     if logo_path is not None:
         lp = Path(logo_path)
         if not lp.is_file():
-            raise FileNotFoundError(f"Logo file not found: {lp}")
+            raise FileNotFoundError(f'Logo file not found: {lp}')
 
     slate_ndarray = _create_outro_slate_image(
         event_name=event_name,

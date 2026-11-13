@@ -7,6 +7,18 @@
   width: 100%;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .room-select-row { display: flex; gap: 8px; align-items: stretch; }
 .room-select-row .input-field { flex: 1; }
 .room-select-row .btn { height: 38px; white-space: nowrap; }
@@ -168,29 +180,93 @@
    --------------------------------------------------------------------------- */
 .modal-overlay.hidden { display: none; }
 
-#modal-request-organizer .modal-description {
-  font-size: 0.875rem;
+/* ---------------------------------------------------------------------------
+   Attach Room Recording Modal Overhaul
+   --------------------------------------------------------------------------- */
+.attach-source-toggle {
+  display: flex;
+  background: var(--v-bg-subtle);
+  border: 1px solid var(--v-border-subtle);
+  border-radius: var(--v-radius-md, 6px);
+  padding: 3px;
+  gap: 4px;
+}
+
+.attach-source-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: calc(var(--v-radius-md, 6px) - 2px);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--v-text-secondary);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.attach-source-btn:hover {
+  color: var(--v-text-primary);
+}
+
+.attach-source-btn.attach-source-active {
+  background: var(--v-bg-surface);
+  color: var(--v-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.attach-source-hidden {
+  display: none !important;
+}
+
+.attach-dropzone {
+  border: 2px dashed var(--v-border);
+  border-radius: var(--v-radius-md, 8px);
+  background: var(--v-bg-subtle);
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+  outline: none;
+}
+
+.attach-dropzone:hover,
+.attach-dropzone.drag-over,
+.attach-dropzone:focus-visible {
+  border-color: var(--v-primary);
+  background: var(--v-primary-subtle);
+}
+
+.attach-dropzone-icon {
   color: var(--v-text-muted);
-  margin-bottom: 1rem;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-#organizer-request-note {
-  width: 100%;
-  resize: vertical;
-  min-height: 80px;
+.attach-dropzone.drag-over .attach-dropzone-icon,
+.attach-dropzone:hover .attach-dropzone-icon {
+  color: var(--v-primary);
 }
 
-.form-hint {
+.attach-dropzone-text {
+  font-size: 0.875rem;
+  color: var(--v-text-primary);
+  margin: 0 0 4px 0;
+}
+
+.attach-dropzone-subtext {
   font-size: 0.78rem;
   color: var(--v-text-muted);
-  text-align: right;
-  margin-top: 0.25rem;
+  margin: 0;
 }
 
-.form-error {
-  color: var(--v-status-danger-text);
-  font-size: 0.85rem;
-  margin-top: 0.5rem;
+.attach-file-input {
+  display: none;
 }
-
-.form-error.hidden { display: none; }

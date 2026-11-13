@@ -3,11 +3,16 @@ from __future__ import annotations
 import logging
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import av
+from av.audio.stream import AudioStream
+from av.packet import Packet
+from av.video.stream import VideoStream
 
-from app.config import PreviewPreset
-from app.pipeline.loudness import _mux_packet_with_monotonic_dts, rescale_pts
+from ..config import PreviewPreset
+from .loudness import _mux_packet_with_monotonic_dts, rescale_pts
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,20 +32,20 @@ def generate_preview(
     and speed preset specified by the given PreviewPreset.
     """
     if threads is not None and threads <= 0:
-        raise ValueError(f"threads must be greater than zero: {threads}")
+        raise ValueError(f'threads must be greater than zero: {threads}')
     if start_seconds < 0:
-        raise ValueError(f"start_seconds must be non-negative: {start_seconds}")
+        raise ValueError(f'start_seconds must be non-negative: {start_seconds}')
     if end_seconds is not None and end_seconds <= start_seconds:
         raise ValueError(
-            f"end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})"
+            f'end_seconds ({end_seconds}) must be greater than start_seconds ({start_seconds})'
         )
 
     container_options = (
-        {"movflags": "faststart"} if output_path.suffix.lower() == ".mp4" else {}
+        {'movflags': 'faststart'} if output_path.suffix.lower() == '.mp4' else {}
     )
     with (
         av.open(str(input_path)) as in_container,
-        av.open(str(output_path), mode="w", options=container_options) as out_container,
+        av.open(str(output_path), mode='w', options=container_options) as out_container,
     ):
         if start_seconds > 0.0:
             in_container.seek(
@@ -52,7 +57,7 @@ def generate_preview(
         in_audio = in_container.streams.audio[0] if in_container.streams.audio else None
 
         if not in_video and not in_audio:
-            raise ValueError(f"No video or audio streams found in {input_path}")
+            raise ValueError(f'No video or audio streams found in {input_path}')
 
         out_video = None
         out_audio = None
@@ -65,26 +70,26 @@ def generate_preview(
             raw_fps = float(in_video.guessed_rate or in_video.average_rate or 24)
             stride = max(1, round(raw_fps / 24.0)) if raw_fps > 30.0 else 1
             fps = max(1, round(raw_fps / stride))
-            speed_preset = getattr(preset, "preset_speed", "ultrafast") or "ultrafast"
+            speed_preset = preset.preset_speed or 'ultrafast'
             options = {
-                "preset": speed_preset,
-                "tune": "fastdecode,zerolatency",
+                'preset': speed_preset,
+                'tune': 'fastdecode,zerolatency',
             }
             if preset.crf is not None:
-                options["crf"] = str(preset.crf)
+                options['crf'] = str(preset.crf)
             if threads is not None:
-                options["threads"] = str(threads)
-            out_video = out_container.add_stream("libx264", rate=fps, options=options)
+                options['threads'] = str(threads)
+            out_video = out_container.add_stream('libx264', rate=fps, options=options)
             out_video.width = width
             out_video.height = height
-            out_video.pix_fmt = "yuv420p"
+            out_video.pix_fmt = 'yuv420p'
             if preset.crf is None:
                 out_video.bit_rate = preset.video_bitrate
 
             filter_graph = av.filter.Graph()
             buf = filter_graph.add_buffer(template=in_video)
-            scale = filter_graph.add("scale", f"{width}:{height}:flags=bilinear")
-            sink = filter_graph.add("buffersink")
+            scale = filter_graph.add('scale', f'{width}:{height}:flags=bilinear')
+            sink = filter_graph.add('buffersink')
             buf.link_to(scale)
             scale.link_to(sink)
             filter_graph.configure()
@@ -94,15 +99,15 @@ def generate_preview(
             codec_name = (
                 in_audio.codec_context.name.lower()
                 if (in_audio.codec_context and in_audio.codec_context.name)
-                else ""
+                else ''
             )
-            if codec_name in ("aac", "mp3") and start_seconds <= 0.0:
+            if codec_name in ('aac', 'mp3') and start_seconds <= 0.0:
                 stream_copy_audio = True
                 out_audio = out_container.add_stream_from_template(in_audio)
             else:
-                out_audio = out_container.add_stream("aac", rate=in_audio.rate or 44100)
+                out_audio = out_container.add_stream('aac', rate=in_audio.rate or 44100)
                 out_audio.bit_rate = preset.audio_bitrate
-                out_audio.layout = in_audio.layout.name if in_audio.layout else "mono"
+                out_audio.layout = in_audio.layout.name if in_audio.layout else 'mono'
 
         last_dts: dict[int, int] = {}
         streams = [s for s in (in_video, in_audio) if s is not None]
@@ -116,12 +121,14 @@ def generate_preview(
             if packet.stream.index in streams_past_end:
                 continue
 
-            if packet.stream.type == "video" and out_video:
+            if packet.stream.type == 'video' and out_video:
+                vpacket = cast('Packet[VideoStream]', packet)
+                assert filter_graph is not None
                 try:
-                    decoded_frames = packet.decode()
+                    decoded_frames = vpacket.decode()
                 except (av.error.InvalidDataError, av.FFmpegError) as exc:
                     logger.warning(
-                        "Skipping unparseable video packet in preview: %s", exc
+                        'Skipping unparseable video packet in preview: %s', exc
                     )
                     continue
                 for frame in decoded_frames:
@@ -153,7 +160,7 @@ def generate_preview(
                     filter_graph.push(frame)
                     while True:
                         try:
-                            scaled_frame = filter_graph.pull()
+                            scaled_frame = filter_graph.vpull()
                         except av.FFmpegError, EOFError:
                             break
                         scaled_frame.pts = video_frame_count
@@ -164,7 +171,9 @@ def generate_preview(
                                 out_container, out_pkt, out_video.index, last_dts
                             )
 
-            elif packet.stream.type == "audio" and out_audio:
+            elif packet.stream.type == 'audio' and out_audio:
+                apacket = cast('Packet[AudioStream]', packet)
+                assert in_audio is not None
                 if stream_copy_audio:
                     if end_seconds is not None:
                         time_base = (
@@ -192,16 +201,16 @@ def generate_preview(
                     )
                 else:
                     try:
-                        decoded_frames = packet.decode()
+                        decoded_audio_frames = apacket.decode()
                     except (av.error.InvalidDataError, av.FFmpegError) as exc:
                         logger.warning(
-                            "Skipping unparseable audio packet in preview: %s", exc
+                            'Skipping unparseable audio packet in preview: %s', exc
                         )
                         continue
-                    for frame in decoded_frames:
+                    for a_frame in decoded_audio_frames:
                         time_base = (
-                            float(frame.time_base)
-                            if frame.time_base is not None
+                            float(a_frame.time_base)
+                            if a_frame.time_base is not None
                             else (
                                 float(packet.stream.time_base)
                                 if packet.stream.time_base is not None
@@ -209,9 +218,11 @@ def generate_preview(
                             )
                         )
                         frame_time_s = (
-                            float(frame.pts * time_base)
-                            if frame.pts is not None
-                            else (float(frame.time) if frame.time is not None else 0.0)
+                            float(a_frame.pts * time_base)
+                            if a_frame.pts is not None
+                            else (
+                                float(a_frame.time) if a_frame.time is not None else 0.0
+                            )
                         )
                         if end_seconds is not None and frame_time_s > end_seconds:
                             streams_past_end.add(packet.stream.index)
@@ -219,10 +230,10 @@ def generate_preview(
                         if frame_time_s < start_seconds:
                             continue
 
-                        frame.pts = audio_sample_count
-                        frame.time_base = Fraction(1, in_audio.rate or 44100)
-                        audio_sample_count += frame.samples
-                        for out_pkt in out_audio.encode(frame):
+                        a_frame.pts = audio_sample_count
+                        a_frame.time_base = Fraction(1, in_audio.rate or 44100)
+                        audio_sample_count += a_frame.samples
+                        for out_pkt in out_audio.encode(a_frame):
                             _mux_packet_with_monotonic_dts(
                                 out_container, out_pkt, out_audio.index, last_dts
                             )
@@ -231,7 +242,7 @@ def generate_preview(
             filter_graph.push(None)
             while True:
                 try:
-                    scaled_frame = filter_graph.pull()
+                    scaled_frame = filter_graph.vpull()
                 except av.FFmpegError, EOFError:
                     break
                 scaled_frame.pts = video_frame_count
