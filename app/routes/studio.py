@@ -978,17 +978,44 @@ def studio(
 
     preview_urls = [a['url'] for a in media_assets]
 
-    is_other_organizer_talk = bool(
-        user
-        and user.role == AuthRole.ADMIN
-        and (not talk.event or talk.event.created_by_user_id != user.id)
+    is_speaker = (
+        (
+            sso_user.role == AuthRole.SPEAKER
+            or bool(
+                talk.speaker_email
+                and sso_user.email
+                and talk.speaker_email.lower() == sso_user.email.lower()
+            )
+        )
+        if sso_user
+        else (
+            (user is not None and user.role == AuthRole.SPEAKER)
+            or bool(
+                talk.speaker_email
+                and user is not None
+                and user.email
+                and talk.speaker_email.lower() == user.email.lower()
+            )
+        )
     )
 
-    is_from_admin = bool(
-        user
-        and user.role == AuthRole.ADMIN
-        and (request.query_params.get('from') == 'admin' or is_other_organizer_talk)
-    )
+    if hasattr(request, 'state'):
+        request.state.is_speaker = is_speaker
+
+    if is_speaker:
+        is_other_organizer_talk = False
+        is_from_admin = False
+    else:
+        is_other_organizer_talk = bool(
+            user
+            and user.role == AuthRole.ADMIN
+            and (not talk.event or talk.event.created_by_user_id != user.id)
+        )
+        is_from_admin = bool(
+            user
+            and user.role == AuthRole.ADMIN
+            and (request.query_params.get('from') == 'admin' or is_other_organizer_talk)
+        )
 
     back_url = (
         (f'/admin/events/{talk.event_id}' if talk.event_id else '/admin/events')
@@ -1007,26 +1034,7 @@ def studio(
             'final_asset': final_asset,
             'preview_urls': preview_urls,
             'all_statuses': ALL_STATUSES,
-            'is_speaker': (
-                (
-                    sso_user.role == AuthRole.SPEAKER
-                    or bool(
-                        talk.speaker_email
-                        and sso_user.email
-                        and talk.speaker_email.lower() == sso_user.email.lower()
-                    )
-                )
-                if sso_user
-                else (
-                    (user is not None and user.role == AuthRole.SPEAKER)
-                    or bool(
-                        talk.speaker_email
-                        and user is not None
-                        and user.email
-                        and talk.speaker_email.lower() == user.email.lower()
-                    )
-                )
-            ),
+            'is_speaker': is_speaker,
             'is_other_organizer_talk': is_other_organizer_talk,
             'is_from_admin': is_from_admin,
             'back_url': back_url,
