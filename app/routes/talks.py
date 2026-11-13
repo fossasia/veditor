@@ -649,6 +649,11 @@ def submit_cut_bounds(
         )
     raw_key = raw_keys[0]
 
+    prior_status = talk.status
+    prior_cut_start = talk.cut_start
+    prior_cut_end = talk.cut_end
+    prior_cut_segments = talk.cut_segments
+
     if len(parsed_segs) == 1:
         talk.cut_start = cut_start_s
         talk.cut_end = cut_end_s
@@ -660,8 +665,8 @@ def submit_cut_bounds(
         talk.cut_segments = [{'start': s[0], 'end': s[1]} for s in parsed_segs]
         cut_fn = job_cut_multi
 
-    prior_status = talk.status
     advance(talk, TalkStatus.CUTTING)
+    review = None
     if payload.note:
         user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
         review = models.Review(
@@ -684,6 +689,12 @@ def submit_cut_bounds(
     except (OSError, RedisError, RuntimeError) as exc:
         logger.error('Failed to enqueue cut job for talk %s: %s', talk.id, exc)
         talk.status = prior_status
+        talk.cut_start = prior_cut_start
+        talk.cut_end = prior_cut_end
+        talk.cut_segments = prior_cut_segments
+        talk.updated_at = datetime.now(UTC)
+        if review is not None:
+            db.delete(review)
         db.commit()
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
