@@ -1519,8 +1519,8 @@ async def import_schedule(
                 if isinstance(r, dict):
                     r_name = _extract_string_value(r.get('name') or r.get('title'))
                     if r_name:
-                        for key in ('id', 'guid', 'slug', 'pk', 'code'):
-                            val = r.get(key)
+                        for lookup_key in ('id', 'guid', 'slug', 'pk', 'code'):
+                            val = r.get(lookup_key)
                             if val is not None:
                                 rooms_lookup[str(val)] = r_name
                                 rooms_lookup[val] = r_name
@@ -1533,8 +1533,8 @@ async def import_schedule(
                     )
                     sp_email = sp.get('email')
                     entry = {'name': sp_name or '', 'email': sp_email or ''}
-                    for key in ('code', 'id', 'guid', 'pk', 'slug'):
-                        val = sp.get(key)
+                    for lookup_key in ('code', 'id', 'guid', 'pk', 'slug'):
+                        val = sp.get(lookup_key)
                         if val is not None:
                             speakers_lookup[str(val)] = entry
                             speakers_lookup[val] = entry
@@ -1565,8 +1565,8 @@ async def import_schedule(
                     if isinstance(r, dict):
                         r_name = _extract_string_value(r.get('name') or r.get('title'))
                         if r_name:
-                            for key in ('id', 'guid', 'slug', 'pk', 'code'):
-                                val = r.get(key)
+                            for lookup_key in ('id', 'guid', 'slug', 'pk', 'code'):
+                                val = r.get(lookup_key)
                                 if val is not None:
                                     rooms_lookup[str(val)] = r_name
                                     rooms_lookup[val] = r_name
