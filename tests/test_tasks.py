@@ -2,7 +2,7 @@ from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -944,3 +944,184 @@ def test_job_cut_multi_invokes_job_cut() -> None:
         mock_job_cut.assert_called_once_with(
             42, '42/raw/video.mp4', '42/cut/custom.mp4'
         )
+
+
+def test_job_detect_duration_mismatch_advances_to_pending_approval(
+    db_session: Session, out_of_band_sessions: None
+) -> None:
+    """When a valid video file duration differs from the scheduled duration,
+
+    job_detect accepts the recording, does not fail, and advances the talk to pending_approval.
+    """
+    talk = _create_talk(
+        db_session,
+        start=datetime(2026, 8, 29, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 29, 9, 30, tzinfo=UTC),
+        status=TalkStatus.DETECTING,
+    )
+    mock_storage = MagicMock()
+    mock_storage.get.return_value = Path('/tmp/fake.mp4')
+
+    with (
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch(
+            'app.tasks.detect',
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=900.0,
+                has_video=True,
+                has_audio=True,
+                reason='duration delta 900.0s exceeds tolerance 300.0s',
+            ),
+        ),
+    ):
+        job_detect(talk.id, f'{talk.id}/raw/raw.mp4')
+
+    db_session.expire_all()
+    reloaded = db_session.get(Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
+    assert reloaded.raw_duration_seconds == 900.0
+
+
+def test_job_detect_duration_exceeding_ceiling_fails_and_marks_broken(
+    db_session: Session, out_of_band_sessions: None
+) -> None:
+    """When a single-talk video exceeds the dynamic duration ceiling (e.g. 8-hour recording for 30m talk),
+    job_detect fails and transitions the talk to broken state.
+    """
+    talk = _create_talk(
+        db_session,
+        start=datetime(2026, 8, 29, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 29, 9, 30, tzinfo=UTC),
+        status=TalkStatus.DETECTING,
+    )
+    mock_storage = MagicMock()
+    mock_storage.get.return_value = Path('/tmp/fake.mp4')
+
+    with (
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch(
+            'app.tasks.detect',
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=28800.0,
+                has_video=True,
+                has_audio=True,
+                reason='duration delta 27000.0s exceeds tolerance 300.0s (actual: 28800.0s, scheduled: 1800.0s)',
+            ),
+        ),
+        pytest.raises(
+            ValueError, match='significantly exceeds the scheduled session duration'
+        ),
+    ):
+        job_detect(talk.id, f'{talk.id}/raw/raw.mp4')
+
+    db_session.expire_all()
+    reloaded = db_session.get(Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.BROKEN
+
+
+def test_job_detect_unscheduled_talk_duration_ceiling(
+    db_session: Session, out_of_band_sessions: None
+) -> None:
+    """Unscheduled talks allow up to 4 hours but reject longer recordings."""
+    talk = _create_talk(
+        db_session,
+        start=datetime(2026, 8, 29, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 29, 9, 30, tzinfo=UTC),
+        status=TalkStatus.DETECTING,
+    )
+    mock_storage = MagicMock()
+    mock_storage.get.return_value = Path('/tmp/fake.mp4')
+
+    # 3 hours allowed
+    with (
+        patch.object(Talk, 'start', new_callable=PropertyMock, return_value=None),
+        patch.object(Talk, 'end', new_callable=PropertyMock, return_value=None),
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch(
+            'app.tasks.detect',
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=10800.0,
+                has_video=True,
+                has_audio=True,
+                reason='duration outside scheduled window',
+            ),
+        ),
+    ):
+        job_detect(talk.id, f'{talk.id}/raw/raw.mp4')
+
+    db_session.expire_all()
+    reloaded = db_session.get(Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
+
+    # 5 hours rejected
+    reloaded.status = TalkStatus.DETECTING
+    db_session.commit()
+
+    with (
+        patch.object(Talk, 'start', new_callable=PropertyMock, return_value=None),
+        patch.object(Talk, 'end', new_callable=PropertyMock, return_value=None),
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch(
+            'app.tasks.detect',
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=18000.0,
+                has_video=True,
+                has_audio=True,
+                reason='duration outside scheduled window',
+            ),
+        ),
+        pytest.raises(ValueError, match='exceeds the maximum allowed limit of 4 hours'),
+    ):
+        job_detect(talk.id, f'{talk.id}/raw/raw.mp4')
+
+    db_session.expire_all()
+    reloaded = db_session.get(Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.BROKEN
+
+
+def test_job_detect_room_recording_bypasses_duration_ceiling(
+    db_session: Session, out_of_band_sessions: None
+) -> None:
+    """Room recordings bypass the single-talk dynamic ceiling and allow long recordings (e.g. 8 hours)."""
+    talk = _create_talk(
+        db_session,
+        start=datetime(2026, 8, 29, 9, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 29, 9, 30, tzinfo=UTC),
+        status=TalkStatus.DETECTING,
+    )
+    mock_storage = MagicMock()
+    mock_storage.get.return_value = Path('/tmp/fake.mp4')
+
+    with (
+        patch('app.tasks.get_storage_backend', return_value=mock_storage),
+        patch(
+            'app.tasks.detect',
+            return_value=DetectResult(
+                passed=False,
+                actual_duration_seconds=28800.0,
+                has_video=True,
+                has_audio=True,
+                reason='duration delta 27000.0s exceeds tolerance 300.0s',
+            ),
+        ),
+    ):
+        job_detect(
+            talk.id,
+            f'{talk.id}/raw/raw.mp4',
+            recording_start=datetime(2026, 8, 29, 8, 0, tzinfo=UTC),
+            is_room_recording=True,
+        )
+
+    db_session.expire_all()
+    reloaded = db_session.get(Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.PENDING_APPROVAL
+    assert reloaded.raw_duration_seconds == 28800.0
