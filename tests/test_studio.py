@@ -4127,7 +4127,7 @@ def test_admin_account_with_speaker_role_accesses_speaker_editor(
     sso_token = create_sso_token(
         scope_type='talk',
         scope_id=talk.id,
-        role='speaker',
+        role=AuthRole.SPEAKER,
         email='admin_speaker@example.com',
     )
     resp = client.get(
