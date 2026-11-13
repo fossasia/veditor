@@ -713,6 +713,34 @@ def test_submit_cut_bounds_needs_work_accepted(
         mock_enqueue.assert_called_once()
 
 
+def test_submit_cut_bounds_enqueue_failure_rolls_back_status(
+    db_session: Session, fake_storage: FakeStorageBackend
+) -> None:
+    """When enqueue fails, talk status must not be committed to cutting."""
+    event = _create_event(db_session)
+    talk = _create_pending_bounds_talk(db_session, event.id)
+    _create_api_client(db_session, event_ids=[event.id])
+    app.dependency_overrides[get_storage_backend] = lambda: fake_storage
+
+    fake_storage.put(f'{talk.id}/raw/video.mp4', b'raw video')
+
+    with patch(
+        'app.routes.talks.light_queue.enqueue',
+        side_effect=RuntimeError('Redis connection refused'),
+    ):
+        resp = client.post(
+            f'/talks/{talk.id}/cut',
+            json={'cut_start': '00:00:10', 'cut_end': '00:01:10'},
+            headers={'X-API-Key': API_KEY},
+        )
+        assert resp.status_code == 503
+
+    db_session.expire_all()
+    reloaded = db_session.get(models.Talk, talk.id)
+    assert reloaded is not None
+    assert reloaded.status == TalkStatus.PENDING_BOUNDS
+
+
 def test_submit_cut_bounds_multiple_segments_accepted(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
