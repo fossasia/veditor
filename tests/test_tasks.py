@@ -2,7 +2,7 @@ from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -1035,8 +1035,6 @@ def test_job_detect_unscheduled_talk_duration_ceiling(
     )
     mock_storage = MagicMock()
     mock_storage.get.return_value = Path('/tmp/fake.mp4')
-
-    from unittest.mock import PropertyMock
 
     # 3 hours allowed
     with (

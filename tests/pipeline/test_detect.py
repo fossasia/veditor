@@ -176,7 +176,7 @@ def test_detect_fails_empty_file(tmp_path: Path) -> None:
     assert 'file is empty' in result.reason
 
 
-def test_detect_passes_when_schedule_bounds_none(tmp_path: Path):
+def test_detect_passes_when_schedule_bounds_none(tmp_path: Path) -> None:
     clip = generate_clip(5, output_dir=tmp_path)
     result = detect(clip, scheduled_start=None, scheduled_end=None)
     assert result.passed
@@ -185,7 +185,7 @@ def test_detect_passes_when_schedule_bounds_none(tmp_path: Path):
     assert result.reason is None
 
 
-def test_compute_max_allowed_duration():
+def test_compute_max_allowed_duration() -> None:
     # 5-minute lightning talk (300s): hits 45-minute (2700s) floor
     assert compute_max_allowed_duration(300.0) == 2700.0
 
