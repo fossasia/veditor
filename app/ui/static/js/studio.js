@@ -1465,6 +1465,49 @@ window.handleVideoFileUpload = async function(e, talkId) {
   const file = e.target.files ? e.target.files[0] : (e.dataTransfer ? e.dataTransfer.files[0] : null);
   if (!file) return;
 
+  // Pre-flight check: validate video duration against talk schedule ceiling before starting multi-GB upload
+  const shell = document.querySelector('.studio-shell');
+  const talkStartStr = shell?.dataset?.talkStart;
+  const talkEndStr = shell?.dataset?.talkEnd;
+  if (talkStartStr && talkEndStr) {
+    const talkStart = new Date(talkStartStr);
+    const talkEnd = new Date(talkEndStr);
+    const scheduledDuration = (talkEnd - talkStart) / 1000;
+    if (scheduledDuration > 0) {
+      const maxAllowed = Math.max(2.0 * scheduledDuration, scheduledDuration + 1800, 2700);
+      try {
+        const measuredDuration = await new Promise((resolve) => {
+          const video = document.createElement('video');
+          video.preload = 'metadata';
+          const objUrl = URL.createObjectURL(file);
+          video.src = objUrl;
+          video.onloadedmetadata = () => {
+            URL.revokeObjectURL(objUrl);
+            resolve(video.duration);
+          };
+          video.onerror = () => {
+            URL.revokeObjectURL(objUrl);
+            resolve(null);
+          };
+        });
+        if (Number.isFinite(measuredDuration) && measuredDuration > maxAllowed) {
+          const fmt = (s) => {
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = Math.floor(s % 60);
+            return h > 0 ? `${h}h ${m}m ${sec}s` : `${m}m ${sec}s`;
+          };
+          await Modal.alert({
+            title: 'Video Exceeds Allowed Duration',
+            message: `The selected video duration (${fmt(measuredDuration)}) significantly exceeds the scheduled session length (${fmt(scheduledDuration)}, maximum allowed: ${fmt(maxAllowed)}).\n\nIf this is a continuous multi-talk room recording, please attach it via "Attach Room Recording" instead of uploading directly to a single talk.`,
+            variant: 'warning',
+          });
+          return;
+        }
+      } catch (_) {}
+    }
+  }
+
   const progressWrap = document.getElementById('upload-progress-wrap');
   const progressText = document.getElementById('upload-progress-text');
   const browseBtn = document.getElementById('btn-browse-file');
