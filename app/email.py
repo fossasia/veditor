@@ -18,6 +18,43 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
+def _send_msg(msg: EmailMessage) -> bool:
+    """Dispatch a prepared EmailMessage via configured SMTP. Returns True on success."""
+    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
+        logger.error(
+            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls'
+        )
+        return False
+    ssl_context = ssl.create_default_context()
+    try:
+        if settings.smtp_ssl:
+            with smtplib.SMTP_SSL(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+                context=ssl_context,
+            ) as server:
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+            ) as server:
+                if settings.smtp_tls:
+                    server.starttls(context=ssl_context)
+                if settings.smtp_user:
+                    server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+        logger.info('Email sent successfully to %s', msg['To'])
+        return True
+    except (smtplib.SMTPException, OSError) as exc:
+        logger.error('Failed to send email to %s: %s', msg['To'], exc)
+        return False
+
+
 def send_speaker_handoff_email(
     recipient: str,
     talk_title: str,
@@ -41,12 +78,6 @@ def send_speaker_handoff_email(
             studio_url,
         )
         return True
-
-    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
-        logger.error(
-            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
-        )
-        return False
 
     msg = EmailMessage()
     msg['Subject'] = f'Review your talk in VEditor - {talk_title}'
@@ -74,34 +105,7 @@ def send_speaker_handoff_email(
   </div>
 </body></html>"""
     msg.add_alternative(html_body, subtype='html')
-    ssl_context = ssl.create_default_context()
-    try:
-        if settings.smtp_ssl:
-            with smtplib.SMTP_SSL(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-                context=ssl_context,
-            ) as server:
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-            ) as server:
-                if settings.smtp_tls:
-                    server.starttls(context=ssl_context)
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        logger.info('Speaker handoff email sent successfully to %s', clean_email)
-        return True
-    except (smtplib.SMTPException, OSError) as exc:
-        logger.error('Failed to send speaker handoff email to %s: %s', clean_email, exc)
-        return False
+    return _send_msg(msg)
 
 
 def send_verification_email(
@@ -129,12 +133,6 @@ def send_verification_email(
             verify_url,
         )
         return True
-
-    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
-        logger.error(
-            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
-        )
-        return False
 
     msg = EmailMessage()
     msg['Subject'] = 'Verify your email address - VEditor'
@@ -171,35 +169,7 @@ def send_verification_email(
 </body>
 </html>"""
     msg.add_alternative(html_body, subtype='html')
-
-    ssl_context = ssl.create_default_context()
-    try:
-        if settings.smtp_ssl:
-            with smtplib.SMTP_SSL(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-                context=ssl_context,
-            ) as server:
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-            ) as server:
-                if settings.smtp_tls:
-                    server.starttls(context=ssl_context)
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        logger.info('Verification email sent successfully to %s', clean_email)
-        return True
-    except (smtplib.SMTPException, OSError) as exc:
-        logger.error('Failed to send verification email to %s: %s', clean_email, exc)
-        return False
+    return _send_msg(msg)
 
 
 def send_password_reset_email(
@@ -227,12 +197,6 @@ def send_password_reset_email(
             reset_url,
         )
         return True
-
-    if settings.smtp_user and not (settings.smtp_ssl or settings.smtp_tls):
-        logger.error(
-            'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls',
-        )
-        return False
 
     msg = EmailMessage()
     msg['Subject'] = 'Reset your password - VEditor'
@@ -272,32 +236,42 @@ def send_password_reset_email(
 </body>
 </html>"""
     msg.add_alternative(html_body, subtype='html')
+    return _send_msg(msg)
 
-    ssl_context = ssl.create_default_context()
-    try:
-        if settings.smtp_ssl:
-            with smtplib.SMTP_SSL(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-                context=ssl_context,
-            ) as server:
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(
-                settings.smtp_host,
-                settings.smtp_port,
-                timeout=settings.smtp_timeout_seconds,
-            ) as server:
-                if settings.smtp_tls:
-                    server.starttls(context=ssl_context)
-                if settings.smtp_user:
-                    server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-        logger.info('Password reset email sent successfully to %s', clean_email)
+
+def send_organizer_approved_email(recipient: str, name: str | None = None) -> bool:
+    """Notify a user that their organizer role request was approved."""
+    clean_email = recipient.strip().lower()
+    if not settings.smtp_host:
+        if settings.is_production:
+            logger.error(
+                'SMTP host is unconfigured in production; refusing organizer approval email to %s',
+                clean_email,
+            )
+            return False
+        logger.info('SMTP host is unconfigured. Organizer approved for %s', clean_email)
         return True
-    except (smtplib.SMTPException, OSError) as exc:
-        logger.error('Failed to send password reset email to %s: %s', clean_email, exc)
-        return False
+
+    greeting = f'Hello {html.escape(name)},' if name else 'Hello,'
+    msg = EmailMessage()
+    msg['Subject'] = 'Your organizer request has been approved — VEditor'
+    msg['From'] = settings.smtp_from
+    msg['To'] = clean_email
+    msg.set_content(
+        f'{"Hello " + name + "," if name else "Hello,"}\n\n'
+        'Your request for organizer access on VEditor has been approved.\n'
+        'You can now log in and start creating and managing events.\n'
+    )
+    msg.add_alternative(
+        f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:#1e293b;background-color:#f8fafc;padding:32px 16px;margin:0;">
+  <div style="max-width:540px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;padding:36px 32px;background:#ffffff;box-shadow:0 4px 12px rgba(0,0,0,0.04);">
+    <p>{greeting}</p>
+    <h2 style="margin-top:0;color:#0f172a;">Your organizer request was approved!</h2>
+    <p style="color:#475569;">You can now log in to <strong>VEditor</strong> and start creating and managing events.</p>
+  </div>
+</body></html>""",
+        subtype='html',
+    )
+    return _send_msg(msg)

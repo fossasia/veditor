@@ -36,6 +36,7 @@ from ..config import (
 )
 from ..consts import AuthRole, TalkStatus
 from ..db import get_db
+from ..email import send_organizer_approved_email
 from ..models import User
 from ..queue import redis_conn
 from ..schemas import SystemSettingRead, UserRead
@@ -346,6 +347,8 @@ def promote_user(
         target.organizer_request_note = None
     db.commit()
     db.refresh(target)
+    if payload.role == AuthRole.ORGANIZER:
+        send_organizer_approved_email(target.email)
     return target
 
 
