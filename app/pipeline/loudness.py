@@ -222,7 +222,7 @@ def normalize(
                 )
 
 
-def synthesize_silent_audio(input_path: Path | str, output_path: Path | str) -> None:
+def synthesize_silent_audio(input_path: Path, output_path: Path) -> None:
     """Add a silent stereo AAC audio track to a media file.
 
     Used as a fallback when the input has no audio stream. The audio track is
@@ -238,24 +238,21 @@ def synthesize_silent_audio(input_path: Path | str, output_path: Path | str) -> 
         ValueError: If input and output paths are identical, or the duration
             cannot be determined.
     """
-    in_path = Path(input_path)
-    out_path = Path(output_path)
+    if not input_path.is_file():
+        raise FileNotFoundError(f'Input file not found: {input_path}')
 
-    if not in_path.is_file():
-        raise FileNotFoundError(f'Input file not found: {in_path}')
-
-    if in_path.resolve() == out_path.resolve():
+    if input_path.resolve() == output_path.resolve():
         raise ValueError(
-            f'Input and output paths must be different to prevent file truncation: {in_path}'
+            f'Input and output paths must be different to prevent file truncation: {input_path}'
         )
 
     # storage-boundary-exempt: creating parent directory for pipeline output
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with av.open(str(in_path)) as in_container:
+    with av.open(str(input_path)) as in_container:
         video_streams = list(in_container.streams.video)
 
-        with av.open(str(out_path), mode='w') as out_container:
+        with av.open(str(output_path), mode='w') as out_container:
             src_video = video_streams[0] if video_streams else None
             out_video = (
                 out_container.add_stream_from_template(src_video)
@@ -304,7 +301,7 @@ def synthesize_silent_audio(input_path: Path | str, output_path: Path | str) -> 
                 duration_seconds = float(src_video.duration * src_video.time_base)
             if duration_seconds is None:
                 raise ValueError(
-                    f'Cannot determine duration for silent audio synthesis: {in_path}'
+                    f'Cannot determine duration for silent audio synthesis: {input_path}'
                 )
             target_samples = round(duration_seconds * sample_rate)
 
