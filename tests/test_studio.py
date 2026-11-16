@@ -1346,9 +1346,13 @@ def test_delete_talk_propagates_storage_error(
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_sidebar_declutter_and_buttons(client: TestClient) -> None:
+def test_sidebar_declutter_and_buttons(client: TestClient, db_session: Session) -> None:
     """Test sidebar declutter: only Events and Talks, no status filters, toggle button present."""
-    response = client.get('/studio')
+    api_key = f'key_{uuid.uuid4().hex}'
+    db_session.add(models.Client(hashed_key=hash_api_key(api_key), event_ids=[]))
+    db_session.commit()
+
+    response = client.get('/studio', headers={'X-API-Key': api_key})
     assert response.status_code == 200
 
     # Fixed topbar and toggle button are present
@@ -1409,6 +1413,13 @@ def test_studio_mode_body_class(client: TestClient, db_session: Session) -> None
     res_login = client.get('/login')
     assert res_login.status_code == 200
     assert 'is-studio-mode' not in res_login.text
+    assert 'id="app-sidebar"' not in res_login.text
+    assert 'id="sidebar-toggle-btn"' not in res_login.text
+
+    res_signup = client.get('/signup')
+    assert res_signup.status_code == 200
+    assert 'id="app-sidebar"' not in res_signup.text
+    assert 'id="sidebar-toggle-btn"' not in res_signup.text
 
 
 def test_studio_dashboard_with_slug_event_id_and_sso_token(
