@@ -25,8 +25,8 @@ def _send_msg(msg: EmailMessage) -> bool:
             'Plaintext SMTP authentication is rejected; enable smtp_ssl or smtp_tls'
         )
         return False
-    ssl_context = ssl.create_default_context()
     try:
+        ssl_context = ssl.create_default_context()
         if settings.smtp_ssl:
             with smtplib.SMTP_SSL(
                 settings.smtp_host,
@@ -50,7 +50,7 @@ def _send_msg(msg: EmailMessage) -> bool:
                 server.send_message(msg)
         logger.info('Email sent successfully to %s', msg['To'])
         return True
-    except (smtplib.SMTPException, OSError) as exc:
+    except (smtplib.SMTPException, OSError, ssl.SSLError) as exc:
         logger.error('Failed to send email to %s: %s', msg['To'], exc)
         return False
 
@@ -239,9 +239,21 @@ def send_password_reset_email(
     return _send_msg(msg)
 
 
-def send_organizer_approved_email(recipient: str, name: str | None = None) -> bool:
+def send_organizer_approved_email(
+    recipient: str,
+    dashboard_url: str | None = None,
+    name: str | None = None,
+) -> bool:
     """Notify a user that their organizer role request was approved."""
     clean_email = recipient.strip().lower()
+    if not dashboard_url:
+        base = (
+            settings.base_url.rstrip('/')
+            if settings.base_url
+            else 'http://localhost:8000'
+        )
+        dashboard_url = f'{base}/studio/events'
+
     if not settings.smtp_host:
         if settings.is_production:
             logger.error(
@@ -249,7 +261,11 @@ def send_organizer_approved_email(recipient: str, name: str | None = None) -> bo
                 clean_email,
             )
             return False
-        logger.info('SMTP host is unconfigured. Organizer approved for %s', clean_email)
+        logger.info(
+            'SMTP host is unconfigured. Organizer approved for %s: %s',
+            clean_email,
+            dashboard_url,
+        )
         return True
 
     greeting = f'Hello {html.escape(name)},' if name else 'Hello,'
@@ -260,8 +276,10 @@ def send_organizer_approved_email(recipient: str, name: str | None = None) -> bo
     msg.set_content(
         f'{"Hello " + name + "," if name else "Hello,"}\n\n'
         'Your request for organizer access on VEditor has been approved.\n'
-        'You can now log in and start creating and managing events.\n'
+        'You can now log in and start creating and managing events.\n\n'
+        f'Events Dashboard:\n{dashboard_url}\n'
     )
+    escaped_url = html.escape(dashboard_url, quote=True)
     msg.add_alternative(
         f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
@@ -270,6 +288,12 @@ def send_organizer_approved_email(recipient: str, name: str | None = None) -> bo
     <p>{greeting}</p>
     <h2 style="margin-top:0;color:#0f172a;">Your organizer request was approved!</h2>
     <p style="color:#475569;">You can now log in to <strong>VEditor</strong> and start creating and managing events.</p>
+    <div style="text-align: center; margin: 32px 0;">
+      <a href="{escaped_url}" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 8px; font-size: 15px; font-weight: 600; display: inline-block;">Go to Events Dashboard</a>
+    </div>
+    <p style="color: #64748b; font-size: 13px; text-align: center; margin: 0 0 28px 0;">
+      If the button above does not work, you can also <a href="{escaped_url}" style="color: #2563eb; text-decoration: underline; font-weight: 500;">click here to open the Events Dashboard</a>.
+    </p>
   </div>
 </body></html>""",
         subtype='html',

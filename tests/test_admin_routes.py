@@ -2,6 +2,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -265,6 +266,67 @@ def test_promote_user_success(
 
     db_session.refresh(target_user)
     assert target_user.role == AuthRole.USER
+
+
+def test_promote_user_to_organizer_sends_email_with_dashboard_url(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
+    admin_user = _create_test_user(
+        db_session, 'admin_organizer_email@admin-test.com', role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, 'target_organizer_email@admin-test.com', role=AuthRole.USER
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set('veditor_session', token)
+
+    with patch('app.routes.admin.send_organizer_approved_email') as mock_send_email:
+        mock_send_email.return_value = True
+
+        res = client.post(
+            f'/admin/users/{target_user.id}/promote', json={'role': 'organizer'}
+        )
+        assert res.status_code == 200
+        mock_send_email.assert_called_once()
+        assert mock_send_email.call_args[0][0] == target_user.email
+        assert '/studio/events' in mock_send_email.call_args[1]['dashboard_url']
+
+        # Repeated promotion to organizer must not re-send email
+        mock_send_email.reset_mock()
+        res_repeat = client.post(
+            f'/admin/users/{target_user.id}/promote', json={'role': 'organizer'}
+        )
+        assert res_repeat.status_code == 200
+        mock_send_email.assert_not_called()
+
+
+def test_promote_user_email_failure_warns_and_succeeds(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
+    admin_user = _create_test_user(
+        db_session, 'admin_warn@admin-test.com', role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, 'target_warn@admin-test.com', role=AuthRole.USER
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set('veditor_session', token)
+
+    with (
+        patch('app.routes.admin.send_organizer_approved_email', return_value=False),
+        patch('app.routes.admin.logger.warning') as mock_warn,
+    ):
+        res = client.post(
+            f'/admin/users/{target_user.id}/promote', json={'role': 'organizer'}
+        )
+        assert res.status_code == 200
+        mock_warn.assert_called_once()
+        assert str(target_user.id) in str(mock_warn.call_args)
+
+    db_session.refresh(target_user)
+    assert target_user.role == AuthRole.ORGANIZER
 
 
 def test_promote_guard_cannot_demote_last_admin(
