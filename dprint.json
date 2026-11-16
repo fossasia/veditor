@@ -1,0 +1,10 @@
+{
+  "typescript": {
+    "quoteStyle": "preferSingle"
+  },
+  "includes": ["app/ui/static/js/**/*.js"],
+  "excludes": [],
+  "plugins": [
+    "npm:@dprint/typescript@0.99.1"
+  ]
+}

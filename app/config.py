@@ -7,6 +7,8 @@ from typing import Any, Literal
 import sqlalchemy
 from pydantic import PositiveInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.exc import SQLAlchemyError
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,48 +20,48 @@ class PreviewPreset:
     video_bitrate: int
     audio_bitrate: int = 64_000
     crf: int | None = None
-    preset_speed: str = "veryfast"
+    preset_speed: str = 'veryfast'
 
 
 PREVIEW_PRESETS: dict[str, PreviewPreset] = {
-    "small_video": PreviewPreset(
-        name="small_video",
+    'small_video': PreviewPreset(
+        name='small_video',
         resolution=(320, 180),
         video_bitrate=150_000,
         audio_bitrate=32_000,
-        preset_speed="ultrafast",
+        preset_speed='ultrafast',
     ),
-    "big_video": PreviewPreset(
-        name="big_video",
+    'big_video': PreviewPreset(
+        name='big_video',
         resolution=(640, 360),
         video_bitrate=500_000,
         audio_bitrate=64_000,
-        preset_speed="ultrafast",
+        preset_speed='ultrafast',
     ),
 }
 
 
-ALLOWED_JWT_ALGORITHMS: tuple[str, ...] = ("HS256", "HS384", "HS512")
+ALLOWED_JWT_ALGORITHMS: tuple[str, ...] = ('HS256', 'HS384', 'HS512')
 
 
 class Settings(BaseSettings):
-    postgres_db: str = "veditor"
+    postgres_db: str = 'veditor'
     # The minimal config below for PostgreSQL is for "peer" mode,
     # which is enabled by default under Linux.
     # `None` means using the Postgres user with the same username as Linux user.
     postgres_user: str | None = None
-    postgres_password: str = ""
-    postgres_host: str = ""
+    postgres_password: str = ''
+    postgres_host: str = ''
     postgres_port: int | None = None
 
     # TODO: Detect being run in pytest-xdist
     # and allocate a DB number for each xdist worker.
     # Ref: https://pytest-xdist.readthedocs.io/en/latest/how-to.html#identifying-the-worker-process-during-a-test
     # It may require to change this config key, so we will do it later.
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = 'redis://localhost:6379/0'
 
-    data_dir: str = "data"
-    storage_backend: Literal["local"] = "local"
+    data_dir: str = 'data'
+    storage_backend: Literal['local'] = 'local'
     ingest_roots: list[Path] = []
     preview_presets: dict[str, PreviewPreset] = PREVIEW_PRESETS
     disk_guard_multiplier: float = 3.0
@@ -68,10 +70,10 @@ class Settings(BaseSettings):
     max_url_download_bytes: PositiveInt = 20 * 1024 * 1024 * 1024
     encoder_threads: PositiveInt | None = None
 
-    environment: str = "development"
-    base_url: str = ""
+    environment: str = 'development'
+    base_url: str = ''
     session_secret: str | None = None
-    jwt_algorithm: str = "HS256"
+    jwt_algorithm: str = 'HS256'
     session_token_expire_hours: int = 168
     access_token_expire_seconds: int = 3600
     sso_token_expire_seconds: int = 300
@@ -79,79 +81,79 @@ class Settings(BaseSettings):
     email_verification_expire_hours: int = 24
     password_reset_expire_hours: int = 1
 
-    smtp_host: str = ""
+    smtp_host: str = ''
     smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
+    smtp_user: str = ''
+    smtp_password: str = ''
     smtp_tls: bool = True
     smtp_ssl: bool = False
-    smtp_from: str = "VEditor <noreply@veditor.org>"
+    smtp_from: str = 'VEditor <noreply@veditor.org>'
     smtp_timeout_seconds: int = 15
 
-    @field_validator("jwt_algorithm", mode="after")
+    @field_validator('jwt_algorithm', mode='after')
     @classmethod
     def validate_jwt_algorithm(cls, value: str) -> str:
         if value not in ALLOWED_JWT_ALGORITHMS:
             raise ValueError(
-                f"jwt_algorithm must be one of {sorted(ALLOWED_JWT_ALGORITHMS)}"
+                f'jwt_algorithm must be one of {sorted(ALLOWED_JWT_ALGORITHMS)}'
             )
         return value
 
-    @field_validator("session_secret", mode="after")
+    @field_validator('session_secret', mode='after')
     @classmethod
     def validate_session_secret(cls, value: str | None) -> str | None:
-        if value is not None and len(value.encode("utf-8")) < 32:
-            raise ValueError("SESSION_SECRET must be at least 32 bytes long")
+        if value is not None and len(value.encode('utf-8')) < 32:
+            raise ValueError('SESSION_SECRET must be at least 32 bytes long')
         return value
 
-    @field_validator("base_url", mode="after")
+    @field_validator('base_url', mode='after')
     @classmethod
     def validate_base_url(cls, value: str) -> str:
-        value = value.strip().rstrip("/")
-        if value and not value.startswith(("http://", "https://")):
-            raise ValueError("base_url must be an absolute HTTP or HTTPS URL")
+        value = value.strip().rstrip('/')
+        if value and not value.startswith(('http://', 'https://')):
+            raise ValueError('base_url must be an absolute HTTP or HTTPS URL')
         return value
 
     @field_validator(
-        "session_token_expire_hours",
-        "access_token_expire_seconds",
-        "sso_token_expire_seconds",
-        "speaker_magic_link_expire_hours",
-        "email_verification_expire_hours",
-        "password_reset_expire_hours",
-        mode="after",
+        'session_token_expire_hours',
+        'access_token_expire_seconds',
+        'sso_token_expire_seconds',
+        'speaker_magic_link_expire_hours',
+        'email_verification_expire_hours',
+        'password_reset_expire_hours',
+        mode='after',
     )
     @classmethod
     def validate_token_expirations(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("token expiration values must be positive")
+            raise ValueError('token expiration values must be positive')
         return value
 
-    @field_validator("retention_sweep_interval_seconds", mode="after")
+    @field_validator('retention_sweep_interval_seconds', mode='after')
     @classmethod
     def validate_retention_sweep_interval_seconds(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("retention_sweep_interval_seconds must be positive")
+            raise ValueError('retention_sweep_interval_seconds must be positive')
         return value
 
-    @field_validator("disk_guard_multiplier", mode="after")
+    @field_validator('disk_guard_multiplier', mode='after')
     @classmethod
     def validate_disk_guard_multiplier(cls, value: float) -> float:
         if not math.isfinite(value) or value <= 0:
-            raise ValueError("disk_guard_multiplier must be a finite positive number")
+            raise ValueError('disk_guard_multiplier must be a finite positive number')
         return value
 
-    @field_validator("ingest_roots", mode="after")
+    @field_validator('ingest_roots', mode='after')
     @classmethod
     def validate_ingest_roots(cls, roots: list[Path]) -> list[Path]:
         for r in roots:
             if not r.is_absolute():
-                raise ValueError(f"ingest_roots entries must be absolute paths: {r}")
+                raise ValueError(f'ingest_roots entries must be absolute paths: {r}')
         return [r.resolve() for r in roots]
 
     @property
     def is_production(self) -> bool:
-        return self.environment.lower() in ("production", "prod")
+        return self.environment.lower() in ('production', 'prod')
 
     @property
     def testing_db_name(self) -> str:
@@ -164,12 +166,12 @@ class Settings(BaseSettings):
         when the developer types "ved", see some autocomplete then quickly select
         the one without "_test".
         """
-        return f"test_{self.postgres_db}"
+        return f'test_{self.postgres_db}'
 
     @property
     def database_url(self) -> sqlalchemy.URL:
         return sqlalchemy.URL.create(
-            "postgresql+psycopg",
+            'postgresql+psycopg',
             username=self.postgres_user,
             password=self.postgres_password,
             host=self.postgres_host,
@@ -182,9 +184,9 @@ class Settings(BaseSettings):
         """
         Create database URL for use in test.
         """
-        db_name = f"test_{self.postgres_db}"
+        db_name = f'test_{self.postgres_db}'
         return sqlalchemy.URL.create(
-            "postgresql+psycopg",
+            'postgresql+psycopg',
             username=self.postgres_user,
             password=self.postgres_password,
             host=self.postgres_host,
@@ -192,7 +194,7 @@ class Settings(BaseSettings):
             database=db_name,
         )
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
 
 @dataclass(frozen=True)
@@ -203,85 +205,85 @@ class SettingDefinition:
     default_value: Any
     value_type: type
     options: tuple[tuple[str, str], ...] = ()
-    input_type: str = "select"
+    input_type: str = 'select'
     min_value: float | None = None
     max_value: float | None = None
     step: float | None = None
 
 
 SYSTEM_SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
-    "speaker_magic_link_expire_hours": SettingDefinition(
-        key="speaker_magic_link_expire_hours",
-        title="Speaker Review Magic Link Expiry",
-        description="Default expiration window (in hours) for speaker review magic links sent via email.",
+    'speaker_magic_link_expire_hours': SettingDefinition(
+        key='speaker_magic_link_expire_hours',
+        title='Speaker Review Magic Link Expiry',
+        description='Default expiration window (in hours) for speaker review magic links sent via email.',
         default_value=168,
         value_type=int,
-        input_type="select",
+        input_type='select',
         options=(
-            ("24", "1 day (24 hours)"),
-            ("72", "3 days (72 hours)"),
-            ("168", "7 days (168 hours) - Default"),
-            ("336", "14 days (336 hours)"),
-            ("720", "30 days (720 hours)"),
+            ('24', '1 day (24 hours)'),
+            ('72', '3 days (72 hours)'),
+            ('168', '7 days (168 hours) - Default'),
+            ('336', '14 days (336 hours)'),
+            ('720', '30 days (720 hours)'),
         ),
     ),
-    "detect_duration_tolerance_seconds": SettingDefinition(
-        key="detect_duration_tolerance_seconds",
-        title="Schedule Time Margin",
-        description="Allowed difference between the scheduled talk time and the video recording length.",
+    'detect_duration_tolerance_seconds': SettingDefinition(
+        key='detect_duration_tolerance_seconds',
+        title='Schedule Time Margin',
+        description='Allowed difference between the scheduled talk time and the video recording length.',
         default_value=300.0,
         value_type=float,
-        input_type="range",
+        input_type='range',
         min_value=60.0,
         max_value=1800.0,
         step=30.0,
         options=(
-            ("60.0", "Strict (1 minute)"),
-            ("180.0", "Moderate (3 minutes)"),
-            ("300.0", "Standard (5 minutes) - Default"),
-            ("600.0", "Relaxed (10 minutes)"),
-            ("900.0", "Wide (15 minutes)"),
-            ("1800.0", "Maximum (30 minutes)"),
+            ('60.0', 'Strict (1 minute)'),
+            ('180.0', 'Moderate (3 minutes)'),
+            ('300.0', 'Standard (5 minutes) - Default'),
+            ('600.0', 'Relaxed (10 minutes)'),
+            ('900.0', 'Wide (15 minutes)'),
+            ('1800.0', 'Maximum (30 minutes)'),
         ),
     ),
-    "loudness_target_lufs": SettingDefinition(
-        key="loudness_target_lufs",
-        title="Speech Volume Level",
-        description="Standardized loudness level for speech so all recorded talks have even, balanced audio.",
+    'loudness_target_lufs': SettingDefinition(
+        key='loudness_target_lufs',
+        title='Speech Volume Level',
+        description='Standardized loudness level for speech so all recorded talks have even, balanced audio.',
         default_value=-16.0,
         value_type=float,
         min_value=-70.0,
         max_value=-5.0,
         options=(
-            ("-14.0", "Loud (-14 LUFS - for noisy venues or mobile)"),
-            ("-16.0", "Standard Web (-16 LUFS - Recommended / Default)"),
-            ("-18.0", "Cinematic (-18 LUFS)"),
-            ("-23.0", "European Broadcast (-23 LUFS - EBU R128)"),
-            ("-24.0", "US Broadcast (-24 LUFS - ATSC A/85)"),
+            ('-14.0', 'Loud (-14 LUFS - for noisy venues or mobile)'),
+            ('-16.0', 'Standard Web (-16 LUFS - Recommended / Default)'),
+            ('-18.0', 'Cinematic (-18 LUFS)'),
+            ('-23.0', 'European Broadcast (-23 LUFS - EBU R128)'),
+            ('-24.0', 'US Broadcast (-24 LUFS - ATSC A/85)'),
         ),
     ),
-    "default_preview_preset": SettingDefinition(
-        key="default_preview_preset",
-        title="Draft Video Preview Quality",
-        description="Quality and resolution profile used for generating quick draft previews in the editor.",
-        default_value="small_video",
+    'default_preview_preset': SettingDefinition(
+        key='default_preview_preset',
+        title='Draft Video Preview Quality',
+        description='Quality and resolution profile used for generating quick draft previews in the editor.',
+        default_value='small_video',
         value_type=str,
         options=(
-            ("small_video", "Standard Draft (320x180, Fastest) - Default"),
-            ("big_video", "High Detail Draft (640x360, Sharper)"),
+            ('small_video', 'Standard Draft (320x180, Fastest) - Default'),
+            ('big_video', 'High Detail Draft (640x360, Sharper)'),
         ),
     ),
-    "default_transcode_preset": SettingDefinition(
-        key="default_transcode_preset",
-        title="Final Video Export Quality",
-        description="Resolution and quality profile used when rendering the finished published video.",
-        default_value="1080p_default",
+    'default_transcode_preset': SettingDefinition(
+        key='default_transcode_preset',
+        title='Final Video Export Quality',
+        description='Resolution and quality profile used when rendering the finished published video.',
+        default_value='1080p_default',
         value_type=str,
         options=(
-            ("480p", "SD (480p)"),
-            ("720p", "HD (720p, Standard)"),
-            ("1080p_default", "Full HD (1080p, High Quality) - Default"),
-            ("1440p", "QHD (1440p)"),
+            ('480p', 'SD (480p)'),
+            ('720p', 'HD (720p, Standard)'),
+            ('1080p_default', 'Full HD (1080p, High Quality) - Default'),
+            ('1440p', 'QHD (1440p)'),
             # ("4k_master", "Ultra HD (4K Master)"),
         ),
     ),
@@ -289,19 +291,19 @@ SYSTEM_SETTING_DEFINITIONS: dict[str, SettingDefinition] = {
 
 EXCLUDED_SETTING_KEYS: frozenset[str] = frozenset(
     {
-        "postgres_user",
-        "postgres_password",
-        "postgres_host",
-        "postgres_port",
-        "postgres_db",
-        "database_url",
-        "redis_url",
-        "session_secret",
-        "jwt_algorithm",
-        "data_dir",
-        "ingest_roots",
-        "storage_backend",
-        "smtp_password",
+        'postgres_user',
+        'postgres_password',
+        'postgres_host',
+        'postgres_port',
+        'postgres_db',
+        'database_url',
+        'redis_url',
+        'session_secret',
+        'jwt_algorithm',
+        'data_dir',
+        'ingest_roots',
+        'storage_backend',
+        'smtp_password',
     }
 )
 
@@ -332,22 +334,22 @@ def get_setting(key: str, default: Any = None, db: Any = None) -> Any:
         return getattr(settings, normalized_key, default)
 
     try:
-        from app.models import SystemSetting
+        from .models import SystemSetting
 
         if db is not None:
             row = db.get(SystemSetting, normalized_key)
         else:
-            from app.db import SessionLocal
+            from .db import new_session
 
-            with SessionLocal() as session:
+            with new_session() as session:
                 row = session.get(SystemSetting, normalized_key)
         if (
             row is not None
             and isinstance(row, SystemSetting)
-            and isinstance(getattr(row, "value", None), str)
+            and isinstance(row.value, str)
         ):
             return _cast_setting_value(normalized_key, row.value, default)
-    except Exception as exc:  # noqa: BLE001
+    except (SQLAlchemyError, ValueError, TypeError) as exc:
         logger.warning(
             "Database lookup failed for setting '%s': %s", normalized_key, exc
         )

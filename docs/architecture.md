@@ -33,7 +33,7 @@ If you have a legitimate non-media file I/O operation (e.g. reading a static app
 ```python
 # Inline exemption:
 with open(
-    "config.json", "r"
+    'config.json', 'r'
 ) as f:  # storage-boundary-exempt: reading static configuration file
     config = json.load(f)
 

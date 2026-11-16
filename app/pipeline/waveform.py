@@ -18,7 +18,7 @@ def extract_waveform_peaks(input_path: Path, num_peaks: int = 1000) -> list[floa
         with av.open(str(input_path)) as container:
             if not container.streams.audio:
                 return []
-            resampler = av.AudioResampler(format="s16", layout="mono", rate=1000)
+            resampler = av.AudioResampler(format='s16', layout='mono', rate=1000)
             for frame in container.decode(container.streams.audio[0]):
                 for resampled in resampler.resample(frame):
                     arr = resampled.to_ndarray()

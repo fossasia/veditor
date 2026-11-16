@@ -39,9 +39,9 @@ document.addEventListener('DOMContentLoaded', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
           },
-          body: JSON.stringify({ role: newRole })
+          body: JSON.stringify({ role: newRole }),
         });
 
         if (!resp.ok) {
@@ -92,11 +92,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (action === 'deactivate') {
         const confirmed = await Modal.confirm({
           title: 'Deactivate Account',
-          message:
-            'Are you sure you want to deactivate this account? ' +
-            'The user will be immediately logged out and prevented from signing in.',
+          message: 'Are you sure you want to deactivate this account? '
+            + 'The user will be immediately logged out and prevented from signing in.',
           confirmText: 'Deactivate',
-          variant: 'danger'
+          variant: 'danger',
         });
         if (!confirmed) return;
       }
@@ -108,8 +107,8 @@ document.addEventListener('DOMContentLoaded', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          }
+            'Accept': 'application/json',
+          },
         });
 
         if (!resp.ok) {
@@ -240,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (urlParams.get('pending') === 'true' || urlParams.get('pending') === '1') {
         setTimeout(() => {
           const remainingPending = document.querySelectorAll(
-            '.badge-pending-request, .btn-approve-organizer'
+            '.badge-pending-request, .btn-approve-organizer',
           );
           const currentPage = parseInt(urlParams.get('page') || '1', 10);
           if (remainingPending.length === 0 && currentPage > 1) {

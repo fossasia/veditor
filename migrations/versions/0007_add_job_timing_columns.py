@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0007"
-down_revision: str | Sequence[str] | None = "0006"
+revision: str = '0007'
+down_revision: str | Sequence[str] | None = '0006'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -21,14 +21,14 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     """Upgrade schema."""
     op.add_column(
-        "jobs", sa.Column("started_at", sa.DateTime(timezone=True), nullable=True)
+        'jobs', sa.Column('started_at', sa.DateTime(timezone=True), nullable=True)
     )
     op.add_column(
-        "jobs", sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True)
+        'jobs', sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True)
     )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column("jobs", "updated_at")
-    op.drop_column("jobs", "started_at")
+    op.drop_column('jobs', 'updated_at')
+    op.drop_column('jobs', 'started_at')

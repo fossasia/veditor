@@ -1,62 +1,59 @@
 [project]
-name = "veditor"
-version = "0.1.0"
-description = "VEditor"
-readme = "README.md"
-requires-python = ">=3.14"
+name = 'veditor'
+version = '0.1.0'
+description = 'VEditor'
+readme = 'README.md'
+requires-python = '>=3.14'
 dependencies = [
-    "fastapi[standard]>=0.143.3",
-    "uvicorn>=0.52.3",
-    "rq>=2.11.0",
-    "redis>=8.1.0",
-    "sqlalchemy>=2.1.5",
-    "alembic>=1.19.1",
-    "psycopg[binary]>=3.3.4",
-    "pydantic-settings>=2.15.0",
-    "av>=18.1.0",
-    "pillow>=12.3.0",
-    "numpy>=2.5.2",
-    "jinja2>=3.1.5",
-    "python-multipart>=0.0.20",
-    "argon2-cffi>=23.1.0",
-    "pyjwt>=2.10.1",
-    # FastAPI suggests to use `httpx2` instead of the deprecated `httpx`.
-    "httpx2>=2.13.1",
+  'alembic>=1.19.1',
+  'argon2-cffi>=23.1.0',
+  'av>=19.0.2',
+  'fastapi[standard]>=0.162.0',
+  # FastAPI suggests to use `httpx2` instead of the deprecated `httpx`.
+  'httpx2>=2.13.1',
+  'jinja2>=3.1.5',
+  'numpy>=2.5.2',
+  'pillow>=13.0.0',
+  'psycopg[binary]>=3.3.4',
+  'pydantic-settings>=2.15.0',
+  'pyjwt>=2.15.0',
+  'python-multipart>=0.0.32',
+  'redis>=8.1.0',
+  'rq>=2.11.0',
+  'sqlalchemy>=2.1.5',
+  'uvicorn>=0.52.3',
 ]
 
 [project.scripts]
-veditor = "app.cli:main"
+veditor = 'app.cli:main'
 
 [dependency-groups]
 dev = [
-    "ruff>=0.16.3",
-    "pre-commit>=4.6.2",
-    "ptpython>=3.0.32",
-    "mypy>=2.4.0",
+  'mypy>=2.4.1',
+  'pre-commit>=4.7.0',
+  'ptpython>=3.0.32',
+  'ruff>=0.17.3',
+  'types-pyyaml>=6.0.12.20260906',
 ]
 test = [
-    "httpx>=0.28.1",
-    "pytest>=9.1.1",
-    "pytest-env>=1.8.0",
-    "pytest-sugar>=1.1.1",
-    "pytest-xdist>=3.8.0",
+  'pytest>=9.1.1',
+  'pytest-env>=1.8.0',
+  'pytest-sugar>=1.1.1',
+  'pytest-xdist>=3.8.0',
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ['hatchling']
+build-backend = 'hatchling.build'
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
-
-[tool.ruff]
-line-length = 88
-target-version = "py314"
-exclude = ["migrations"]
+packages = ['app']
 
 [tool.mypy]
-python_version = "3.14"
-plugins = ["pydantic.mypy"]
+python_version = '3.14'
+# Avoid "Source file found twice" error when our "scripts" folder does not have "__init__.py"
+explicit_package_bases = true
+plugins = ['pydantic.mypy']
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -66,12 +63,26 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 
 [tool.pytest]
-minversion = "9.0"
-testpaths = [
-    "tests",
-]
 # Destructive tests are opt-in: skip them unless explicitly selected.
-addopts = ["-m", "not destructive"]
+addopts = ['-m', 'not destructive']
 markers = [
-    "destructive: drops/recreates database objects shared by other tests; run separately (-m destructive)",
+  'destructive: drops/recreates database objects shared by other tests; run separately (-m destructive)',
 ]
+minversion = '9.0'
+testpaths = [
+  'tests',
+]
+
+[tool.ruff]
+line-length = 88
+target-version = 'py314'
+exclude = ['migrations']
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.ruff.format]
+quote-style = 'single'
+
+[tool.tombi.format.rules]
+string-quote-style = 'single'

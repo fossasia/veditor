@@ -1,44 +1,45 @@
 import ast
 from pathlib import Path
 
-EXEMPTION_MARKER = "# storage-boundary-exempt:"
+
+EXEMPTION_MARKER = '# storage-boundary-exempt:'
 
 # Function names from modules or builtins that perform direct file I/O
-FORBIDDEN_BUILTINS = {"open"}
+FORBIDDEN_BUILTINS = {'open'}
 FORBIDDEN_SHUTIL_FUNCS = {
-    "copy",
-    "copy2",
-    "copyfile",
-    "copyfileobj",
-    "copymode",
-    "copystat",
-    "copytree",
-    "move",
-    "rmtree",
+    'copy',
+    'copy2',
+    'copyfile',
+    'copyfileobj',
+    'copymode',
+    'copystat',
+    'copytree',
+    'move',
+    'rmtree',
 }
 FORBIDDEN_OS_FUNCS = {
-    "open",
-    "remove",
-    "unlink",
-    "rename",
-    "replace",
-    "rmdir",
-    "removedirs",
-    "mkdir",
-    "makedirs",
+    'open',
+    'remove',
+    'unlink',
+    'rename',
+    'replace',
+    'rmdir',
+    'removedirs',
+    'mkdir',
+    'makedirs',
 }
 # Method names commonly associated with pathlib.Path file operations.
 # Note: As an AST heuristic, these are flagged on any attribute call matching these names.
 # If custom non-Path classes implement methods with these names (e.g. read_text, write_bytes),
 # annotate those call sites with `# storage-boundary-exempt: <reason>`.
 FORBIDDEN_PATH_METHODS = {
-    "read_bytes",
-    "read_text",
-    "write_bytes",
-    "write_text",
-    "unlink",
-    "rmdir",
-    "mkdir",
+    'read_bytes',
+    'read_text',
+    'write_bytes',
+    'write_text',
+    'unlink',
+    'rmdir',
+    'mkdir',
 }
 
 
@@ -57,7 +58,7 @@ def is_exempt(lines: list[str], lineno: int) -> bool:
 
 
 def find_storage_violations(
-    source_code: str, file_path: str = "<unknown>"
+    source_code: str, file_path: str = '<unknown>'
 ) -> list[str]:
     """
     Parse Python source code AST and find any unexempted direct filesystem/IO calls.
@@ -66,7 +67,7 @@ def find_storage_violations(
     try:
         tree = ast.parse(source_code)
     except SyntaxError as e:
-        return [f"{file_path}:{e.lineno}: SyntaxError while parsing: {e}"]
+        return [f'{file_path}:{e.lineno}: SyntaxError while parsing: {e}']
 
     lines = source_code.splitlines()
     violations: list[str] = []
@@ -76,38 +77,38 @@ def find_storage_violations(
     # Track imported names from forbidden modules (e.g., `from shutil import copyfile`)
     imported_forbidden: dict[str, str] = {}
     # Track Path imports and classes (e.g., `from pathlib import Path` or `import pathlib as pl`)
-    path_classes: set[str] = {"Path"}
-    pathlib_modules: set[str] = {"pathlib"}
+    path_classes: set[str] = {'Path'}
+    pathlib_modules: set[str] = {'pathlib'}
     path_variables: set[str] = set()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "pathlib":
+                if alias.name == 'pathlib':
                     pathlib_modules.add(alias.asname or alias.name)
-                elif alias.name in ("shutil", "os", "io", "_io"):
+                elif alias.name in ('shutil', 'os', 'io', '_io'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom):
-            if node.module == "pathlib":
+            if node.module == 'pathlib':
                 for alias in node.names:
-                    if alias.name == "Path":
+                    if alias.name == 'Path':
                         path_classes.add(alias.asname or alias.name)
-            elif node.module == "shutil":
+            elif node.module == 'shutil':
                 for alias in node.names:
                     if alias.name in FORBIDDEN_SHUTIL_FUNCS:
                         imported_forbidden[alias.asname or alias.name] = (
-                            f"shutil.{alias.name}"
+                            f'shutil.{alias.name}'
                         )
-            elif node.module == "os":
+            elif node.module == 'os':
                 for alias in node.names:
                     if alias.name in FORBIDDEN_OS_FUNCS:
                         imported_forbidden[alias.asname or alias.name] = (
-                            f"os.{alias.name}"
+                            f'os.{alias.name}'
                         )
-            elif node.module in ("io", "_io"):
+            elif node.module in ('io', '_io'):
                 for alias in node.names:
-                    if alias.name == "open":
-                        imported_forbidden[alias.asname or alias.name] = "io.open"
+                    if alias.name == 'open':
+                        imported_forbidden[alias.asname or alias.name] = 'io.open'
 
     def is_path_receiver(expr: ast.AST) -> bool:
         """Check if an AST expression evaluates to a Path object."""
@@ -120,7 +121,7 @@ def find_storage_violations(
                 isinstance(expr.func, ast.Attribute)
                 and isinstance(expr.func.value, ast.Name)
                 and expr.func.value.id in pathlib_modules
-                and expr.func.attr == "Path"
+                and expr.func.attr == 'Path'
             ):
                 return True
             if isinstance(expr.func, ast.Attribute) and is_path_receiver(
@@ -152,7 +153,7 @@ def find_storage_violations(
         if not isinstance(node, ast.Call):
             continue
 
-        lineno = getattr(node, "lineno", 0)
+        lineno = getattr(node, 'lineno', 0)
         if is_exempt(lines, lineno):
             continue
 
@@ -178,17 +179,17 @@ def find_storage_violations(
             if isinstance(func.value, ast.Name):
                 module_name = module_aliases.get(func.value.id, func.value.id)
                 alias_info = (
-                    f" (via '{func.value.id}')" if func.value.id != module_name else ""
+                    f" (via '{func.value.id}')" if func.value.id != module_name else ''
                 )
-                if module_name == "shutil" and attr_name in FORBIDDEN_SHUTIL_FUNCS:
+                if module_name == 'shutil' and attr_name in FORBIDDEN_SHUTIL_FUNCS:
                     violations.append(
                         f"{file_path}:{lineno}: Direct call to 'shutil.{attr_name}()'{alias_info}. All file I/O must go through storage.py"
                     )
-                elif module_name == "os" and attr_name in FORBIDDEN_OS_FUNCS:
+                elif module_name == 'os' and attr_name in FORBIDDEN_OS_FUNCS:
                     violations.append(
                         f"{file_path}:{lineno}: Direct call to 'os.{attr_name}()'{alias_info}. All file I/O must go through storage.py"
                     )
-                elif module_name in ("io", "_io") and attr_name == "open":
+                elif module_name in ('io', '_io') and attr_name == 'open':
                     violations.append(
                         f"{file_path}:{lineno}: Direct call to 'io.open()'{alias_info}. All file I/O must go through storage.py"
                     )
@@ -198,7 +199,7 @@ def find_storage_violations(
                 violations.append(
                     f"{file_path}:{lineno}: Direct call to Path method '.{attr_name}()'. All file I/O must go through storage.py"
                 )
-            elif attr_name == "open" and is_path_receiver(func.value):
+            elif attr_name == 'open' and is_path_receiver(func.value):
                 violations.append(
                     f"{file_path}:{lineno}: Direct call to Path method '.open()'. All file I/O must go through storage.py"
                 )
@@ -206,38 +207,38 @@ def find_storage_violations(
     return violations
 
 
-def test_app_storage_boundary():
+def test_app_storage_boundary() -> None:
     """
     Ensure that no file inside app/ (excluding app/storage.py) performs
     direct filesystem I/O operations without an explicit exemption marker.
     """
     project_root = Path(__file__).parent.parent
-    app_dir = project_root / "app"
-    storage_file = (app_dir / "storage.py").resolve()
+    app_dir = project_root / 'app'
+    storage_file = (app_dir / 'storage.py').resolve()
 
-    assert app_dir.is_dir(), "app directory is missing"
+    assert app_dir.is_dir(), 'app directory is missing'
 
     all_violations: list[str] = []
 
-    for py_file in sorted(app_dir.rglob("*.py")):
+    for py_file in sorted(app_dir.rglob('*.py')):
         if py_file.resolve() == storage_file:
             continue
 
-        source_code = py_file.read_text(encoding="utf-8")
+        source_code = py_file.read_text(encoding='utf-8')
         rel_path = str(py_file.relative_to(project_root))
         violations = find_storage_violations(source_code, file_path=rel_path)
         all_violations.extend(violations)
 
     if all_violations:
-        violation_report = "\n".join(all_violations)
+        violation_report = '\n'.join(all_violations)
         raise AssertionError(
-            f"Storage boundary violations found outside app/storage.py:\n{violation_report}\n\n"
-            f"If this is a legitimate non-media file operation (e.g. config loading), add a comment:\n"
-            f"# storage-boundary-exempt: <reason>"
+            f'Storage boundary violations found outside app/storage.py:\n{violation_report}\n\n'
+            f'If this is a legitimate non-media file operation (e.g. config loading), add a comment:\n'
+            f'# storage-boundary-exempt: <reason>'
         )
 
 
-def test_storage_boundary_detects_violations():
+def test_storage_boundary_detects_violations() -> None:
     """
     Regression test: Verify that deliberate direct file I/O operations are detected,
     including aliased imports, os.open, and Path.open calls.
@@ -274,31 +275,31 @@ def do_forbidden():
     p2 = pl.Path("aliased.mp4")
     p2.open("rb")
 """
-    violations = find_storage_violations(violating_snippets, file_path="fixture.py")
+    violations = find_storage_violations(violating_snippets, file_path='fixture.py')
 
     assert any("builtin 'open()'" in v for v in violations), (
-        "Should catch builtin open()"
+        'Should catch builtin open()'
     )
-    assert any("shutil.copy()" in v for v in violations), "Should catch shutil.copy()"
-    assert any("shutil.rmtree()" in v for v in violations), (
-        "Should catch aliased sh.rmtree()"
+    assert any('shutil.copy()' in v for v in violations), 'Should catch shutil.copy()'
+    assert any('shutil.rmtree()' in v for v in violations), (
+        'Should catch aliased sh.rmtree()'
     )
-    assert any("os.remove()" in v for v in violations), (
-        "Should catch aliased my_os.remove()"
+    assert any('os.remove()' in v for v in violations), (
+        'Should catch aliased my_os.remove()'
     )
-    assert any("os.open()" in v for v in violations), "Should catch os.open()"
-    assert any("io.open()" in v for v in violations), (
-        "Should catch aliased custom_io.open()"
+    assert any('os.open()' in v for v in violations), 'Should catch os.open()'
+    assert any('io.open()' in v for v in violations), (
+        'Should catch aliased custom_io.open()'
     )
-    assert any(".write_bytes()" in v for v in violations), (
-        "Should catch Path.write_bytes()"
+    assert any('.write_bytes()' in v for v in violations), (
+        'Should catch Path.write_bytes()'
     )
-    assert any(".read_text()" in v for v in violations), "Should catch Path.read_text()"
-    assert any(".unlink()" in v for v in violations), "Should catch Path.unlink()"
-    assert any(".open()" in v for v in violations), "Should catch Path.open()"
+    assert any('.read_text()' in v for v in violations), 'Should catch Path.read_text()'
+    assert any('.unlink()' in v for v in violations), 'Should catch Path.unlink()'
+    assert any('.open()' in v for v in violations), 'Should catch Path.open()'
 
 
-def test_storage_boundary_allows_non_path_open_calls():
+def test_storage_boundary_allows_non_path_open_calls() -> None:
     """
     Verify that legitimate .open() calls on non-Path objects (e.g. webbrowser, PIL, zipfile)
     are not falsely flagged as violations.
@@ -314,13 +315,13 @@ def open_unrelated_things():
     with zipfile.ZipFile("archive.zip") as zf:
         zf.open("file.txt")
 """
-    violations = find_storage_violations(valid_snippets, file_path="valid_fixture.py")
+    violations = find_storage_violations(valid_snippets, file_path='valid_fixture.py')
     assert violations == [], (
-        f"Expected 0 violations for non-path .open() calls, got: {violations}"
+        f'Expected 0 violations for non-path .open() calls, got: {violations}'
     )
 
 
-def test_storage_boundary_respects_exemptions():
+def test_storage_boundary_respects_exemptions() -> None:
     """
     Verify that operations annotated with `# storage-boundary-exempt: <reason>` are permitted.
     """
@@ -340,8 +341,8 @@ def load_config():
     Path("/tmp/log.txt").read_text()  # storage-boundary-exempt: reading log text
 """
     violations = find_storage_violations(
-        exempted_snippet, file_path="exempted_fixture.py"
+        exempted_snippet, file_path='exempted_fixture.py'
     )
     assert violations == [], (
-        f"Expected 0 violations for exempted code, got: {violations}"
+        f'Expected 0 violations for exempted code, got: {violations}'
     )

@@ -6,21 +6,21 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import any_
+from redis.exceptions import RedisError
+from sqlalchemy import any_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app import models
-from app.queue import light_queue
-from app.tasks import job_deliver_webhook
+from . import models
+from .queue import light_queue
+from .tasks import job_deliver_webhook
+
 
 logger = logging.getLogger(__name__)
 
 
 def _matches_event(client: models.Client, event_id: int) -> bool:
-    return bool(getattr(client, "is_platform", False)) or (
-        isinstance(getattr(client, "event_ids", None), list)
-        and event_id in client.event_ids
-    )
+    return client.is_platform or event_id in client.event_ids
 
 
 def get_candidate_clients(
@@ -30,36 +30,32 @@ def get_candidate_clients(
 ) -> list[models.Client]:
     """Find all clients configured to receive webhooks for event_id or matching client_id."""
     bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
-        candidates = (
-            db.query(models.Client)
-            .filter(
+    if bind is not None and bind.dialect.name == 'postgresql':
+        candidates = db.scalars(
+            select(models.Client).where(
                 (
                     (any_(models.Client.event_ids) == event_id)
                     | (models.Client.is_platform.is_(True))
                 ),
                 models.Client.webhook_url.is_not(None),
             )
-            .all()
-        )
+        ).all()
     else:
         # Dialect fallback (e.g. SQLite tests without postgres ARRAY support)
-        candidates = (
-            db.query(models.Client).filter(models.Client.webhook_url.is_not(None)).all()
-        )
+        candidates = db.scalars(
+            select(models.Client).where(models.Client.webhook_url.is_not(None))
+        ).all()
 
     candidates = [c for c in candidates if _matches_event(c, event_id)]
 
     seen_ids = {c.id for c in candidates}
 
     if client_id and client_id not in seen_ids:
-        client_record = (
-            db.query(models.Client)
-            .filter(
+        client_record = db.scalar(
+            select(models.Client).where(
                 models.Client.id == client_id,
                 models.Client.webhook_url.is_not(None),
             )
-            .first()
         )
         if client_record and _matches_event(client_record, event_id):
             candidates.append(client_record)
@@ -84,11 +80,11 @@ def dispatch_talk_webhook(
             return
 
         payload_data: dict[str, Any] = {
-            "event": event_name,
-            "talk_id": talk.id,
-            "event_id": talk.event_id,
-            "external_id": talk.external_id,
-            "timestamp": datetime.now(UTC).isoformat(),
+            'event': event_name,
+            'talk_id': talk.id,
+            'event_id': talk.event_id,
+            'external_id': talk.external_id,
+            'timestamp': datetime.now(UTC).isoformat(),
         }
         if extra_payload:
             payload_data.update(extra_payload)
@@ -102,17 +98,17 @@ def dispatch_talk_webhook(
                     payload_data,
                     job_timeout=30,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except RedisError as exc:
                 logger.warning(
-                    "Failed to enqueue %s webhook for talk %d to client %s: %s",
+                    'Failed to enqueue %s webhook for talk %d to client %s: %s',
                     event_name,
                     talk.id,
-                    getattr(client, "id", None),
+                    client.id,
                     exc,
                 )
-    except Exception as exc:  # noqa: BLE001
+    except SQLAlchemyError as exc:
         logger.warning(
-            "Failed to dispatch %s webhook for talk %d: %s",
+            'Failed to dispatch %s webhook for talk %d: %s',
             event_name,
             talk.id,
             exc,

@@ -1,10 +1,31 @@
+import logging
 from dataclasses import dataclass
-from typing import Any, Final, Literal
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final, Literal
+
+from redis.exceptions import RedisError
+from rq import Retry
+from rq.exceptions import InvalidJobOperation, NoSuchJobError
+from rq.job import Job
+from rq.repeat import Repeat
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload
+
+from .config import settings
+from .consts import TalkStatus
+from .db import new_session
+from .queue import light_queue
+from .storage import get_storage_backend
+
 
 DEFAULT_FINAL_RETENTION_DAYS: Final[int] = 14
-INDEFINITE: Final = "indefinite"
+INDEFINITE: Final = 'indefinite'
 
-RetentionDays = int | Literal["indefinite"]
+RetentionDays = int | Literal['indefinite']
+
+if TYPE_CHECKING:
+    from .models import Event, Talk
 
 
 def validate_final_retention_days(value: Any) -> RetentionDays:
@@ -23,16 +44,16 @@ def validate_retention_overrides(overrides: Any) -> dict[str, Any] | None:
     if overrides is None:
         return None
     if not isinstance(overrides, dict):
-        raise TypeError("retention_overrides must be a dictionary or None")
+        raise TypeError('retention_overrides must be a dictionary or None')
 
     for key in overrides:
         if not isinstance(key, str):
             raise TypeError(
-                f"All keys in retention_overrides must be strings, got {type(key).__name__}"
+                f'All keys in retention_overrides must be strings, got {type(key).__name__}'
             )
 
-    if "final_retention_days" in overrides:
-        validate_final_retention_days(overrides["final_retention_days"])
+    if 'final_retention_days' in overrides:
+        validate_final_retention_days(overrides['final_retention_days'])
 
     return overrides
 
@@ -56,29 +77,36 @@ class RetentionPolicy:
         return self.final_retention_days == INDEFINITE
 
 
-def get_retention(event: Any | None = None) -> RetentionPolicy:
+def get_retention(
+    event: Event | Talk | dict[str, Any] | None = None,
+) -> RetentionPolicy:
     """Resolve retention policy for an event or talk, falling back to defaults."""
     if event is None:
         return RetentionPolicy()
 
+    # Imported here, not at module top, to avoid a circular import:
+    # app.models -> app.retention (for validate_retention_overrides).
+    from .models import Talk
+
     if isinstance(event, dict):
-        overrides = event.get("retention_overrides", event)
+        overrides = event.get('retention_overrides', event)
+    elif isinstance(event, Talk):
+        linked_event = event.event
+        overrides = linked_event.retention_overrides if linked_event else None
     else:
-        overrides = getattr(event, "retention_overrides", None)
-        if overrides is None and hasattr(event, "event"):
-            overrides = getattr(event.event, "retention_overrides", None)
+        overrides = event.retention_overrides
 
     if not overrides or not isinstance(overrides, dict):
         return RetentionPolicy()
 
-    final_days = overrides.get("final_retention_days")
+    final_days = overrides.get('final_retention_days')
     if final_days is None:
         return RetentionPolicy()
 
     return RetentionPolicy(final_retention_days=final_days)
 
 
-RETENTION_SWEEP_JOB_ID: Final[str] = "retention_sweep"
+RETENTION_SWEEP_JOB_ID: Final[str] = 'retention_sweep'
 
 
 def run_retention_sweep(
@@ -94,20 +122,13 @@ def run_retention_sweep(
     - Excludes 'rejected' talks and intermediate/raw storage.
     - Returns list of talk IDs whose final/ storage was deleted.
     """
-    import logging
-    from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy.exc import SQLAlchemyError
-    from sqlalchemy.orm import joinedload
-
-    from app.db import SessionLocal
-    from app.models import Talk
-    from app.storage import get_storage_backend
+    from .models import Talk
 
     logger = logging.getLogger(__name__)
 
     if db is None:
-        with SessionLocal() as session:
+        with new_session() as session:
             return run_retention_sweep(db=session, storage=storage)
 
     if storage is None:
@@ -116,13 +137,12 @@ def run_retention_sweep(
     now = datetime.now(UTC)
     swept_talk_ids: list[int] = []
 
-    talks = (
-        db.query(Talk)
+    talks = db.scalars(
+        select(Talk)
         .options(joinedload(Talk.event))
-        .filter(Talk.status == "done", Talk.final_cleaned_at.is_(None))
+        .where(Talk.status == TalkStatus.DONE, Talk.final_cleaned_at.is_(None))
         .order_by(Talk.id.asc())
-        .all()
-    )
+    ).all()
 
     for talk in talks:
         if talk.updated_at is None:
@@ -134,20 +154,21 @@ def run_retention_sweep(
             else talk.updated_at.replace(tzinfo=UTC)
         )
 
-        event_obj = getattr(talk, "event", None)
+        event_obj = talk.event
         policy = get_retention(event_obj if event_obj is not None else talk)
-        if policy.is_final_indefinite:
+        retention_days = policy.final_retention_days
+        if isinstance(retention_days, str):
             continue
 
-        retention_delta = timedelta(days=policy.final_retention_days)
+        retention_delta = timedelta(days=retention_days)
         if now < updated_at + retention_delta:
             continue
 
-        final_prefix = f"{talk.id}/final"
+        final_prefix = f'{talk.id}/final'
         talk_id = talk.id
         existing_keys = None
         try:
-            if hasattr(storage, "list_keys"):
+            if hasattr(storage, 'list_keys'):
                 existing_keys = storage.list_keys(final_prefix)
                 if not existing_keys:
                     talk.final_cleaned_at = now
@@ -167,15 +188,15 @@ def run_retention_sweep(
                 db.rollback()
                 raise
             logger.info(
-                "Deleted final storage for talk %s (%s keys removed)",
+                'Deleted final storage for talk %s (%s keys removed)',
                 talk_id,
-                len(existing_keys) if existing_keys is not None else "unknown",
+                len(existing_keys) if existing_keys is not None else 'unknown',
             )
         except SQLAlchemyError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             logger.warning(
-                "Failed to process final storage for talk %s: %s",
+                'Failed to process final storage for talk %s: %s',
                 talk_id,
                 exc,
             )
@@ -190,13 +211,12 @@ def run_retention_sweep(
 
 def enqueue_retention_sweep(queue: Any | None = None) -> Any:
     """Enqueue run_retention_sweep to the RQ light queue."""
-    from app.queue import light_queue
 
     target_queue = queue or light_queue
     return target_queue.enqueue(
         run_retention_sweep,
         job_timeout=600,
-        description="Retention sweep for expired final artifacts",
+        description='Retention sweep for expired final artifacts',
     )
 
 
@@ -207,15 +227,6 @@ def register_periodic_retention_sweep(
     retry: Any | None = None,
 ) -> Any:
     """Register a scheduled periodic retention sweep job on the RQ queue."""
-    import logging
-    from datetime import timedelta
-
-    from rq import Retry
-    from rq.job import Job
-    from rq.repeat import Repeat
-
-    from app.config import settings
-    from app.queue import light_queue
 
     logger = logging.getLogger(__name__)
     target_queue = queue or light_queue
@@ -225,33 +236,33 @@ def register_periodic_retention_sweep(
         else settings.retention_sweep_interval_seconds
     )
     if interval <= 0:
-        raise ValueError("retention sweep interval must be positive")
+        raise ValueError('retention sweep interval must be positive')
 
     try:
         existing_job = Job.fetch(
             RETENTION_SWEEP_JOB_ID, connection=target_queue.connection
         )
         if existing_job and existing_job.get_status() in (
-            "queued",
-            "scheduled",
-            "started",
+            'queued',
+            'scheduled',
+            'started',
         ):
             logger.info(
-                "Periodic retention sweep job already registered (%s)",
+                'Periodic retention sweep job already registered (%s)',
                 existing_job.id,
             )
             return existing_job
         elif existing_job:
             # Delete stale/finished/failed job so enqueue_in does not raise JobAlreadyExistsError
             existing_job.delete()
-    except Exception as exc:  # noqa: BLE001
+    except (InvalidJobOperation, NoSuchJobError, RedisError) as exc:
         logger.debug(
-            "Periodic retention sweep job not found or connection failed: %s", exc
+            'Periodic retention sweep job not found or connection failed: %s', exc
         )
 
     repeat_times = times if times is not None else 1_000_000
     if repeat_times <= 0:
-        raise ValueError("times must be positive")
+        raise ValueError('times must be positive')
 
     repeat = Repeat(
         times=repeat_times,
@@ -266,16 +277,16 @@ def register_periodic_retention_sweep(
             job_timeout=600,
             repeat=repeat,
             retry=retry_policy,
-            description="Periodic retention sweep for expired final artifacts",
+            description='Periodic retention sweep for expired final artifacts',
         )
     except Exception as exc:
-        if "already exists" in str(exc).lower():
+        if 'already exists' in str(exc).lower():
             try:
                 return Job.fetch(
                     RETENTION_SWEEP_JOB_ID, connection=target_queue.connection
                 )
-            except Exception as fetch_exc:  # noqa: BLE001
+            except (NoSuchJobError, RedisError) as fetch_exc:
                 logger.debug(
-                    "Failed to fetch existing job after collision: %s", fetch_exc
+                    'Failed to fetch existing job after collision: %s', fetch_exc
                 )
         raise
