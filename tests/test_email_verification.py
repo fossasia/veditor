@@ -194,6 +194,31 @@ def test_send_organizer_approved_email_smtp_success() -> None:
         assert 'http://localhost:8000/studio/events' in html_content
 
 
+def test_send_organizer_approved_email_production_refuses_localhost() -> None:
+    with (
+        patch.object(settings, 'environment', 'production'),
+        patch.object(settings, 'smtp_host', 'smtp.example.com'),
+    ):
+        # 1. Explicit localhost URL in production is refused
+        assert (
+            send_organizer_approved_email(
+                recipient='test@example.com',
+                dashboard_url='http://localhost:8000/studio/events',
+            )
+            is False
+        )
+
+        # 2. Unconfigured base_url without dashboard_url in production is refused
+        with patch.object(settings, 'base_url', ''):
+            assert (
+                send_organizer_approved_email(
+                    recipient='test@example.com',
+                    dashboard_url=None,
+                )
+                is False
+            )
+
+
 # ── Worker Job Tests ────────────────────────────────────────────────────────
 
 

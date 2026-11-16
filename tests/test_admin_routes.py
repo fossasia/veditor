@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import models
 from app.auth import CurrentUser, get_current_user, hash_api_key
+from app.config import settings
 from app.consts import AuthRole, TalkStatus
 from app.db import Base, SessionLocal, engine, get_db
 from app.main import app
@@ -324,6 +325,40 @@ def test_promote_user_email_failure_warns_and_succeeds(
         assert res.status_code == 200
         mock_warn.assert_called_once()
         assert str(target_user.id) in str(mock_warn.call_args)
+
+    db_session.refresh(target_user)
+    assert target_user.role == AuthRole.ORGANIZER
+
+
+def test_promote_user_production_without_base_url_warns_and_succeeds(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
+    admin_user = _create_test_user(
+        db_session, 'admin_prod_warn@admin-test.com', role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, 'target_prod_warn@admin-test.com', role=AuthRole.USER
+    )
+
+    # In production without configured base_url and localhost request, promote still succeeds but warns
+    with (
+        patch.object(settings, 'environment', 'production'),
+        patch.object(settings, 'session_secret', 'a' * 32),
+        patch.object(settings, 'base_url', ''),
+        patch('app.routes.admin.send_organizer_approved_email') as mock_email,
+        patch('app.routes.admin.logger.warning') as mock_warn,
+    ):
+        token = create_session_token(admin_user.id, admin_user.role)
+        client.cookies.set('veditor_session', token)
+        res = client.post(
+            f'/admin/users/{target_user.id}/promote',
+            json={'role': 'organizer'},
+            headers={'host': 'localhost:8000'},
+        )
+        assert res.status_code == 200
+        mock_email.assert_not_called()
+        mock_warn.assert_called_once()
+        assert 'public base_url is unconfigured' in str(mock_warn.call_args)
 
     db_session.refresh(target_user)
     assert target_user.role == AuthRole.ORGANIZER

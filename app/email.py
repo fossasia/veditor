@@ -247,12 +247,25 @@ def send_organizer_approved_email(
     """Notify a user that their organizer role request was approved."""
     clean_email = recipient.strip().lower()
     if not dashboard_url:
-        base = (
-            settings.base_url.rstrip('/')
-            if settings.base_url
-            else 'http://localhost:8000'
+        if settings.base_url:
+            dashboard_url = f'{settings.base_url.rstrip("/")}/studio/events'
+        elif not settings.is_production and not settings.smtp_host:
+            dashboard_url = 'http://localhost:8000/studio/events'
+        else:
+            logger.error(
+                'Refusing to send organizer approval email to %s: public base_url is unconfigured',
+                clean_email,
+            )
+            return False
+
+    if settings.is_production and any(
+        h in dashboard_url for h in ('://localhost', '://127.0.0.1', '://[::1]')
+    ):
+        logger.error(
+            'Refusing to send organizer approval email to %s: dashboard URL cannot be localhost in production',
+            clean_email,
         )
-        dashboard_url = f'{base}/studio/events'
+        return False
 
     if not settings.smtp_host:
         if settings.is_production:
