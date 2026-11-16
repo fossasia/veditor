@@ -353,7 +353,6 @@ def test_promote_user_production_without_base_url_warns_and_succeeds(
         res = client.post(
             f'/admin/users/{target_user.id}/promote',
             json={'role': 'organizer'},
-            headers={'host': 'localhost:8000'},
         )
         assert res.status_code == 200
         mock_email.assert_not_called()

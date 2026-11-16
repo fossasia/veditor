@@ -320,7 +320,6 @@ def promote_user(
     id: int,
     payload: schemas.UserPromoteRequest,
     db: Annotated[Session, Depends(get_db)],
-    request: Request,
 ) -> User:
     target = db.scalar(
         select(models.User).where(models.User.id == id).with_for_update()
@@ -358,10 +357,6 @@ def promote_user(
         and target.is_active
     ):
         base = settings.base_url.rstrip('/') if settings.base_url else None
-        if not base and request:
-            req_host = request.url.hostname or ''
-            if req_host not in ('localhost', '127.0.0.1', '::1'):
-                base = str(request.base_url).rstrip('/')
         if not base and not settings.is_production and not settings.smtp_host:
             base = 'http://localhost:8000'
 
