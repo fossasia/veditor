@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, settings
+from app.consts import TalkStatus
 from app.db import Base
 from app.models import Event, Talk
 from app.retention import (
@@ -28,11 +29,12 @@ from app.schemas import EventCreate, EventRead
 
 from .conftest import FakeStorageBackend
 
+
 engine = create_engine(settings.testing_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope='module')
 def setup_database() -> Iterator[None]:
     Base.metadata.create_all(bind=engine)
     yield
@@ -48,12 +50,12 @@ def test_default_retention_policy() -> None:
     assert get_retention(None) == RetentionPolicy()
 
     # Event without overrides attribute or with None
-    event_no_overrides = Event(name="Default Event")
+    event_no_overrides = Event(name='Default Event')
     assert get_retention(event_no_overrides).final_retention_days == 14
     assert get_retention(event_no_overrides).is_final_indefinite is False
 
     # Event with empty overrides dict
-    event_empty_overrides = Event(name="Empty Overrides", retention_overrides={})
+    event_empty_overrides = Event(name='Empty Overrides', retention_overrides={})
     assert get_retention(event_empty_overrides).final_retention_days == 14
 
     # Plain dict without overrides
@@ -62,8 +64,8 @@ def test_default_retention_policy() -> None:
 
 def test_event_override_final_retention_days() -> None:
     event_custom = Event(
-        name="Custom Event",
-        retention_overrides={"final_retention_days": 30},
+        name='Custom Event',
+        retention_overrides={'final_retention_days': 30},
     )
     policy = get_retention(event_custom)
     assert policy.final_retention_days == 30
@@ -71,20 +73,20 @@ def test_event_override_final_retention_days() -> None:
 
     # Zero days is valid non-negative integer
     event_zero = Event(
-        name="Immediate Expire",
-        retention_overrides={"final_retention_days": 0},
+        name='Immediate Expire',
+        retention_overrides={'final_retention_days': 0},
     )
     assert get_retention(event_zero).final_retention_days == 0
     assert get_retention(event_zero).is_final_indefinite is False
 
     # Plain dict override
-    assert get_retention({"final_retention_days": 7}).final_retention_days == 7
+    assert get_retention({'final_retention_days': 7}).final_retention_days == 7
 
 
 def test_override_isolation_between_events() -> None:
-    event_a = Event(name="A", retention_overrides={"final_retention_days": 7})
-    event_b = Event(name="B")
-    event_c = Event(name="C", retention_overrides={"final_retention_days": 60})
+    event_a = Event(name='A', retention_overrides={'final_retention_days': 7})
+    event_b = Event(name='B')
+    event_c = Event(name='C', retention_overrides={'final_retention_days': 60})
 
     assert get_retention(event_a).final_retention_days == 7
     assert get_retention(event_b).final_retention_days == 14
@@ -93,11 +95,11 @@ def test_override_isolation_between_events() -> None:
 
 def test_indefinite_sentinel() -> None:
     event_indefinite = Event(
-        name="Archive Event",
-        retention_overrides={"final_retention_days": INDEFINITE},
+        name='Archive Event',
+        retention_overrides={'final_retention_days': INDEFINITE},
     )
     policy = get_retention(event_indefinite)
-    assert policy.final_retention_days == "indefinite"
+    assert policy.final_retention_days == 'indefinite'
     assert policy.is_final_indefinite is True
 
     # RetentionPolicy direct instantiation with indefinite sentinel
@@ -106,8 +108,8 @@ def test_indefinite_sentinel() -> None:
 
 
 @pytest.mark.parametrize(
-    "invalid_days",
-    [-1, -100, 14.5, True, False, "forever", "never", None, [], {}],
+    'invalid_days',
+    [-1, -100, 14.5, True, False, 'forever', 'never', None, [], {}],
 )
 def test_validation_rejects_invalid_final_retention_days(invalid_days: object) -> None:
     with pytest.raises(ValueError):
@@ -117,88 +119,88 @@ def test_validation_rejects_invalid_final_retention_days(invalid_days: object) -
         RetentionPolicy(final_retention_days=invalid_days)  # type: ignore[arg-type]
 
     with pytest.raises(ValueError):
-        validate_retention_overrides({"final_retention_days": invalid_days})
+        validate_retention_overrides({'final_retention_days': invalid_days})
 
 
 def test_validation_rejects_non_dict_overrides() -> None:
-    with pytest.raises(TypeError, match="must be a dictionary or None"):
-        validate_retention_overrides("not a dict")
+    with pytest.raises(TypeError, match='must be a dictionary or None'):
+        validate_retention_overrides('not a dict')
 
-    with pytest.raises(TypeError, match="must be a dictionary or None"):
+    with pytest.raises(TypeError, match='must be a dictionary or None'):
         validate_retention_overrides([14])
 
 
 def test_model_write_time_validation() -> None:
     # Constructor write-time rejection
     with pytest.raises(ValueError):
-        Event(name="Bad", retention_overrides={"final_retention_days": -1})
+        Event(name='Bad', retention_overrides={'final_retention_days': -1})
 
     with pytest.raises(ValueError):
-        Event(name="Bad", retention_overrides={"final_retention_days": "permanent"})
+        Event(name='Bad', retention_overrides={'final_retention_days': 'permanent'})
 
     # Attribute mutation write-time rejection
-    event = Event(name="Mutable Event")
+    event = Event(name='Mutable Event')
     with pytest.raises(ValueError):
-        event.retention_overrides = {"final_retention_days": -5}
+        event.retention_overrides = {'final_retention_days': -5}
 
     with pytest.raises((ValueError, TypeError)):
-        event.retention_overrides = "invalid_string"  # type: ignore[assignment]
+        event.retention_overrides = 'invalid_string'  # type: ignore[assignment]
 
 
 def test_pydantic_schema_validation() -> None:
     # Valid schemas
     create_schema = EventCreate(
-        name="Conference", retention_overrides={"final_retention_days": 21}
+        name='Conference', retention_overrides={'final_retention_days': 21}
     )
-    assert create_schema.retention_overrides == {"final_retention_days": 21}
+    assert create_schema.retention_overrides == {'final_retention_days': 21}
 
     read_schema = EventRead(
         id=1,
-        name="Conference",
-        retention_overrides={"final_retention_days": "indefinite"},
+        name='Conference',
+        retention_overrides={'final_retention_days': 'indefinite'},
     )
-    assert read_schema.retention_overrides == {"final_retention_days": "indefinite"}
+    assert read_schema.retention_overrides == {'final_retention_days': 'indefinite'}
 
     # Invalid schemas
     with pytest.raises(ValidationError):
         EventCreate(
-            name="Bad Event",
-            retention_overrides={"final_retention_days": -1},
+            name='Bad Event',
+            retention_overrides={'final_retention_days': -1},
         )
 
     with pytest.raises(ValidationError):
         EventCreate(
-            name="Bad Event",
-            retention_overrides={"final_retention_days": "unlimited"},
+            name='Bad Event',
+            retention_overrides={'final_retention_days': 'unlimited'},
         )
 
     with pytest.raises(ValidationError):
         EventCreate(
-            name="Bad Event",
-            retention_overrides=cast("dict[str, Any]", "string"),
+            name='Bad Event',
+            retention_overrides=cast('dict[str, Any]', 'string'),
         )
 
     with pytest.raises(ValidationError):
         bad_key_overrides = cast(dict[str, Any], {123: 14})
         EventCreate(
-            name="Bad Event",
+            name='Bad Event',
             retention_overrides=bad_key_overrides,
         )
 
 
 def test_model_in_place_mutation_validation() -> None:
     event = Event(
-        name="Mutable Event",
-        retention_overrides={"final_retention_days": 14},
+        name='Mutable Event',
+        retention_overrides={'final_retention_days': 14},
     )
     assert event.retention_overrides is not None
 
     # In-place __setitem__ invalid value raises ValueError
     with pytest.raises(ValueError):
-        event.retention_overrides["final_retention_days"] = -1
+        event.retention_overrides['final_retention_days'] = -1
 
     with pytest.raises(ValueError):
-        event.retention_overrides["final_retention_days"] = "invalid_string"
+        event.retention_overrides['final_retention_days'] = 'invalid_string'
 
     # In-place __setitem__ non-string key raises TypeError
     with pytest.raises(TypeError):
@@ -206,7 +208,7 @@ def test_model_in_place_mutation_validation() -> None:
 
     # In-place update rejection
     with pytest.raises(ValueError):
-        event.retention_overrides.update({"final_retention_days": -10})
+        event.retention_overrides.update({'final_retention_days': -10})
 
     with pytest.raises(TypeError):
         bad_update: dict[str, Any] = {456: 30}  # type: ignore[dict-item]
@@ -217,62 +219,62 @@ def test_model_in_place_mutation_validation() -> None:
         event.retention_overrides.setdefault(789, 14)  # type: ignore[call-overload]
 
     # In-place setdefault rejection when setting new invalid final_retention_days
-    event_empty = Event(name="Empty Overrides Event", retention_overrides={})
+    event_empty = Event(name='Empty Overrides Event', retention_overrides={})
     assert event_empty.retention_overrides is not None
     with pytest.raises(ValueError):
-        event_empty.retention_overrides.setdefault("final_retention_days", -5)
+        event_empty.retention_overrides.setdefault('final_retention_days', -5)
 
     # Valid in-place mutations succeed
-    event.retention_overrides["final_retention_days"] = 30
-    assert event.retention_overrides["final_retention_days"] == 30
+    event.retention_overrides['final_retention_days'] = 30
+    assert event.retention_overrides['final_retention_days'] == 30
 
-    event.retention_overrides.update({"extra": "allowed"})
-    assert event.retention_overrides["extra"] == "allowed"
+    event.retention_overrides.update({'extra': 'allowed'})
+    assert event.retention_overrides['extra'] == 'allowed'
 
-    val = event.retention_overrides.setdefault("new_key", "default_val")
-    assert val == "default_val"
-    assert event.retention_overrides["new_key"] == "default_val"
+    val = event.retention_overrides.setdefault('new_key', 'default_val')
+    assert val == 'default_val'
+    assert event.retention_overrides['new_key'] == 'default_val'
 
     # In-place |= operator rejection
     with pytest.raises(ValueError):
-        event.retention_overrides |= {"final_retention_days": -20}
+        event.retention_overrides |= {'final_retention_days': -20}
 
     with pytest.raises(TypeError):
         bad_merge: dict[str, Any] = {999: 10}  # type: ignore[dict-item]
         event.retention_overrides |= bad_merge
 
     # In-place |= operator valid mutation succeeds
-    event.retention_overrides |= {"final_retention_days": 45, "or_key": "val"}
-    assert event.retention_overrides["final_retention_days"] == 45
-    assert event.retention_overrides["or_key"] == "val"
+    event.retention_overrides |= {'final_retention_days': 45, 'or_key': 'val'}
+    assert event.retention_overrides['final_retention_days'] == 45
+    assert event.retention_overrides['or_key'] == 'val'
 
 
 def test_sparse_overrides_forward_compatibility() -> None:
     sparse_data = {
-        "final_retention_days": 30,
-        "future_knob": "something_else",
+        'final_retention_days': 30,
+        'future_knob': 'something_else',
     }
-    event = Event(name="Future Proof", retention_overrides=sparse_data)
+    event = Event(name='Future Proof', retention_overrides=sparse_data)
     assert event.retention_overrides == sparse_data
     policy = get_retention(event)
     assert policy.final_retention_days == 30
 
     # Without final_retention_days but other future keys
-    event_no_final = Event(name="Other Keys", retention_overrides={"other_key": 123})
+    event_no_final = Event(name='Other Keys', retention_overrides={'other_key': 123})
     assert get_retention(event_no_final).final_retention_days == 14
 
 
 def test_validation_rejects_non_string_keys() -> None:
-    with pytest.raises(TypeError, match="must be strings"):
+    with pytest.raises(TypeError, match='must be strings'):
         validate_retention_overrides({123: 14})
 
     with pytest.raises(TypeError):
-        Event(name="Invalid Keys", retention_overrides={123: 14})
+        Event(name='Invalid Keys', retention_overrides={123: 14})
 
 
 def test_get_retention_from_talk_model() -> None:
-    event = Event(name="Conf", retention_overrides={"final_retention_days": 30})
-    talk = Talk(title="Keynote", event=event)
+    event = Event(name='Conf', retention_overrides={'final_retention_days': 30})
+    talk = Talk(title='Keynote', event=event)
     policy = get_retention(talk)
     assert policy.final_retention_days == 30
     assert policy.is_final_indefinite is False
@@ -281,26 +283,26 @@ def test_get_retention_from_talk_model() -> None:
 def test_sweep_removes_final_past_default_window(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
-    event = Event(name="Default Retention Event")
+    event = Event(name='Default Retention Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=15)
     talk = Talk(
         event_id=event.id,
-        title="Old Done Talk",
+        title='Old Done Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    raw_key = f"{talk.id}/raw/raw.mp4"
-    fake_storage.put(final_key, b"final media data")
-    fake_storage.put(raw_key, b"raw media data")
+    final_key = f'{talk.id}/final/final.mp4'
+    raw_key = f'{talk.id}/raw/raw.mp4'
+    fake_storage.put(final_key, b'final media data')
+    fake_storage.put(raw_key, b'raw media data')
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
 
@@ -312,24 +314,24 @@ def test_sweep_removes_final_past_default_window(
 def test_sweep_preserves_final_within_window(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
-    event = Event(name="Default Retention Event")
+    event = Event(name='Default Retention Event')
     db_session.add(event)
     db_session.flush()
 
     recent_date = datetime.now(UTC) - timedelta(days=10)
     talk = Talk(
         event_id=event.id,
-        title="Recent Done Talk",
+        title='Recent Done Talk',
         start=recent_date,
         end=recent_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=recent_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    fake_storage.put(final_key, b"final media data")
+    final_key = f'{talk.id}/final/final.mp4'
+    fake_storage.put(final_key, b'final media data')
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
 
@@ -342,8 +344,8 @@ def test_sweep_honors_custom_override(
 ) -> None:
     # Event with 30-day retention
     event_30 = Event(
-        name="30 Day Event",
-        retention_overrides={"final_retention_days": 30},
+        name='30 Day Event',
+        retention_overrides={'final_retention_days': 30},
     )
     db_session.add(event_30)
     db_session.flush()
@@ -351,18 +353,18 @@ def test_sweep_honors_custom_override(
     date_20_days_ago = datetime.now(UTC) - timedelta(days=20)
     talk_30 = Talk(
         event_id=event_30.id,
-        title="Talk 20 Days Old",
+        title='Talk 20 Days Old',
         start=date_20_days_ago,
         end=date_20_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_20_days_ago,
     )
     db_session.add(talk_30)
 
     # Event with 7-day retention
     event_7 = Event(
-        name="7 Day Event",
-        retention_overrides={"final_retention_days": 7},
+        name='7 Day Event',
+        retention_overrides={'final_retention_days': 7},
     )
     db_session.add(event_7)
     db_session.flush()
@@ -370,19 +372,19 @@ def test_sweep_honors_custom_override(
     date_8_days_ago = datetime.now(UTC) - timedelta(days=8)
     talk_7 = Talk(
         event_id=event_7.id,
-        title="Talk 8 Days Old",
+        title='Talk 8 Days Old',
         start=date_8_days_ago,
         end=date_8_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_8_days_ago,
     )
     db_session.add(talk_7)
     db_session.flush()
 
-    key_30 = f"{talk_30.id}/final/final.mp4"
-    key_7 = f"{talk_7.id}/final/final.mp4"
-    fake_storage.put(key_30, b"data 30")
-    fake_storage.put(key_7, b"data 7")
+    key_30 = f'{talk_30.id}/final/final.mp4'
+    key_7 = f'{talk_7.id}/final/final.mp4'
+    fake_storage.put(key_30, b'data 30')
+    fake_storage.put(key_7, b'data 7')
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
 
@@ -396,8 +398,8 @@ def test_sweep_honors_indefinite_override(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
     event = Event(
-        name="Indefinite Event",
-        retention_overrides={"final_retention_days": INDEFINITE},
+        name='Indefinite Event',
+        retention_overrides={'final_retention_days': INDEFINITE},
     )
     db_session.add(event)
     db_session.flush()
@@ -405,17 +407,17 @@ def test_sweep_honors_indefinite_override(
     ancient_date = datetime.now(UTC) - timedelta(days=365)
     talk = Talk(
         event_id=event.id,
-        title="Ancient Talk",
+        title='Ancient Talk',
         start=ancient_date,
         end=ancient_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=ancient_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    fake_storage.put(final_key, b"preserved indefinitely")
+    final_key = f'{talk.id}/final/final.mp4'
+    fake_storage.put(final_key, b'preserved indefinitely')
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
 
@@ -426,24 +428,24 @@ def test_sweep_honors_indefinite_override(
 def test_sweep_never_touches_rejected_talks(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
-    event = Event(name="Default Event")
+    event = Event(name='Default Event')
     db_session.add(event)
     db_session.flush()
 
     old_date = datetime.now(UTC) - timedelta(days=30)
     talk = Talk(
         event_id=event.id,
-        title="Rejected Talk",
+        title='Rejected Talk',
         start=old_date,
         end=old_date,
-        status="rejected",
+        status=TalkStatus.REJECTED,
         updated_at=old_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    fake_storage.put(final_key, b"should never be touched")
+    final_key = f'{talk.id}/final/final.mp4'
+    fake_storage.put(final_key, b'should never be touched')
 
     swept = run_retention_sweep(db=db_session, storage=fake_storage)
 
@@ -454,24 +456,24 @@ def test_sweep_never_touches_rejected_talks(
 def test_sweep_idempotency_on_already_cleaned_paths(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
-    event = Event(name="Idempotent Event")
+    event = Event(name='Idempotent Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=20)
     talk = Talk(
         event_id=event.id,
-        title="Idempotency Talk",
+        title='Idempotency Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    fake_storage.put(final_key, b"data")
+    final_key = f'{talk.id}/final/final.mp4'
+    fake_storage.put(final_key, b'data')
 
     # Run 1: sweeps talk
     swept1 = run_retention_sweep(db=db_session, storage=fake_storage)
@@ -487,8 +489,8 @@ def test_sweep_dynamic_override_takes_effect_without_redeploy(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
     event = Event(
-        name="Dynamic Override Event",
-        retention_overrides={"final_retention_days": 30},
+        name='Dynamic Override Event',
+        retention_overrides={'final_retention_days': 30},
     )
     db_session.add(event)
     db_session.flush()
@@ -496,17 +498,17 @@ def test_sweep_dynamic_override_takes_effect_without_redeploy(
     date_15_days_ago = datetime.now(UTC) - timedelta(days=15)
     talk = Talk(
         event_id=event.id,
-        title="Dynamic Talk",
+        title='Dynamic Talk',
         start=date_15_days_ago,
         end=date_15_days_ago,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=date_15_days_ago,
     )
     db_session.add(talk)
     db_session.flush()
 
-    final_key = f"{talk.id}/final/final.mp4"
-    fake_storage.put(final_key, b"data")
+    final_key = f'{talk.id}/final/final.mp4'
+    fake_storage.put(final_key, b'data')
 
     # Run 1: 15 days elapsed < 30 days override -> untouched
     swept1 = run_retention_sweep(db=db_session, storage=fake_storage)
@@ -514,7 +516,7 @@ def test_sweep_dynamic_override_takes_effect_without_redeploy(
     assert fake_storage.exists(final_key)
 
     # Organizer dynamically changes override to 10 days
-    event.retention_overrides = {"final_retention_days": 10}
+    event.retention_overrides = {'final_retention_days': 10}
     db_session.flush()
 
     # Run 2: 15 days elapsed >= 10 days override -> swept immediately without restart
@@ -529,7 +531,7 @@ def test_enqueue_retention_sweep() -> None:
     mock_queue.enqueue.assert_called_once_with(
         run_retention_sweep,
         job_timeout=600,
-        description="Retention sweep for expired final artifacts",
+        description='Retention sweep for expired final artifacts',
     )
 
 
@@ -543,53 +545,53 @@ def test_register_periodic_retention_sweep() -> None:
     args, kwargs = mock_queue.enqueue_in.call_args
     assert args[0] == timedelta(seconds=1800)
     assert args[1] == run_retention_sweep
-    assert kwargs["job_id"] == "retention_sweep"
-    assert kwargs["job_timeout"] == 600
-    assert kwargs["repeat"].intervals == [1800]
+    assert kwargs['job_id'] == 'retention_sweep'
+    assert kwargs['job_timeout'] == 600
+    assert kwargs['repeat'].intervals == [1800]
 
 
 def test_register_periodic_retention_sweep_rejects_non_positive_interval() -> None:
     mock_queue = MagicMock()
-    with pytest.raises(ValueError, match="interval must be positive"):
+    with pytest.raises(ValueError, match='interval must be positive'):
         register_periodic_retention_sweep(queue=mock_queue, interval_seconds=0)
 
-    with pytest.raises(ValueError, match="interval must be positive"):
+    with pytest.raises(ValueError, match='interval must be positive'):
         register_periodic_retention_sweep(queue=mock_queue, interval_seconds=-10)
 
 
 def test_settings_retention_sweep_interval_validation() -> None:
 
     with pytest.raises(
-        ValueError, match="retention_sweep_interval_seconds must be positive"
+        ValueError, match='retention_sweep_interval_seconds must be positive'
     ):
         Settings(retention_sweep_interval_seconds=0)
 
     with pytest.raises(
-        ValueError, match="retention_sweep_interval_seconds must be positive"
+        ValueError, match='retention_sweep_interval_seconds must be positive'
     ):
         Settings(retention_sweep_interval_seconds=-1)
 
 
 def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None:
-    event = Event(name="Resilience Event")
+    event = Event(name='Resilience Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=20)
     talk1 = Talk(
         event_id=event.id,
-        title="Failing Talk",
+        title='Failing Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     talk2 = Talk(
         event_id=event.id,
-        title="Succeeding Talk",
+        title='Succeeding Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add_all([talk1, talk2])
@@ -598,9 +600,9 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None
     mock_storage = MagicMock()
 
     def mock_list_keys(prefix: str) -> list[str]:
-        if prefix.startswith(f"{talk1.id}/"):
-            raise OSError("Simulated disk I/O error")
-        return [f"{prefix}/final.mp4"]
+        if prefix.startswith(f'{talk1.id}/'):
+            raise OSError('Simulated disk I/O error')
+        return [f'{prefix}/final.mp4']
 
     mock_storage.list_keys.side_effect = mock_list_keys
 
@@ -609,7 +611,7 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None
     # talk1 should fail without crashing sweep; talk2 should succeed
     assert talk1.id not in swept
     assert talk2.id in swept
-    mock_storage.delete.assert_called_once_with(f"{talk2.id}/final")
+    mock_storage.delete.assert_called_once_with(f'{talk2.id}/final')
     assert talk1.final_cleaned_at is None
     assert talk2.final_cleaned_at is not None
 
@@ -617,23 +619,23 @@ def test_sweep_handles_list_keys_failure_gracefully(db_session: Session) -> None
 def test_sweep_sets_final_cleaned_at_and_skips_subsequent(
     db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
-    event = Event(name="Cleaned Tracking Event")
+    event = Event(name='Cleaned Tracking Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=20)
     talk = Talk(
         event_id=event.id,
-        title="Tracking Talk",
+        title='Tracking Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
     db_session.flush()
 
-    fake_storage.put(f"{talk.id}/final/test.mp4", b"data")
+    fake_storage.put(f'{talk.id}/final/test.mp4', b'data')
     cleaned_before: datetime | None = talk.final_cleaned_at
     assert cleaned_before is None
 
@@ -647,12 +649,12 @@ def test_sweep_sets_final_cleaned_at_and_skips_subsequent(
     assert swept2 == []
 
 
-@patch("rq.job.Job.fetch")
+@patch('rq.job.Job.fetch')
 def test_register_periodic_retention_sweep_deletes_stale_job(
     mock_fetch: MagicMock,
 ) -> None:
     mock_stale_job = MagicMock()
-    mock_stale_job.get_status.return_value = "finished"
+    mock_stale_job.get_status.return_value = 'finished'
     mock_fetch.return_value = mock_stale_job
 
     mock_queue = MagicMock()
@@ -672,9 +674,9 @@ def test_register_periodic_retention_sweep_times_parameter() -> None:
     )
     assert job is not None
     _, kwargs = mock_queue.enqueue_in.call_args
-    assert kwargs["repeat"].times == 5
+    assert kwargs['repeat'].times == 5
 
-    with pytest.raises(ValueError, match="times must be positive"):
+    with pytest.raises(ValueError, match='times must be positive'):
         register_periodic_retention_sweep(
             queue=mock_queue, interval_seconds=600, times=0
         )
@@ -682,41 +684,41 @@ def test_register_periodic_retention_sweep_times_parameter() -> None:
 
 def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None:
 
-    event = Event(name="Flush Failure Event")
+    event = Event(name='Flush Failure Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=20)
     talk1 = Talk(
         event_id=event.id,
-        title="First Talk",
+        title='First Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     talk2 = Talk(
         event_id=event.id,
-        title="Second Talk",
+        title='Second Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add_all([talk1, talk2])
     db_session.flush()
 
     mock_storage = MagicMock()
-    mock_storage.list_keys.return_value = ["dummy.mp4"]
+    mock_storage.list_keys.return_value = ['dummy.mp4']
 
     original_flush = db_session.flush
 
     def failing_flush() -> None:
-        raise SQLAlchemyError("Simulated database flush failure")
+        raise SQLAlchemyError('Simulated database flush failure')
 
     db_session.flush = failing_flush  # type: ignore[method-assign, assignment]
     try:
-        with pytest.raises(SQLAlchemyError, match="Simulated database flush failure"):
+        with pytest.raises(SQLAlchemyError, match='Simulated database flush failure'):
             run_retention_sweep(db=db_session, storage=mock_storage)
     finally:
         db_session.flush = original_flush  # type: ignore[method-assign]
@@ -724,7 +726,7 @@ def test_sweep_raises_and_stops_on_db_flush_failure(db_session: Session) -> None
     # Storage delete should have been called for talk1 before flush failed,
     # but NOT for talk2 since the sweep stops immediately
     assert mock_storage.delete.call_count == 1
-    assert mock_storage.delete.call_args[0][0] == f"{talk1.id}/final"
+    assert mock_storage.delete.call_args[0][0] == f'{talk1.id}/final'
 
 
 def test_register_periodic_retention_sweep_retry() -> None:
@@ -735,29 +737,29 @@ def test_register_periodic_retention_sweep_retry() -> None:
     job = register_periodic_retention_sweep(queue=mock_queue, interval_seconds=1800)
     assert job is not None
     _, kwargs = mock_queue.enqueue_in.call_args
-    assert "retry" in kwargs
-    assert kwargs["retry"].max == 3
+    assert 'retry' in kwargs
+    assert kwargs['retry'].max == 3
 
     custom_retry = Retry(max=5)
     register_periodic_retention_sweep(
         queue=mock_queue, interval_seconds=1800, retry=custom_retry
     )
     _, kwargs = mock_queue.enqueue_in.call_args
-    assert kwargs["retry"] == custom_retry
+    assert kwargs['retry'] == custom_retry
 
 
 def test_sweep_deletes_when_storage_lacks_list_keys(db_session: Session) -> None:
-    event = Event(name="No List Keys Event")
+    event = Event(name='No List Keys Event')
     db_session.add(event)
     db_session.flush()
 
     past_date = datetime.now(UTC) - timedelta(days=20)
     talk = Talk(
         event_id=event.id,
-        title="No ListKeys Talk",
+        title='No ListKeys Talk',
         start=past_date,
         end=past_date,
-        status="done",
+        status=TalkStatus.DONE,
         updated_at=past_date,
     )
     db_session.add(talk)
@@ -772,9 +774,9 @@ def test_sweep_deletes_when_storage_lacks_list_keys(db_session: Session) -> None
             self.deleted_prefixes.append(prefix)
 
     mock_storage = StorageWithoutListKeys()
-    assert not hasattr(mock_storage, "list_keys")
+    assert not hasattr(mock_storage, 'list_keys')
 
     swept = run_retention_sweep(db=db_session, storage=mock_storage)
     assert talk.id in swept
-    assert mock_storage.deleted_prefixes == [f"{talk.id}/final"]
+    assert mock_storage.deleted_prefixes == [f'{talk.id}/final']
     assert talk.final_cleaned_at is not None

@@ -6,7 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Protocol
 
-from app.config import settings
+from .config import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class StorageKeyNotFoundError(FileNotFoundError):
     """Raised when a requested key is not found in the storage backend."""
 
     def __init__(self, key: str):
-        super().__init__(f"Storage key not found: {key}")
+        super().__init__(f'Storage key not found: {key}')
         self.key = key
 
 
@@ -65,7 +66,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def list_keys(self, prefix: str = "") -> list[str]:
+    def list_keys(self, prefix: str = '') -> list[str]:
         """
         List all file keys matching the given prefix.
         """
@@ -96,7 +97,7 @@ class LocalDiskBackend(StorageBackend):
 
     def get_temp_dir(self) -> Path:
         """Return a directory path suitable for temporary scratch files within data_dir."""
-        tmp_dir = self.data_dir / "tmp"
+        tmp_dir = self.data_dir / 'tmp'
         tmp_dir.mkdir(parents=True, exist_ok=True)
         return tmp_dir
 
@@ -106,7 +107,7 @@ class LocalDiskBackend(StorageBackend):
         # data_dir.
         path = (self.data_dir / key).resolve()
         if not path.is_relative_to(self.data_dir):
-            raise ValueError(f"Invalid key: {key}")
+            raise ValueError(f'Invalid key: {key}')
         return path
 
     def put(self, key: str, source: Path | bytes) -> None:
@@ -134,7 +135,7 @@ class LocalDiskBackend(StorageBackend):
                 if isinstance(source, bytes):
                     tmp.write(source)
                 else:
-                    with open(source, "rb") as f_in:
+                    with open(source, 'rb') as f_in:
                         shutil.copyfileobj(f_in, tmp)
             except Exception:
                 tmp.close()
@@ -154,7 +155,7 @@ class LocalDiskBackend(StorageBackend):
         """
         target_path = self._get_path(key)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = target_path.parent / f".tmp.{uuid.uuid4().hex}"
+        tmp_path = target_path.parent / f'.tmp.{uuid.uuid4().hex}'
 
         try:
             os.link(source, tmp_path)
@@ -166,7 +167,7 @@ class LocalDiskBackend(StorageBackend):
         # Fallback: atomic copy preserving source
         with tempfile.NamedTemporaryFile(delete=False, dir=target_path.parent) as tmp:
             try:
-                with open(source, "rb") as f_in:
+                with open(source, 'rb') as f_in:
                     shutil.copyfileobj(f_in, tmp)
             except Exception:
                 tmp.close()
@@ -213,7 +214,7 @@ class LocalDiskBackend(StorageBackend):
         path = self._get_path(key)
         return path.is_file()
 
-    def list_keys(self, prefix: str = "") -> list[str]:
+    def list_keys(self, prefix: str = '') -> list[str]:
         """
         List all file keys matching the given prefix.
         """
@@ -223,7 +224,7 @@ class LocalDiskBackend(StorageBackend):
         if path.is_file():
             return [path.relative_to(self.data_dir).as_posix()]
         keys = []
-        for p in sorted(path.rglob("*")):
+        for p in sorted(path.rglob('*')):
             if p.is_file():
                 keys.append(p.relative_to(self.data_dir).as_posix())
         return keys
@@ -251,11 +252,11 @@ def get_storage_backend() -> StorageBackend:
 
 
 INTERMEDIATE_STAGES: tuple[str, ...] = (
-    "cut",
-    "preview",
-    "assemble",
-    "intro",
-    "outro",
+    'cut',
+    'preview',
+    'assemble',
+    'intro',
+    'outro',
 )
 
 
@@ -267,10 +268,10 @@ def cleanup_intermediates(storage: StorageBackend, talk_id: int) -> None:
     """
     for target in INTERMEDIATE_STAGES:
         try:
-            storage.delete(f"{talk_id}/{target}")
-        except Exception as exc:  # noqa: BLE001
+            storage.delete(f'{talk_id}/{target}')
+        except (OSError, ValueError) as exc:
             logger.warning(
-                "Failed to delete %s storage for talk %s: %s",
+                'Failed to delete %s storage for talk %s: %s',
                 target,
                 talk_id,
                 exc,
@@ -283,17 +284,17 @@ def cleanup_bumpers(
     custom_paths: tuple[str | None, ...] = (),
 ) -> None:
     """Delete bumper intermediate artifacts (intro, outro) for a talk once final video is generated."""
-    for stage in ("intro", "outro"):
+    for stage in ('intro', 'outro'):
         try:
-            storage.delete(f"{talk_id}/{stage}")
-        except Exception as exc:  # noqa: BLE001
+            storage.delete(f'{talk_id}/{stage}')
+        except (OSError, ValueError) as exc:
             logger.warning(
-                "Failed to delete %s storage for talk %s: %s",
+                'Failed to delete %s storage for talk %s: %s',
                 stage,
                 talk_id,
                 exc,
             )
-    from app.ingest import get_bumper_staging_dir
+    from .ingest import get_bumper_staging_dir
 
     staging_dir = get_bumper_staging_dir().resolve()
     for path_str in custom_paths:
@@ -305,7 +306,7 @@ def cleanup_bumpers(
                 ).resolve()
                 if p.is_file() and p.is_relative_to(staging_dir):
                     p.unlink(missing_ok=True)
-            except Exception as exc:  # noqa: BLE001
+            except OSError as exc:
                 logger.warning(
-                    "Failed to delete staged bumper file %s: %s", path_str, exc
+                    'Failed to delete staged bumper file %s: %s', path_str, exc
                 )

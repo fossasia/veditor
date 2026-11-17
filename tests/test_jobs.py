@@ -7,13 +7,15 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.auth import get_client
+from app.consts import JobKind, JobStatus, TalkStatus
 from app.main import app
 from app.schemas import JobRead
+
 
 client = TestClient(app)
 
 
-def _create_event(db: Session, name: str = "Jobs Test Event") -> models.Event:
+def _create_event(db: Session, name: str = 'Jobs Test Event') -> models.Event:
     event = models.Event(name=name)
     db.add(event)
     db.commit()
@@ -22,7 +24,7 @@ def _create_event(db: Session, name: str = "Jobs Test Event") -> models.Event:
 
 
 def _create_talk(
-    db: Session, event_id: int, title: str = "Jobs Test Talk"
+    db: Session, event_id: int, title: str = 'Jobs Test Talk'
 ) -> models.Talk:
     now = datetime.now(UTC)
     talk = models.Talk(
@@ -30,7 +32,7 @@ def _create_talk(
         title=title,
         start=now,
         end=now,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db.add(talk)
     db.commit()
@@ -42,8 +44,8 @@ def _create_job(
     db: Session,
     talk_id: int,
     *,
-    kind: str = "transcode",
-    status: str = "queued",
+    kind: JobKind = JobKind.TRANSCODE,
+    status: JobStatus = JobStatus.QUEUED,
     **kwargs: Any,
 ) -> models.Job:
     job = models.Job(talk_id=talk_id, kind=kind, status=status, **kwargs)
@@ -55,7 +57,7 @@ def _create_job(
 
 def test_get_job_unauthorized() -> None:
     """Requesting without API key returns 401 Unauthorized."""
-    response = client.get("/jobs/1")
+    response = client.get('/jobs/1')
     assert response.status_code == 401
 
 
@@ -64,9 +66,9 @@ def test_get_job_not_found(db_session: Session) -> None:
     app.dependency_overrides[get_client] = lambda: models.Client(id=1, event_ids=[1])
 
     missing_id = (db_session.scalar(select(func.max(models.Job.id))) or 0) + 1
-    response = client.get(f"/jobs/{missing_id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{missing_id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Job not found"
+    assert response.json()['detail'] == 'Job not found'
 
 
 def test_get_job_unauthorized_event_returns_404(db_session: Session) -> None:
@@ -76,17 +78,17 @@ def test_get_job_unauthorized_event_returns_404(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="detect",
-        status="done",
-        log_path=f"{talk.id}/logs/detect.log",
+        kind=JobKind.DETECT,
+        status=JobStatus.DONE,
+        log_path=f'{talk.id}/logs/detect.log',
     )
 
     unowned_client = models.Client(id=1, event_ids=[event.id + 1])
     app.dependency_overrides[get_client] = lambda: unowned_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 404
-    assert response.json()["detail"] == "Job not found"
+    assert response.json()['detail'] == 'Job not found'
 
 
 def test_get_job_success(db_session: Session) -> None:
@@ -96,43 +98,43 @@ def test_get_job_success(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="transcode",
-        status="running",
-        log_path=f"{talk.id}/logs/transcode.log",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
+        log_path=f'{talk.id}/logs/transcode.log',
     )
 
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["talk_id"] == talk.id
-    assert data["kind"] == "transcode"
-    assert data["status"] == "running"
-    assert data["log_path"] == f"{talk.id}/logs/transcode.log"
-    assert data["progress_pct"] is None
+    assert data['id'] == job.id
+    assert data['talk_id'] == talk.id
+    assert data['kind'] == 'transcode'
+    assert data['status'] == 'running'
+    assert data['log_path'] == f'{talk.id}/logs/transcode.log'
+    assert data['progress_pct'] is None
 
 
 def test_get_job_success_null_log_path(db_session: Session) -> None:
     """Queued job with null log_path returns valid JobRead schema."""
     event = _create_event(db_session)
     talk = _create_talk(db_session, event.id)
-    job = _create_job(db_session, talk.id, kind="cut", status="queued")
+    job = _create_job(db_session, talk.id, kind=JobKind.CUT, status=JobStatus.QUEUED)
 
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["status"] == "queued"
-    assert data["log_path"] is None
-    assert data["progress_pct"] is None
-    assert data["elapsed_time"] is None
-    assert data["estimated_remaining"] is None
+    assert data['id'] == job.id
+    assert data['status'] == 'queued'
+    assert data['log_path'] is None
+    assert data['progress_pct'] is None
+    assert data['elapsed_time'] is None
+    assert data['estimated_remaining'] is None
 
 
 def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
@@ -145,9 +147,9 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
     job = _create_job(
         db_session,
         talk.id,
-        kind="transcode",
-        status="running",
-        log_path=f"{talk.id}/logs/transcode.log",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
+        log_path=f'{talk.id}/logs/transcode.log',
         progress_pct=50.0,
         started_at=started,
         updated_at=updated,
@@ -156,18 +158,18 @@ def test_get_job_progress_and_timing_calculations(db_session: Session) -> None:
     authorized_client = models.Client(id=1, event_ids=[event.id])
     app.dependency_overrides[get_client] = lambda: authorized_client
 
-    response = client.get(f"/jobs/{job.id}", headers={"X-API-Key": "valid_key"})
+    response = client.get(f'/jobs/{job.id}', headers={'X-API-Key': 'valid_key'})
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == job.id
-    assert data["progress_pct"] == 50.0
-    assert data["started_at"] is not None
-    assert data["updated_at"] is not None
-    assert isinstance(data["elapsed_time"], float)
-    assert 19.0 <= data["elapsed_time"] <= 25.0
-    assert isinstance(data["estimated_remaining"], float)
+    assert data['id'] == job.id
+    assert data['progress_pct'] == 50.0
+    assert data['started_at'] is not None
+    assert data['updated_at'] is not None
+    assert isinstance(data['elapsed_time'], float)
+    assert 19.0 <= data['elapsed_time'] <= 25.0
+    assert isinstance(data['estimated_remaining'], float)
     # At 50%, remaining should be approximately equal to elapsed_time
-    assert abs(data["estimated_remaining"] - data["elapsed_time"]) < 0.1
+    assert abs(data['estimated_remaining'] - data['elapsed_time']) < 0.1
 
 
 def test_get_job_estimated_remaining_edge_cases() -> None:
@@ -180,8 +182,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_no_start = JobRead(
         id=1,
         talk_id=1,
-        kind="cut",
-        status="queued",
+        kind=JobKind.CUT,
+        status=JobStatus.QUEUED,
         started_at=None,
         progress_pct=50.0,
     )
@@ -192,8 +194,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_none_pct = JobRead(
         id=2,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started,
         progress_pct=None,
     )
@@ -204,8 +206,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_zero_pct = JobRead(
         id=3,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started,
         progress_pct=0.0,
     )
@@ -216,8 +218,8 @@ def test_get_job_estimated_remaining_edge_cases() -> None:
     job_100_pct = JobRead(
         id=4,
         talk_id=1,
-        kind="transcode",
-        status="done",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=now,
         progress_pct=100.0,
@@ -236,8 +238,8 @@ def test_linear_extrapolation_accuracy() -> None:
     job_25 = JobRead(
         id=10,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started_25,
         progress_pct=25.0,
     )
@@ -250,8 +252,8 @@ def test_linear_extrapolation_accuracy() -> None:
     job_75 = JobRead(
         id=11,
         talk_id=1,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         started_at=started_75,
         progress_pct=75.0,
     )
@@ -270,8 +272,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     done_job = JobRead(
         id=20,
         talk_id=1,
-        kind="cut",
-        status="done",
+        kind=JobKind.CUT,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=updated,
         progress_pct=100.0,
@@ -283,8 +285,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     failed_job = JobRead(
         id=21,
         talk_id=1,
-        kind="transcode",
-        status="failed",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.FAILED,
         started_at=started,
         updated_at=updated,
         progress_pct=40.0,
@@ -297,8 +299,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     terminal_missing_updated = JobRead(
         id=22,
         talk_id=1,
-        kind="transcode",
-        status="failed",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.FAILED,
         started_at=started,
         updated_at=None,
         progress_pct=40.0,
@@ -309,8 +311,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     # 4. Model level elapsed_time property and started_at default
     db_queued_job = models.Job(
         talk_id=1,
-        kind="cut",
-        status="queued",
+        kind=JobKind.CUT,
+        status=JobStatus.QUEUED,
     )
     assert db_queued_job.started_at is None
     assert db_queued_job.elapsed_time is None
@@ -319,8 +321,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     db_done_job = models.Job(
         id=23,
         talk_id=1,
-        kind="cut",
-        status="done",
+        kind=JobKind.CUT,
+        status=JobStatus.DONE,
         started_at=started,
         updated_at=updated,
         progress_pct=100.0,
@@ -330,8 +332,8 @@ def test_terminal_job_elapsed_time_uses_updated_at() -> None:
     db_broken_no_updated = models.Job(
         id=24,
         talk_id=1,
-        kind="cut",
-        status="broken",
+        kind=JobKind.CUT,
+        status=JobStatus.BROKEN,
         started_at=started,
         updated_at=None,
     )

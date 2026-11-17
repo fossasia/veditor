@@ -1,6 +1,6 @@
 // ── Unified Modal Controller (Native HTML5 <dialog> with Zero Animation) ──
 
-(function () {
+(function() {
   'use strict';
 
   const triggerMap = new WeakMap();
@@ -28,7 +28,7 @@
       dialog.showModal();
 
       const focusTarget = dialog.querySelector(
-        '[autofocus], [data-modal-confirm], input:not([type="hidden"]), select, textarea, button:not([data-modal-close])'
+        '[autofocus], [data-modal-confirm], input:not([type="hidden"]), select, textarea, button:not([data-modal-close])',
       );
       if (focusTarget && typeof focusTarget.focus === 'function') {
         focusTarget.focus();
@@ -217,7 +217,7 @@
         dialog.addEventListener('click', onClick);
         Modal.open(dialog);
       });
-    }
+    },
   };
 
   // Global backdrop click & close button handler for all .v-modal dialogs
@@ -258,7 +258,7 @@
         }
       }
     },
-    true
+    true,
   );
 
   // Expose singleton to window

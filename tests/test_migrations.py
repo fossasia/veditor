@@ -27,6 +27,7 @@ from sqlalchemy import Engine, create_engine, inspect
 
 from app.config import settings
 
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -35,8 +36,8 @@ def fresh_test_db() -> Generator[Engine]:
     """Drop and recreate the public schema in the test database."""
     engine = create_engine(settings.testing_database_url)
     with engine.begin() as conn:
-        conn.execute(sqlalchemy.text("DROP SCHEMA public CASCADE"))
-        conn.execute(sqlalchemy.text("CREATE SCHEMA public"))
+        conn.execute(sqlalchemy.text('DROP SCHEMA public CASCADE'))
+        conn.execute(sqlalchemy.text('CREATE SCHEMA public'))
     yield engine
     engine.dispose()
 
@@ -45,21 +46,21 @@ def fresh_test_db() -> Generator[Engine]:
 def test_alembic_migrations_create_schema(fresh_test_db: Engine) -> None:
     """Alembic migrations must build the full schema on an empty test DB."""
     config = Config()
-    config.set_main_option("script_location", str(_REPO_ROOT / "migrations"))
-    command.upgrade(config, "head")
+    config.set_main_option('script_location', str(_REPO_ROOT / 'migrations'))
+    command.upgrade(config, 'head')
 
     inspector = inspect(fresh_test_db)
     tables = set(inspector.get_table_names())
     expected = {
-        "alembic_version",
-        "approved_cuts",
-        "clients",
-        "events",
-        "jobs",
-        "reviews",
-        "system_settings",
-        "talks",
-        "users",
+        'alembic_version',
+        'approved_cuts',
+        'clients',
+        'events',
+        'jobs',
+        'reviews',
+        'system_settings',
+        'talks',
+        'users',
     }
     missing = expected - tables
-    assert not missing, f"Missing tables after alembic upgrade head: {missing}"
+    assert not missing, f'Missing tables after alembic upgrade head: {missing}'

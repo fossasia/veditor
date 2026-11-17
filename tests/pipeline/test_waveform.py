@@ -16,7 +16,7 @@ def test_extract_waveform_peaks_audio_clip(tmp_path: Path) -> None:
         2.0,
         has_video=True,
         has_audio=True,
-        audio_waveform="tone",
+        audio_waveform='tone',
         output_dir=tmp_path,
     )
     peaks = extract_waveform_peaks(clip, num_peaks=64)
@@ -49,7 +49,7 @@ def test_extract_waveform_peaks_corrupt_clip(tmp_path: Path) -> None:
 
 def test_extract_waveform_peaks_nonexistent_file(tmp_path: Path) -> None:
     """Verify waveform extraction handles non-existent paths gracefully."""
-    nonexistent = tmp_path / "does_not_exist.mp4"
+    nonexistent = tmp_path / 'does_not_exist.mp4'
     peaks = extract_waveform_peaks(nonexistent)
     assert peaks == []
 
@@ -60,7 +60,7 @@ def test_extract_waveform_peaks_num_peaks_scaling(tmp_path: Path) -> None:
         3.0,
         has_video=False,
         has_audio=True,
-        audio_waveform="tone",
+        audio_waveform='tone',
         output_dir=tmp_path,
     )
     for target_peaks in (10, 50, 128):

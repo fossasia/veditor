@@ -25,9 +25,9 @@ def test_advance_legal_transitions() -> None:
 
 def test_advance_updates_talk_updated_at() -> None:
     talk = DummyTalk(TalkStatus.WAITING_FILES)
-    assert not hasattr(talk, "updated_at")
+    assert not hasattr(talk, 'updated_at')
     advance(talk, TalkStatus.DETECTING)
-    assert hasattr(talk, "updated_at")
+    assert hasattr(talk, 'updated_at')
     assert talk.updated_at is not None
     assert talk.updated_at.tzinfo is not None
 

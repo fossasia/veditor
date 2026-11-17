@@ -5,6 +5,7 @@ import subprocess
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
+from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.auth import CurrentUser, check_talk_access, get_current_user, hash_api_key
 from app.config import settings
-from app.consts import AuthRole, TalkStatus
+from app.consts import AuthRole, JobKind, JobStatus, TalkStatus
 from app.main import app
 from app.security import create_session_token, create_sso_token, hash_password
 from app.storage import INTERMEDIATE_STAGES, LocalDiskBackend, get_storage_backend
@@ -41,76 +42,76 @@ def temp_storage(tmp_path: Path) -> Iterator[LocalDiskBackend]:
 
 
 def test_root_redirect(client: TestClient) -> None:
-    response = client.get("/", follow_redirects=False)
+    response = client.get('/', follow_redirects=False)
     assert response.status_code == 307
-    assert response.headers["location"] == "/studio"
+    assert response.headers['location'] == '/studio'
 
 
 def test_static_assets(client: TestClient) -> None:
-    css = client.get("/static/css/app.css")
+    css = client.get('/static/css/app.css')
     assert css.status_code == 200
-    assert "text/css" in css.headers.get("content-type", "")
+    assert 'text/css' in css.headers.get('content-type', '')
 
-    dash_css = client.get("/static/css/dashboard.css")
+    dash_css = client.get('/static/css/dashboard.css')
     assert dash_css.status_code == 200
-    assert "text/css" in dash_css.headers.get("content-type", "")
+    assert 'text/css' in dash_css.headers.get('content-type', '')
 
-    studio_css = client.get("/static/css/studio.css")
+    studio_css = client.get('/static/css/studio.css')
     assert studio_css.status_code == 200
-    assert "text/css" in studio_css.headers.get("content-type", "")
+    assert 'text/css' in studio_css.headers.get('content-type', '')
 
-    auth_css = client.get("/static/css/auth.css")
+    auth_css = client.get('/static/css/auth.css')
     assert auth_css.status_code == 200
-    assert "text/css" in auth_css.headers.get("content-type", "")
+    assert 'text/css' in auth_css.headers.get('content-type', '')
 
-    dash_js = client.get("/static/js/dashboard.js")
+    dash_js = client.get('/static/js/dashboard.js')
     assert dash_js.status_code == 200
 
-    studio_js = client.get("/static/js/studio.js")
+    studio_js = client.get('/static/js/studio.js')
     assert studio_js.status_code == 200
 
-    auth_js = client.get("/static/js/auth.js")
+    auth_js = client.get('/static/js/auth.js')
     assert auth_js.status_code == 200
 
-    theme_js = client.get("/static/js/theme.js")
+    theme_js = client.get('/static/js/theme.js')
     assert theme_js.status_code == 200
 
 
 def test_templates_have_no_inline_css_or_js() -> None:
-    templates_dir = Path(__file__).parent.parent / "app" / "ui" / "templates"
+    templates_dir = Path(__file__).parent.parent / 'app' / 'ui' / 'templates'
     assert templates_dir.is_dir()
 
     style_attr_pattern = re.compile(r'\bstyle=["\']', re.IGNORECASE)
-    style_tag_pattern = re.compile(r"<style\b", re.IGNORECASE)
+    style_tag_pattern = re.compile(r'<style\b', re.IGNORECASE)
     inline_script_pattern = re.compile(
-        r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL
+        r'<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>', re.IGNORECASE | re.DOTALL
     )
     event_handler_pattern = re.compile(r'\bon[a-z]+=["\']', re.IGNORECASE)
 
-    jinja_files = list(templates_dir.glob("*.html.jinja"))
-    assert len(jinja_files) >= 5, "Expected at least 5 .html.jinja template files"
+    jinja_files = list(templates_dir.glob('*.html.jinja'))
+    assert len(jinja_files) >= 5, 'Expected at least 5 .html.jinja template files'
 
     for html_file in jinja_files:
-        content = html_file.read_text(encoding="utf-8")
+        content = html_file.read_text(encoding='utf-8')
         assert not style_attr_pattern.search(content), (
-            f"Inline style attribute found in {html_file.name}"
+            f'Inline style attribute found in {html_file.name}'
         )
         assert not style_tag_pattern.search(content), (
-            f"<style> tag found in {html_file.name}"
+            f'<style> tag found in {html_file.name}'
         )
         assert not event_handler_pattern.search(content), (
-            f"Inline event handler found in {html_file.name}"
+            f'Inline event handler found in {html_file.name}'
         )
 
         for match in inline_script_pattern.finditer(content):
             inline_body = match.group(1).strip()
             assert not inline_body, (
-                f"Inline script body found in {html_file.name}: {inline_body[:50]}..."
+                f'Inline script body found in {html_file.name}: {inline_body[:50]}...'
             )
 
 
 def test_dashboard_page(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name="Test Studio Dashboard Event")
+    event = models.Event(name='Test Studio Dashboard Event')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -118,28 +119,28 @@ def test_dashboard_page(client: TestClient, db_session: Session) -> None:
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Test Studio Dashboard Talk",
-        room="Auditorium",
+        title='Test Studio Dashboard Talk',
+        room='Auditorium',
         start=now,
         end=now + timedelta(minutes=45),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
-    response = client.get("/studio", headers={"X-API-Key": api_key})
+    response = client.get('/studio', headers={'X-API-Key': api_key})
     assert response.status_code == 200
-    assert response.headers.get("cache-control") == "no-store"
-    assert "text/html" in response.headers.get("content-type", "")
-    assert "Test Studio Dashboard Talk" in response.text
-    assert "Auditorium" in response.text
+    assert response.headers.get('cache-control') == 'no-store'
+    assert 'text/html' in response.headers.get('content-type', '')
+    assert 'Test Studio Dashboard Talk' in response.text
+    assert 'Auditorium' in response.text
 
 
 def test_talk_studio_page(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name="Test Studio Page Event")
+    event = models.Event(name='Test Studio Page Event')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -147,71 +148,71 @@ def test_talk_studio_page(client: TestClient, db_session: Session) -> None:
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Test Studio Detail Talk",
-        room="Room 101",
+        title='Test Studio Detail Talk',
+        room='Room 101',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     # Unauthenticated browser caller redirects to login with next param
-    unauth = client.get(f"/studio/talks/{talk.id}", follow_redirects=False)
+    unauth = client.get(f'/studio/talks/{talk.id}', follow_redirects=False)
     assert unauth.status_code == 302
-    assert unauth.headers["location"] == f"/login?next=/studio/talks/{talk.id}"
+    assert unauth.headers['location'] == f'/login?next=/studio/talks/{talk.id}'
 
     # Query param fallback is rejected (returns 401)
-    query_param_res = client.get(f"/studio/talks/{talk.id}?api_key={api_key}")
+    query_param_res = client.get(f'/studio/talks/{talk.id}?api_key={api_key}')
     assert query_param_res.status_code == 401
 
     # Cookie auth is accepted
-    client.cookies.set("veditor_api_key", api_key)
-    cookie_res = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_api_key', api_key)
+    cookie_res = client.get(f'/studio/talks/{talk.id}')
     assert cookie_res.status_code == 200
     client.cookies.clear()
 
-    response = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    response = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert response.status_code == 200
-    assert response.headers.get("cache-control") == "no-store"
-    assert "text/html" in response.headers.get("content-type", "")
-    assert "Test Studio Detail Talk" in response.text
-    assert "Room 101" in response.text
-    assert "Test Studio Page Event" in response.text
-    assert "breadcrumb-event" in response.text
-    assert "breadcrumb-room" in response.text
-    assert "topbar-time-meta" in response.text
-    assert "(30m)" in response.text
-    assert response.text.index("topbar-time-meta") < response.text.index(
-        "topbar-control-group"
+    assert response.headers.get('cache-control') == 'no-store'
+    assert 'text/html' in response.headers.get('content-type', '')
+    assert 'Test Studio Detail Talk' in response.text
+    assert 'Room 101' in response.text
+    assert 'Test Studio Page Event' in response.text
+    assert 'breadcrumb-event' in response.text
+    assert 'breadcrumb-room' in response.text
+    assert 'topbar-time-meta' in response.text
+    assert '(30m)' in response.text
+    assert response.text.index('topbar-time-meta') < response.text.index(
+        'topbar-control-group'
     )
-    assert "broadcast-banner" not in response.text
-    assert f"Talk #{talk.id}" not in response.text
-    assert "Talk Metadata" not in response.text
-    assert "Generated Media Assets" not in response.text
-    assert "Gate 1" not in response.text
-    assert "Gate 2" not in response.text
+    assert 'broadcast-banner' not in response.text
+    assert f'Talk #{talk.id}' not in response.text
+    assert 'Talk Metadata' not in response.text
+    assert 'Generated Media Assets' not in response.text
+    assert 'Gate 1' not in response.text
+    assert 'Gate 2' not in response.text
 
 
 def test_talk_studio_human_session_user_access(
     client: TestClient, db_session: Session
 ) -> None:
     org = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
 
-    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    event = models.Event(name=f'Event {uuid.uuid4().hex}', created_by_user_id=org.id)
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -219,11 +220,11 @@ def test_talk_studio_human_session_user_access(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Human Session Talk",
-        room="Main Hall",
+        title='Human Session Talk',
+        room='Main Hall',
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -231,64 +232,64 @@ def test_talk_studio_human_session_user_access(
 
     # 1. Organizer owning event can access talk via session cookie
     token = create_session_token(org.id, org.role)
-    client.cookies.set("veditor_session", token)
-    res = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', token)
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
-    assert "Human Session Talk" in res.text
-    assert "Main Hall" in res.text
-    assert "user-menu-btn" in res.text
-    assert "user-dropdown-menu" in res.text
-    assert "Dark Mode" in res.text
-    assert "Log out" in res.text
-    assert "Gate 1" not in res.text
-    assert "Gate 2" not in res.text
+    assert 'Human Session Talk' in res.text
+    assert 'Main Hall' in res.text
+    assert 'user-menu-btn' in res.text
+    assert 'user-dropdown-menu' in res.text
+    assert 'Dark Mode' in res.text
+    assert 'Log out' in res.text
+    assert 'Gate 1' not in res.text
+    assert 'Gate 2' not in res.text
 
     # 2. Admin can access talk via session cookie even if created by someone else
     admin = models.User(
-        email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="admin",
+        email=f'admin_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ADMIN,
     )
     db_session.add(admin)
     db_session.commit()
     db_session.refresh(admin)
 
     admin_token = create_session_token(admin.id, admin.role)
-    client.cookies.set("veditor_session", admin_token)
-    res_admin = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', admin_token)
+    res_admin = client.get(f'/studio/talks/{talk.id}')
     assert res_admin.status_code == 200
 
     # 3. Another user who does not own the event gets 404
     other_org = models.User(
-        email=f"other_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'other_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(other_org)
     db_session.commit()
     db_session.refresh(other_org)
 
     other_token = create_session_token(other_org.id, other_org.role)
-    client.cookies.set("veditor_session", other_token)
-    res_other = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', other_token)
+    res_other = client.get(f'/studio/talks/{talk.id}')
     assert res_other.status_code == 404
 
 
 def test_talk_studio_not_found(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     # Unauthenticated browser caller redirects to login
-    assert client.get("/studio/talks/999999", follow_redirects=False).status_code == 302
+    assert client.get('/studio/talks/999999', follow_redirects=False).status_code == 302
 
-    response = client.get("/studio/talks/999999", headers={"X-API-Key": api_key})
+    response = client.get('/studio/talks/999999', headers={'X-API-Key': api_key})
     assert response.status_code == 404
 
 
@@ -298,12 +299,12 @@ def test_media_serving(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -311,11 +312,11 @@ def test_media_serving(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Media Talk",
-        room="Hall 1",
+        title='Media Talk',
+        room='Hall 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -323,53 +324,53 @@ def test_media_serving(
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
+        temp_storage.put(f'{talk.id}/preview/preview.mp4', clip)
 
         # Unauthenticated returns 401 for both existing and non-existent private talk
-        assert client.get(f"/studio/media/{talk.id}/preview.mp4").status_code == 401
+        assert client.get(f'/studio/media/{talk.id}/preview.mp4').status_code == 401
         assert (
-            client.get(f"/studio/media/{talk.id}/preview/preview.mp4").status_code
+            client.get(f'/studio/media/{talk.id}/preview/preview.mp4').status_code
             == 401
         )
-        assert client.get("/studio/media/999999/preview/preview.mp4").status_code == 401
+        assert client.get('/studio/media/999999/preview/preview.mp4').status_code == 401
 
         response = client.get(
-            f"/studio/media/{talk.id}/preview.mp4", headers={"X-API-Key": api_key}
+            f'/studio/media/{talk.id}/preview.mp4', headers={'X-API-Key': api_key}
         )
         assert response.status_code == 200
-        assert response.headers.get("cache-control") == "no-store"
-        assert "video/mp4" in response.headers.get("content-type", "")
+        assert response.headers.get('cache-control') == 'no-store'
+        assert 'video/mp4' in response.headers.get('content-type', '')
 
         # Categorized media route for protected media uses no-store
         response_cat = client.get(
-            f"/studio/media/{talk.id}/preview/preview.mp4",
-            headers={"X-API-Key": api_key},
+            f'/studio/media/{talk.id}/preview/preview.mp4',
+            headers={'X-API-Key': api_key},
         )
         assert response_cat.status_code == 200
-        assert response_cat.headers.get("cache-control") == "no-store"
+        assert response_cat.headers.get('cache-control') == 'no-store'
 
         not_found = client.get(
-            f"/studio/media/{talk.id}/missing.mp4", headers={"X-API-Key": api_key}
+            f'/studio/media/{talk.id}/missing.mp4', headers={'X-API-Key': api_key}
         )
         assert not_found.status_code == 404
 
         # Disallowed category returns 404
         disallowed = client.get(
-            f"/studio/media/{talk.id}/logs/worker.log", headers={"X-API-Key": api_key}
+            f'/studio/media/{talk.id}/logs/worker.log', headers={'X-API-Key': api_key}
         )
         assert disallowed.status_code == 404
 
         # Unauthenticated request for final media returns 404 when talk is not done or does not exist
-        assert client.get(f"/studio/media/{talk.id}/final/final.mp4").status_code == 404
-        assert client.get("/studio/media/999999/final/final.mp4").status_code == 404
+        assert client.get(f'/studio/media/{talk.id}/final/final.mp4').status_code == 404
+        assert client.get('/studio/media/999999/final/final.mp4').status_code == 404
 
         # Completed talk final media is publicly accessible without authentication
         talk.status = TalkStatus.DONE
         db_session.commit()
-        temp_storage.put(f"{talk.id}/final/final.mp4", clip)
-        public_resp = client.get(f"/studio/media/{talk.id}/final/final.mp4")
+        temp_storage.put(f'{talk.id}/final/final.mp4', clip)
+        public_resp = client.get(f'/studio/media/{talk.id}/final/final.mp4')
         assert public_resp.status_code == 200
-        assert public_resp.headers.get("cache-control") == "no-cache"
+        assert public_resp.headers.get('cache-control') == 'no-cache'
     finally:
         clip.unlink(missing_ok=True)
 
@@ -380,22 +381,22 @@ def test_talk_waveform_endpoint(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name=f"Waveform Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Waveform Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     talk = models.Talk(
-        title="Waveform Talk",
-        room="Auditorium",
+        title='Waveform Talk',
+        room='Auditorium',
         start=datetime(2026, 3, 1, 10, 0, tzinfo=UTC),
         end=datetime(2026, 3, 1, 11, 0, tzinfo=UTC),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         event_id=event.id,
     )
     db_session.add(talk)
@@ -403,55 +404,55 @@ def test_talk_waveform_endpoint(
     db_session.refresh(talk)
 
     # 1. Unauthenticated request -> 401
-    assert client.get(f"/studio/talks/{talk.id}/waveform").status_code == 401
+    assert client.get(f'/studio/talks/{talk.id}/waveform').status_code == 401
 
     # 2. Authenticated but media not created yet -> returns empty peaks
     res_empty = client.get(
-        f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+        f'/studio/talks/{talk.id}/waveform', headers={'X-API-Key': api_key}
     )
     assert res_empty.status_code == 200
-    assert res_empty.json() == {"peaks": []}
+    assert res_empty.json() == {'peaks': []}
 
     # 3. Create clip with audio and store as preview.mp4
     clip = generate_clip(
-        1.0, has_audio=True, audio_waveform="tone", output_dir=tmp_path
+        1.0, has_audio=True, audio_waveform='tone', output_dir=tmp_path
     )
     try:
-        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
+        temp_storage.put(f'{talk.id}/preview/preview.mp4', clip)
 
         # A cache miss must not decode media on the request thread.
         res = client.get(
-            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+            f'/studio/talks/{talk.id}/waveform', headers={'X-API-Key': api_key}
         )
         assert res.status_code == 200
-        assert res.json() == {"peaks": []}
+        assert res.json() == {'peaks': []}
 
         # Background preview generation stores the waveform cache for later reads.
-        data = {"peaks": [0.25, 1.0, 0.5]}
+        data = {'peaks': [0.25, 1.0, 0.5]}
         temp_storage.put(
-            f"{talk.id}/preview/preview.mp4.waveform.json",
-            json.dumps(data).encode("utf-8"),
+            f'{talk.id}/preview/preview.mp4.waveform.json',
+            json.dumps(data).encode('utf-8'),
         )
         res_cached = client.get(
-            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+            f'/studio/talks/{talk.id}/waveform', headers={'X-API-Key': api_key}
         )
         assert res_cached.status_code == 200
         assert res_cached.json() == data
-        assert "peaks" in data
-        assert len(data["peaks"]) > 0
-        assert all(0.0 <= p <= 1.0 for p in data["peaks"])
+        assert 'peaks' in data
+        assert len(data['peaks']) > 0
+        assert all(0.0 <= p <= 1.0 for p in data['peaks'])
 
         # Subsequent fetches are served from cached JSON.
         res_cached_again = client.get(
-            f"/studio/talks/{talk.id}/waveform", headers={"X-API-Key": api_key}
+            f'/studio/talks/{talk.id}/waveform', headers={'X-API-Key': api_key}
         )
         assert res_cached_again.status_code == 200
         assert res_cached_again.json() == data
 
         # Query with explicit category and filename
         res_explicit = client.get(
-            f"/studio/talks/{talk.id}/waveform?category=preview&filename=preview.mp4",
-            headers={"X-API-Key": api_key},
+            f'/studio/talks/{talk.id}/waveform?category=preview&filename=preview.mp4',
+            headers={'X-API-Key': api_key},
         )
         assert res_explicit.status_code == 200
         assert res_explicit.json() == data
@@ -459,8 +460,8 @@ def test_talk_waveform_endpoint(
         # Invalid category -> 404
         assert (
             client.get(
-                f"/studio/talks/{talk.id}/waveform?category=invalid&filename=preview.mp4",
-                headers={"X-API-Key": api_key},
+                f'/studio/talks/{talk.id}/waveform?category=invalid&filename=preview.mp4',
+                headers={'X-API-Key': api_key},
             ).status_code
             == 404
         )
@@ -469,12 +470,12 @@ def test_talk_waveform_endpoint(
 
 
 def test_talk_patch_metadata(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -482,11 +483,11 @@ def test_talk_patch_metadata(client: TestClient, db_session: Session) -> None:
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Original Title",
-        room="Room A",
+        title='Original Title',
+        room='Room A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -494,23 +495,23 @@ def test_talk_patch_metadata(client: TestClient, db_session: Session) -> None:
 
     # Patch talk title & room
     res = client.patch(
-        f"/talks/{talk.id}",
-        json={"title": "Updated Title", "room": "Room B"},
-        headers={"X-API-Key": api_key},
+        f'/talks/{talk.id}',
+        json={'title': 'Updated Title', 'room': 'Room B'},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["title"] == "Updated Title"
-    assert data["room"] == "Room B"
+    assert data['title'] == 'Updated Title'
+    assert data['room'] == 'Room B'
 
 
 def test_talk_delete_single(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -518,22 +519,22 @@ def test_talk_delete_single(client: TestClient, db_session: Session) -> None:
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Delete Talk",
-        room="Room A",
+        title='Delete Talk',
+        room='Room A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     res = client.delete(
-        f"/talks/{talk.id}",
-        headers={"X-API-Key": api_key},
+        f'/talks/{talk.id}',
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
-    assert res.json()["deleted_id"] == talk.id
+    assert res.json()['deleted_id'] == talk.id
 
     # Verify talk is deleted
     assert (
@@ -542,12 +543,12 @@ def test_talk_delete_single(client: TestClient, db_session: Session) -> None:
 
 
 def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -555,19 +556,19 @@ def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
     now = datetime.now(tz=UTC)
     talk1 = models.Talk(
         event_id=event.id,
-        title="Bulk Talk 1",
-        room="Room A",
+        title='Bulk Talk 1',
+        room='Room A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
-        title="Bulk Talk 2",
-        room="Room B",
+        title='Bulk Talk 2',
+        room='Room B',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk1)
     db_session.add(talk2)
@@ -576,12 +577,12 @@ def test_talk_bulk_delete(client: TestClient, db_session: Session) -> None:
     db_session.refresh(talk2)
 
     res = client.post(
-        "/talks/bulk-delete",
-        json={"talk_ids": [talk1.id, talk2.id]},
-        headers={"X-API-Key": api_key},
+        '/talks/bulk-delete',
+        json={'talk_ids': [talk1.id, talk2.id]},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
-    assert res.json()["deleted_count"] == 2
+    assert res.json()['deleted_count'] == 2
 
 
 def test_talk_upload_recording(
@@ -590,12 +591,12 @@ def test_talk_upload_recording(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -603,11 +604,11 @@ def test_talk_upload_recording(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Upload Recording Talk",
-        room="Room A",
+        title='Upload Recording Talk',
+        room='Room A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -617,27 +618,27 @@ def test_talk_upload_recording(
     mock_queue = None
     try:
         with (
-            patch("app.routes.talks.light_queue") as mq,
-            patch("app.routes.talks.container_duration_seconds", return_value=5400.0),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue') as mq,
+            patch('app.routes.talks.container_duration_seconds', return_value=5400.0),
+            open(clip, 'rb') as f_vid,
         ):
             mock_queue = mq
             res = client.post(
-                f"/talks/{talk.id}/upload",
-                files={"file": ("recording.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                f'/talks/{talk.id}/upload',
+                files={'file': ('recording.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 202
-            assert res.json()["status"] == "waiting_for_files"
+            assert res.json()['status'] == 'waiting_for_files'
             mock_queue.enqueue.assert_called_once()
             call_args = mock_queue.enqueue.call_args
             enqueued_func = (
                 call_args.args[0]
                 if call_args and call_args.args
-                else (call_args.kwargs.get("func") if call_args else None)
+                else (call_args.kwargs.get('func') if call_args else None)
             )
             assert enqueued_func is not None
-            assert enqueued_func.__name__ == "job_ingest"
+            assert enqueued_func.__name__ == 'job_ingest'
     finally:
         clip.unlink(missing_ok=True)
         if mock_queue and mock_queue.enqueue.called:
@@ -647,9 +648,9 @@ def test_talk_upload_recording(
                 staged_path = call.args[2]
             elif call and call.kwargs:
                 staged_path = (
-                    call.kwargs.get("file_path")
-                    or call.kwargs.get("staging_path")
-                    or call.kwargs.get("staged_path")
+                    call.kwargs.get('file_path')
+                    or call.kwargs.get('staging_path')
+                    or call.kwargs.get('staged_path')
                 )
             if staged_path:
                 Path(staged_path).unlink(missing_ok=True)
@@ -662,16 +663,16 @@ def test_talk_upload_recording_with_ingest_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ingest_dir = tmp_path / "custom_ingest"
+    ingest_dir = tmp_path / 'custom_ingest'
     ingest_dir.mkdir()
-    monkeypatch.setattr(settings, "ingest_roots", [ingest_dir])
+    monkeypatch.setattr(settings, 'ingest_roots', [ingest_dir])
 
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -679,11 +680,11 @@ def test_talk_upload_recording_with_ingest_roots(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Upload Recording Ingest Root Talk",
-        room="Room B",
+        title='Upload Recording Ingest Root Talk',
+        room='Room B',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -693,15 +694,15 @@ def test_talk_upload_recording_with_ingest_roots(
     mock_queue = None
     try:
         with (
-            patch("app.routes.talks.light_queue") as mq,
-            patch("app.routes.talks.container_duration_seconds", return_value=5400.0),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue') as mq,
+            patch('app.routes.talks.container_duration_seconds', return_value=5400.0),
+            open(clip, 'rb') as f_vid,
         ):
             mock_queue = mq
             res = client.post(
-                f"/talks/{talk.id}/upload",
-                files={"file": ("recording.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                f'/talks/{talk.id}/upload',
+                files={'file': ('recording.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 202
             mock_queue.enqueue.assert_called_once()
@@ -718,7 +719,7 @@ def test_talk_upload_recording_with_ingest_roots(
 
 
 def test_import_schedule_json_list(client: TestClient, db_session: Session) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
@@ -730,39 +731,39 @@ def test_import_schedule_json_list(client: TestClient, db_session: Session) -> N
 
     schedule_payload = [
         {
-            "event_id": test_event_id,
-            "title": "Opening Keynote: Open Source AI Frontiers",
-            "room": "Hall 1",
-            "start": "2026-09-05T09:00:00Z",
-            "end": "2026-09-05T09:45:00Z",
+            'event_id': test_event_id,
+            'title': 'Opening Keynote: Open Source AI Frontiers',
+            'room': 'Hall 1',
+            'start': '2026-09-05T09:00:00Z',
+            'end': '2026-09-05T09:45:00Z',
         },
         {
-            "event_id": test_event_id,
-            "title": "Building Scalable Video Pipelines with PyAV",
-            "room": "Hall 1",
-            "start": "2026-09-05T10:00:00Z",
-            "end": "2026-09-05T10:45:00Z",
+            'event_id': test_event_id,
+            'title': 'Building Scalable Video Pipelines with PyAV',
+            'room': 'Hall 1',
+            'start': '2026-09-05T10:00:00Z',
+            'end': '2026-09-05T10:45:00Z',
         },
     ]
 
     res = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json=schedule_payload,
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "ok"
-    assert data["imported_count"] == 2
+    assert data['status'] == 'ok'
+    assert data['imported_count'] == 2
 
 
 def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -770,11 +771,11 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Job Polling Test Talk",
-        room="Hall 3",
+        title='Job Polling Test Talk',
+        room='Hall 3',
         start=now,
         end=now + timedelta(minutes=30),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
     )
     db_session.add(talk)
     db_session.commit()
@@ -782,8 +783,8 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         progress_pct=60.0,
         started_at=now - timedelta(seconds=15),
         updated_at=now,
@@ -792,41 +793,41 @@ def test_get_talk_jobs_endpoint(client: TestClient, db_session: Session) -> None
     db_session.commit()
 
     # 1. Unauthenticated request must be rejected
-    unauth_res = client.get(f"/talks/{talk.id}/jobs")
+    unauth_res = client.get(f'/talks/{talk.id}/jobs')
     assert unauth_res.status_code == 401
 
     # 2. Authenticated with wrong event scope must return 404
-    other_key = f"other_key_{uuid.uuid4().hex}"
+    other_key = f'other_key_{uuid.uuid4().hex}'
     other_client = models.Client(hashed_key=hash_api_key(other_key), event_ids=[999999])
     db_session.add(other_client)
     db_session.commit()
     scope_res = client.get(
-        f"/talks/{talk.id}/jobs",
-        headers={"X-API-Key": other_key},
+        f'/talks/{talk.id}/jobs',
+        headers={'X-API-Key': other_key},
     )
     assert scope_res.status_code == 404
 
     # 3. Authenticated authorized request succeeds
     res = client.get(
-        f"/talks/{talk.id}/jobs",
-        headers={"X-API-Key": api_key},
+        f'/talks/{talk.id}/jobs',
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "transcoding"
-    jobs = data["jobs"]
+    assert data['status'] == 'transcoding'
+    jobs = data['jobs']
     assert len(jobs) == 1
-    assert jobs[0]["kind"] == "transcode"
-    assert jobs[0]["status"] == "running"
-    assert jobs[0]["progress_pct"] == 60.0
-    assert jobs[0]["elapsed_time"] is not None
-    assert jobs[0]["estimated_remaining"] is not None
+    assert jobs[0]['kind'] == 'transcode'
+    assert jobs[0]['status'] == 'running'
+    assert jobs[0]['progress_pct'] == 60.0
+    assert jobs[0]['elapsed_time'] is not None
+    assert jobs[0]['estimated_remaining'] is not None
 
 
 def test_dashboard_and_studio_render_active_job_progress(
     client: TestClient, db_session: Session
 ) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -834,25 +835,25 @@ def test_dashboard_and_studio_render_active_job_progress(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Progress Render Talk",
-        room="Auditorium C",
+        title='Progress Render Talk',
+        room='Auditorium C',
         start=now,
         end=now + timedelta(minutes=45),
-        status="transcoding",
+        status=TalkStatus.TRANSCODING,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         progress_pct=72.0,
         started_at=now - timedelta(seconds=30),
         updated_at=now,
@@ -861,35 +862,35 @@ def test_dashboard_and_studio_render_active_job_progress(
     db_session.commit()
 
     # 1. Dashboard STATUS column should render clean status badge without progress bar or percentage
-    dash_res = client.get("/studio", headers={"X-API-Key": api_key})
+    dash_res = client.get('/studio', headers={'X-API-Key': api_key})
     assert dash_res.status_code == 200
-    assert "badge badge-processing" in dash_res.text
-    assert "Transcoding" in dash_res.text
-    assert "job-progress-col" not in dash_res.text
-    assert "72%" not in dash_res.text
+    assert 'badge badge-processing' in dash_res.text
+    assert 'Transcoding' in dash_res.text
+    assert 'job-progress-col' not in dash_res.text
+    assert '72%' not in dash_res.text
 
     # 2. Studio player viewport should render the prominent loader screen with progress bar & stage info
-    studio_res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    studio_res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert studio_res.status_code == 200
-    assert "studio-viewport-loader" in studio_res.text
-    assert "is-processing" in studio_res.text
-    assert "Transcoding Broadcast Master" in studio_res.text
-    assert "72%" in studio_res.text
-    assert "viewport-loader-desc" not in studio_res.text
-    assert "stepper-timeline" in studio_res.text
-    assert "Recent Jobs" not in studio_res.text
-    assert "job-card" not in studio_res.text
+    assert 'studio-viewport-loader' in studio_res.text
+    assert 'is-processing' in studio_res.text
+    assert 'Transcoding Broadcast Master' in studio_res.text
+    assert '72%' in studio_res.text
+    assert 'viewport-loader-desc' not in studio_res.text
+    assert 'stepper-timeline' in studio_res.text
+    assert 'Recent Jobs' not in studio_res.text
+    assert 'job-card' not in studio_res.text
 
 
 def test_studio_viewport_loader_states_and_dashboard_clean_status(
     client: TestClient, db_session: Session
 ) -> None:
-    event = models.Event(name=f"Loader Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Loader Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -898,11 +899,11 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
     # Test cutting state
     talk_cut = models.Talk(
         event_id=event.id,
-        title="Cutting Stage Talk",
-        room="Room 101",
+        title='Cutting Stage Talk',
+        room='Room 101',
         start=now,
         end=now + timedelta(minutes=30),
-        status="cutting",
+        status=TalkStatus.CUTTING,
     )
     db_session.add(talk_cut)
     db_session.commit()
@@ -910,8 +911,8 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
 
     job_cut = models.Job(
         talk_id=talk_cut.id,
-        kind="cut",
-        status="running",
+        kind=JobKind.CUT,
+        status=JobStatus.RUNNING,
         progress_pct=45.0,
         started_at=now - timedelta(seconds=10),
         updated_at=now,
@@ -920,96 +921,96 @@ def test_studio_viewport_loader_states_and_dashboard_clean_status(
     db_session.commit()
 
     # Studio should render loader with cutting stage title, progress pct, and timing
-    res = client.get(f"/studio/talks/{talk_cut.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk_cut.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "player-viewport-loader" in res.text
-    assert "is-active" in res.text
+    assert 'player-viewport-loader' in res.text
+    assert 'is-active' in res.text
     assert 'role="status"' in res.text
     assert 'aria-label="Video processing status"' in res.text
     assert '<span class="spinner spinner-lg" aria-hidden="true"></span>' in res.text
-    assert "Cutting Recording Bounds" in res.text
-    assert "viewport-loader-desc" not in res.text
-    assert "45%" in res.text
-    assert "seconds remaining" in res.text or "seconds elapsed" in res.text
+    assert 'Cutting Recording Bounds' in res.text
+    assert 'viewport-loader-desc' not in res.text
+    assert '45%' in res.text
+    assert 'seconds remaining' in res.text or 'seconds elapsed' in res.text
 
     # Dashboard should render Cutting badge without progress track
-    dash_res = client.get("/studio", headers={"X-API-Key": api_key})
+    dash_res = client.get('/studio', headers={'X-API-Key': api_key})
     assert dash_res.status_code == 200
-    assert "badge badge-processing" in dash_res.text
-    assert "Cutting" in dash_res.text
-    assert "job-progress-col" not in dash_res.text
+    assert 'badge badge-processing' in dash_res.text
+    assert 'Cutting' in dash_res.text
+    assert 'job-progress-col' not in dash_res.text
 
     # Non-processing talk (preview) should NOT have is-processing class on player-panel
     talk_preview = models.Talk(
         event_id=event.id,
-        title="Preview Ready Talk",
-        room="Room 102",
+        title='Preview Ready Talk',
+        room='Room 102',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk_preview)
     db_session.commit()
     db_session.refresh(talk_preview)
 
     prev_res = client.get(
-        f"/studio/talks/{talk_preview.id}", headers={"X-API-Key": api_key}
+        f'/studio/talks/{talk_preview.id}', headers={'X-API-Key': api_key}
     )
     assert prev_res.status_code == 200
     assert 'class="player-panel is-processing"' not in prev_res.text
-    assert "player-viewport-loader is-active" not in prev_res.text
+    assert 'player-viewport-loader is-active' not in prev_res.text
 
 
 def test_import_schedule_mm_ss_duration(
     client: TestClient, db_session: Session
 ) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     res = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "event_name": "Lightning Talks",
-            "title": "Short Demo",
-            "room": "Demo Pod",
-            "duration": "01:35",
-            "start": "2026-09-09T17:15:00Z",
+            'event_name': 'Lightning Talks',
+            'title': 'Short Demo',
+            'room': 'Demo Pod',
+            'duration': '01:35',
+            'start': '2026-09-09T17:15:00Z',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "ok"
-    assert data["imported_count"] == 1
+    assert data['status'] == 'ok'
+    assert data['imported_count'] == 1
 
     talk = db_session.scalar(
-        select(models.Talk).where(models.Talk.title == "Short Demo")
+        select(models.Talk).where(models.Talk.title == 'Short Demo')
     )
     assert talk is not None
     assert (talk.end - talk.start).total_seconds() == 95.0
 
 
 def test_import_schedule_suffix_units(client: TestClient, db_session: Session) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     res = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "event_name": "Lightning Talks",
-            "title": "30s Clip",
-            "room": "Demo Pod",
-            "duration": "30s",
-            "start": "2026-09-09T17:15:00Z",
+            'event_name': 'Lightning Talks',
+            'title': '30s Clip',
+            'room': 'Demo Pod',
+            'duration': '30s',
+            'start': '2026-09-09T17:15:00Z',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
-    talk = db_session.scalar(select(models.Talk).where(models.Talk.title == "30s Clip"))
+    talk = db_session.scalar(select(models.Talk).where(models.Talk.title == '30s Clip'))
     assert talk is not None
     assert (talk.end - talk.start).total_seconds() == 30.0
 
@@ -1018,12 +1019,12 @@ def test_ui_reject_talk_cleans_up_intermediates(
     client: TestClient, db_session: Session, fake_storage: FakeStorageBackend
 ) -> None:
     """Rejecting a talk in review removes cut/ and preview/ while preserving raw/."""
-    event = models.Event(name=f"Reject Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Reject Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"reject_key_{uuid.uuid4().hex}"
+    api_key = f'reject_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1031,36 +1032,36 @@ def test_ui_reject_talk_cleans_up_intermediates(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Talk To Reject",
-        room="Hall A",
+        title='Talk To Reject',
+        room='Hall A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    fake_storage.put(f"{talk.id}/raw/video.mp4", b"raw video")
+    fake_storage.put(f'{talk.id}/raw/video.mp4', b'raw video')
     for stage in INTERMEDIATE_STAGES:
-        fake_storage.put(f"{talk.id}/{stage}/{stage}.mp4", f"{stage} video".encode())
+        fake_storage.put(f'{talk.id}/{stage}/{stage}.mp4', f'{stage} video'.encode())
 
     app.dependency_overrides[get_storage_backend] = lambda: fake_storage
     try:
         res = client.post(
-            f"/talks/{talk.id}/review",
-            json={"decision": "reject", "note": "Not acceptable"},
-            headers={"X-API-Key": api_key},
+            f'/talks/{talk.id}/review',
+            json={'decision': 'reject', 'note': 'Not acceptable'},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200
-        assert res.json()["talk"]["status"] == "pending_bounds"
+        assert res.json()['talk']['status'] == 'pending_bounds'
 
         db_session.refresh(talk)
         assert talk.status == TalkStatus.PENDING_BOUNDS
 
-        assert fake_storage.exists(f"{talk.id}/raw/video.mp4")
+        assert fake_storage.exists(f'{talk.id}/raw/video.mp4')
         for stage in INTERMEDIATE_STAGES:
-            assert not fake_storage.exists(f"{talk.id}/{stage}/{stage}.mp4")
+            assert not fake_storage.exists(f'{talk.id}/{stage}/{stage}.mp4')
     finally:
         app.dependency_overrides.pop(get_storage_backend, None)
 
@@ -1069,12 +1070,12 @@ def test_ui_reject_talk_storage_delete_resilient(
     client: TestClient, db_session: Session
 ) -> None:
     """Storage deletion failure on talk rejection does not raise 500."""
-    event = models.Event(name=f"Reject Err Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Reject Err Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"reject_err_key_{uuid.uuid4().hex}"
+    api_key = f'reject_err_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1082,28 +1083,28 @@ def test_ui_reject_talk_storage_delete_resilient(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Talk To Reject Error",
-        room="Hall A",
+        title='Talk To Reject Error',
+        room='Hall A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Disk unavailable")
+    mock_storage.delete.side_effect = OSError('Disk unavailable')
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     try:
         res = client.post(
-            f"/talks/{talk.id}/review",
-            json={"decision": "reject", "note": "Rejected despite storage error"},
-            headers={"X-API-Key": api_key},
+            f'/talks/{talk.id}/review',
+            json={'decision': 'reject', 'note': 'Rejected despite storage error'},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200
-        assert res.json()["talk"]["status"] == "pending_bounds"
+        assert res.json()['talk']['status'] == 'pending_bounds'
 
         db_session.refresh(talk)
         assert talk.status == TalkStatus.PENDING_BOUNDS
@@ -1113,12 +1114,12 @@ def test_ui_reject_talk_storage_delete_resilient(
 
 
 def test_update_talk_validations(client: TestClient, db_session: Session) -> None:
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1126,11 +1127,11 @@ def test_update_talk_validations(client: TestClient, db_session: Session) -> Non
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Valid Title",
-        room="Room 1",
+        title='Valid Title',
+        room='Room 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -1138,48 +1139,48 @@ def test_update_talk_validations(client: TestClient, db_session: Session) -> Non
 
     # Blank title should fail with 400
     res_empty_title = client.patch(
-        f"/talks/{talk.id}",
-        json={"title": "   "},
-        headers={"X-API-Key": api_key},
+        f'/talks/{talk.id}',
+        json={'title': '   '},
+        headers={'X-API-Key': api_key},
     )
     assert res_empty_title.status_code == 400
-    assert "cannot be empty" in res_empty_title.json()["detail"]
+    assert 'cannot be empty' in res_empty_title.json()['detail']
 
     # End <= start should fail with 400
     res_bad_interval = client.patch(
-        f"/talks/{talk.id}",
-        json={"end": (now - timedelta(minutes=10)).isoformat()},
-        headers={"X-API-Key": api_key},
+        f'/talks/{talk.id}',
+        json={'end': (now - timedelta(minutes=10)).isoformat()},
+        headers={'X-API-Key': api_key},
     )
     assert res_bad_interval.status_code == 400
-    assert "after start time" in res_bad_interval.json()["detail"]
+    assert 'after start time' in res_bad_interval.json()['detail']
 
 
 def test_import_schedule_malformed_json_and_size_limit(
     client: TestClient, db_session: Session
 ) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     # Malformed JSON body returns 400
     res_bad_json = client.post(
-        "/talks/schedule/import",
-        content=b"{bad json",
-        headers={"Content-Type": "application/json", "X-API-Key": api_key},
+        '/talks/schedule/import',
+        content=b'{bad json',
+        headers={'Content-Type': 'application/json', 'X-API-Key': api_key},
     )
     assert res_bad_json.status_code == 400
 
     # Oversized content returns 413
-    oversized = b"x" * (11 * 1024 * 1024)
+    oversized = b'x' * (11 * 1024 * 1024)
     res_oversized = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         content=oversized,
         headers={
-            "Content-Type": "application/json",
-            "Content-Length": str(len(oversized)),
-            "X-API-Key": api_key,
+            'Content-Type': 'application/json',
+            'Content-Length': str(len(oversized)),
+            'X-API-Key': api_key,
         },
     )
     assert res_oversized.status_code == 413
@@ -1188,47 +1189,47 @@ def test_import_schedule_malformed_json_and_size_limit(
 def test_import_schedule_duration_validations(
     client: TestClient, db_session: Session
 ) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     # Negative duration in string format returns 400
     res_neg = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "title": "Negative Talk",
-            "duration": "-30s",
+            'title': 'Negative Talk',
+            'duration': '-30s',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res_neg.status_code == 400
-    assert "must be positive and finite" in res_neg.json()["detail"]
+    assert 'must be positive and finite' in res_neg.json()['detail']
 
     # Negative duration_seconds returns 400
     res_neg_sec = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "title": "Negative Sec Talk",
-            "duration_seconds": -100,
+            'title': 'Negative Sec Talk',
+            'duration_seconds': -100,
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res_neg_sec.status_code == 400
-    assert "must be positive and finite" in res_neg_sec.json()["detail"]
+    assert 'must be positive and finite' in res_neg_sec.json()['detail']
 
     # End before start returns 400
     res_bad_range = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "title": "Backwards Talk",
-            "start": "2026-09-09T17:15:00Z",
-            "end": "2026-09-09T16:15:00Z",
+            'title': 'Backwards Talk',
+            'start': '2026-09-09T17:15:00Z',
+            'end': '2026-09-09T16:15:00Z',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res_bad_range.status_code == 400
-    assert "after start time" in res_bad_range.json()["detail"]
+    assert 'after start time' in res_bad_range.json()['detail']
 
     # Atomicity: client event_ids should not have been updated when validation failed
     db_session.refresh(client_model)
@@ -1238,67 +1239,67 @@ def test_import_schedule_duration_validations(
 def test_import_schedule_preserves_event_name_and_atomic(
     client: TestClient, db_session: Session
 ) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
     # Successful import with event_name and talks list preserves event_name
     res = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "event_name": "Unique Atomic Event",
-            "talks": [
-                {"title": "Valid Talk 1", "room": "Room A", "duration": "30m"},
-                {"title": "Valid Talk 2", "room": "Room B", "duration": "45m"},
+            'event_name': 'Unique Atomic Event',
+            'talks': [
+                {'title': 'Valid Talk 1', 'room': 'Room A', 'duration': '30m'},
+                {'title': 'Valid Talk 2', 'room': 'Room B', 'duration': '45m'},
             ],
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["event_name"] == "Unique Atomic Event"
-    assert data["imported_count"] == 2
+    assert data['event_name'] == 'Unique Atomic Event'
+    assert data['imported_count'] == 2
 
     # Partial failure in batch doesn't import any talks or modify client event_ids for new event
     res_fail = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "event_name": "Failed Batch Event",
-            "talks": [
-                {"title": "Good Talk", "room": "Room A", "duration": "30m"},
-                {"title": "Bad Talk", "room": "Room B", "duration": "invalid_duration"},
+            'event_name': 'Failed Batch Event',
+            'talks': [
+                {'title': 'Good Talk', 'room': 'Room A', 'duration': '30m'},
+                {'title': 'Bad Talk', 'room': 'Room B', 'duration': 'invalid_duration'},
             ],
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res_fail.status_code == 400
     failed_ev = db_session.scalar(
-        select(models.Event).where(models.Event.name == "Failed Batch Event")
+        select(models.Event).where(models.Event.name == 'Failed Batch Event')
     )
     assert failed_ev is None
 
 
 def test_import_schedule_end_time_only(client: TestClient, db_session: Session) -> None:
-    api_key = f"import_test_key_{uuid.uuid4().hex}"
+    api_key = f'import_test_key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
     db_session.add(client_model)
     db_session.commit()
 
-    target_end = "2026-09-12T18:00:00Z"
+    target_end = '2026-09-12T18:00:00Z'
     res = client.post(
-        "/talks/schedule/import",
+        '/talks/schedule/import',
         json={
-            "title": "End Only Talk",
-            "room": "Room A",
-            "end": target_end,
-            "duration": "30m",
+            'title': 'End Only Talk',
+            'room': 'Room A',
+            'end': target_end,
+            'duration': '30m',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 200
     talk = db_session.scalar(
-        select(models.Talk).where(models.Talk.title == "End Only Talk")
+        select(models.Talk).where(models.Talk.title == 'End Only Talk')
     )
     assert talk is not None
     assert talk.end == datetime.fromisoformat(target_end)
@@ -1309,12 +1310,12 @@ def test_delete_talk_propagates_storage_error(
     client: TestClient, db_session: Session
 ) -> None:
     """When storage fails during talk deletion, an error is raised and the record is not deleted."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1322,23 +1323,23 @@ def test_delete_talk_propagates_storage_error(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Protected Talk",
-        room="Hall 1",
+        title='Protected Talk',
+        room='Hall 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     mock_storage = MagicMock()
-    mock_storage.delete.side_effect = RuntimeError("Disk failure")
+    mock_storage.delete.side_effect = OSError('Disk failure')
 
     app.dependency_overrides[get_storage_backend] = lambda: mock_storage
     try:
-        with pytest.raises(RuntimeError, match="Cleanup failed"):
-            client.delete(f"/talks/{talk.id}", headers={"X-API-Key": api_key})
+        with pytest.raises(RuntimeError, match='Cleanup failed'):
+            client.delete(f'/talks/{talk.id}', headers={'X-API-Key': api_key})
 
         # Ensure talk still exists in DB
         db_session.refresh(talk)
@@ -1347,9 +1348,13 @@ def test_delete_talk_propagates_storage_error(
         app.dependency_overrides.pop(get_storage_backend, None)
 
 
-def test_sidebar_declutter_and_buttons(client: TestClient) -> None:
+def test_sidebar_declutter_and_buttons(client: TestClient, db_session: Session) -> None:
     """Test sidebar declutter: only Events and Talks, no status filters, toggle button present."""
-    response = client.get("/studio")
+    api_key = f'key_{uuid.uuid4().hex}'
+    db_session.add(models.Client(hashed_key=hash_api_key(api_key), event_ids=[]))
+    db_session.commit()
+
+    response = client.get('/studio', headers={'X-API-Key': api_key})
     assert response.status_code == 200
 
     # Fixed topbar and toggle button are present
@@ -1360,24 +1365,24 @@ def test_sidebar_declutter_and_buttons(client: TestClient) -> None:
 
     # Talks link is present
     assert 'id="nav-talks-link"' in response.text
-    assert "Talks" in response.text
+    assert 'Talks' in response.text
 
     # Redundant status filter links are absent from sidebar
     assert 'href="/studio?status_filter=pending_approval"' not in response.text
     assert 'href="/studio?status_filter=preview"' not in response.text
     assert 'href="/studio?status_filter=done"' not in response.text
     assert 'href="/studio?status_filter=broken"' not in response.text
-    assert "REST API Docs" not in response.text
+    assert 'REST API Docs' not in response.text
 
 
 def test_studio_mode_body_class(client: TestClient, db_session: Session) -> None:
     """Test that Studio routes (/studio, /studio/events, /studio/talks/{id}) include is-studio-mode body class."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1385,66 +1390,75 @@ def test_studio_mode_body_class(client: TestClient, db_session: Session) -> None
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Studio Mode Talk",
-        room="Room 1",
+        title='Studio Mode Talk',
+        room='Room 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     # Talk studio view
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "is-studio-mode" in res.text
+    assert 'is-studio-mode' in res.text
     assert 'id="sidebar-toggle-btn"' in res.text
 
     # Talks dashboard view
-    res_dash = client.get("/studio", headers={"X-API-Key": api_key})
+    res_dash = client.get('/studio', headers={'X-API-Key': api_key})
     assert res_dash.status_code == 200
-    assert "is-studio-mode" in res_dash.text
+    assert 'is-studio-mode' in res_dash.text
 
     # Non-studio view should not have is-studio-mode
-    res_login = client.get("/login")
+    res_login = client.get('/login')
     assert res_login.status_code == 200
-    assert "is-studio-mode" not in res_login.text
+    assert 'is-studio-mode' not in res_login.text
+    assert 'id="app-sidebar"' not in res_login.text
+    assert 'id="sidebar-toggle-btn"' not in res_login.text
+
+    res_signup = client.get('/signup')
+    assert res_signup.status_code == 200
+    assert 'id="app-sidebar"' not in res_signup.text
+    assert 'id="sidebar-toggle-btn"' not in res_signup.text
 
 
 def test_studio_dashboard_with_slug_event_id_and_sso_token(
     client: TestClient, db_session: Session
 ) -> None:
     event = models.Event(
-        name="Slug Conf", source="eventyay", external_id="slug-conf-123"
+        name='Slug Conf', source='eventyay', external_id='slug-conf-123'
     )
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    token = create_sso_token(scope_type="event", scope_id=event.id, role="organizer")
+    token = create_sso_token(
+        scope_type='event', scope_id=event.id, role=AuthRole.ORGANIZER
+    )
 
     # Accessing /studio with a string slug in event_id alongside sso_token
     # should NOT fail with int_parsing 422, but successfully redirect with cookie
     res = client.get(
-        f"/studio?event_id=slug-conf-123&sso_token={token}",
+        f'/studio?event_id=slug-conf-123&sso_token={token}',
         follow_redirects=False,
     )
     assert res.status_code == 303
-    assert res.headers["location"] == f"/studio?event_id={event.id}"
-    assert "veditor_session" in res.cookies
+    assert res.headers['location'] == f'/studio?event_id={event.id}'
+    assert 'veditor_session' in res.cookies
 
 
 def test_studio_waiting_for_files_no_duplicate_upload(
     client: TestClient, db_session: Session
 ) -> None:
     """Test waiting_for_files status notice is shown and duplicate upload button is absent."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1452,8 +1466,8 @@ def test_studio_waiting_for_files_no_duplicate_upload(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Upload Waiting Talk",
-        status="waiting_for_files",
+        title='Upload Waiting Talk',
+        status=TalkStatus.WAITING_FILES,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1461,22 +1475,22 @@ def test_studio_waiting_for_files_no_duplicate_upload(
     db_session.commit()
     db_session.refresh(talk)
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "Status: Awaiting Recording Upload (Drop file in player)" in res.text
-    assert "btn-upload-recording" not in res.text
+    assert 'Status: Awaiting Recording Upload (Drop file in player)' in res.text
+    assert 'btn-upload-recording' not in res.text
 
 
 def test_studio_pending_approval_clean_gate1(
     client: TestClient, db_session: Session
 ) -> None:
     """Test Gate 1 pending_approval has clean buttons without notes textarea."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1484,8 +1498,8 @@ def test_studio_pending_approval_clean_gate1(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Gate 1 Talk",
-        status="pending_approval",
+        title='Gate 1 Talk',
+        status=TalkStatus.PENDING_APPROVAL,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1493,23 +1507,23 @@ def test_studio_pending_approval_clean_gate1(
     db_session.commit()
     db_session.refresh(talk)
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "Approve Raw Video" in res.text
-    assert "Reject Raw Video" in res.text
-    assert "review-notes-input" not in res.text
+    assert 'Approve Raw Video' in res.text
+    assert 'Reject Raw Video' in res.text
+    assert 'review-notes-input' not in res.text
 
 
 def test_studio_review_notes_present_for_preview(
     client: TestClient, db_session: Session
 ) -> None:
     """Test notes field is present for preview and needs_work review states."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1517,8 +1531,8 @@ def test_studio_review_notes_present_for_preview(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Preview Notes Talk",
-        status="preview",
+        title='Preview Notes Talk',
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1526,31 +1540,31 @@ def test_studio_review_notes_present_for_preview(
     db_session.commit()
     db_session.refresh(talk)
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "review-notes-input" in res.text
-    assert "Approve Video" in res.text
-    assert "Edit Video" in res.text
-    assert "Reset Video" in res.text
-    assert "btn-preview-help" in res.text
-    assert "preview-help-popover" in res.text
+    assert 'review-notes-input' in res.text
+    assert 'Approve Video' in res.text
+    assert 'Edit Video' in res.text
+    assert 'Reset Video' in res.text
+    assert 'btn-preview-help' in res.text
+    assert 'preview-help-popover' in res.text
 
     # Verify pending_bounds also renders review-notes-input, timestamps card, and 'Submit Timestamps'
     talk.status = TalkStatus.PENDING_BOUNDS
     talk.cut_start = 15.0
     talk.cut_end = 90.0
     db_session.commit()
-    res_bounds = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res_bounds = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res_bounds.status_code == 200
-    assert "review-notes-input" in res_bounds.text
-    assert "Submit Timestamps" in res_bounds.text
-    assert "submission-timestamps-card" in res_bounds.text
-    assert "Timestamps to Submit" in res_bounds.text
-    assert "review-in-point" in res_bounds.text
-    assert "review-out-point" in res_bounds.text
-    assert "review-duration" in res_bounds.text
-    assert "00:00:15.00" in res_bounds.text
-    assert "00:01:30.00" in res_bounds.text
+    assert 'review-notes-input' in res_bounds.text
+    assert 'Submit Timestamps' in res_bounds.text
+    assert 'submission-timestamps-card' in res_bounds.text
+    assert 'Timestamps to Submit' in res_bounds.text
+    assert 'review-in-point' in res_bounds.text
+    assert 'review-out-point' in res_bounds.text
+    assert 'review-duration' in res_bounds.text
+    assert '00:00:15.00' in res_bounds.text
+    assert '00:01:30.00' in res_bounds.text
 
 
 def test_studio_milestones_role_visibility(
@@ -1560,15 +1574,15 @@ def test_studio_milestones_role_visibility(
 
     # Create admin, organizer, and standard user
     admin = models.User(
-        email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password=hash_password("password123"),
-        role="admin",
+        email=f'admin_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password=hash_password('password123'),
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     organizer = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password=hash_password("password123"),
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password=hash_password('password123'),
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(admin)
@@ -1578,7 +1592,7 @@ def test_studio_milestones_role_visibility(
     db_session.refresh(organizer)
 
     event = models.Event(
-        name=f"Event {uuid.uuid4().hex}", created_by_user_id=organizer.id
+        name=f'Event {uuid.uuid4().hex}', created_by_user_id=organizer.id
     )
     db_session.add(event)
     db_session.commit()
@@ -1587,8 +1601,8 @@ def test_studio_milestones_role_visibility(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Milestone Visibility Talk",
-        status="preview",
+        title='Milestone Visibility Talk',
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1598,52 +1612,52 @@ def test_studio_milestones_role_visibility(
 
     # 1. Admin session sees milestones stepper & NO recent jobs
     admin_token = create_session_token(admin.id, admin.role)
-    client.cookies.set("veditor_session", admin_token)
-    res_admin = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', admin_token)
+    res_admin = client.get(f'/studio/talks/{talk.id}')
     assert res_admin.status_code == 200
-    assert "Pipeline Milestones" in res_admin.text
-    assert "stepper-timeline" in res_admin.text
-    assert "Recent Jobs" not in res_admin.text
+    assert 'Pipeline Milestones' in res_admin.text
+    assert 'stepper-timeline' in res_admin.text
+    assert 'Recent Jobs' not in res_admin.text
     assert 'id="jobs-container"' not in res_admin.text
 
     # 2. Organizer session sees milestones stepper & NO recent jobs
     org_token = create_session_token(organizer.id, organizer.role)
-    client.cookies.set("veditor_session", org_token)
-    res_org = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', org_token)
+    res_org = client.get(f'/studio/talks/{talk.id}')
     assert res_org.status_code == 200
-    assert "Pipeline Milestones" in res_org.text
-    assert "stepper-timeline" in res_org.text
-    assert "Recent Jobs" not in res_org.text
+    assert 'Pipeline Milestones' in res_org.text
+    assert 'stepper-timeline' in res_org.text
+    assert 'Recent Jobs' not in res_org.text
     assert 'id="jobs-container"' not in res_org.text
 
     # 3. Speaker SSO session does NOT see milestones stepper or recent jobs
     speaker_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type='talk', scope_id=talk.id, role=AuthRole.SPEAKER
     )
-    client.cookies.set("veditor_session", speaker_token)
-    res_speaker = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', speaker_token)
+    res_speaker = client.get(f'/studio/talks/{talk.id}')
     assert res_speaker.status_code == 200
-    assert "Pipeline Milestones" not in res_speaker.text
-    assert "stepper-timeline" not in res_speaker.text
-    assert "Recent Jobs" not in res_speaker.text
+    assert 'Pipeline Milestones' not in res_speaker.text
+    assert 'stepper-timeline' not in res_speaker.text
+    assert 'Recent Jobs' not in res_speaker.text
     assert 'id="jobs-container"' not in res_speaker.text
 
     # 4. Standard unauthorized user does NOT see talk studio
     std_user = models.User(
-        email=f"user_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password=hash_password("password123"),
-        role="user",
+        email=f'user_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password=hash_password('password123'),
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(std_user)
     db_session.commit()
     user_token = create_session_token(std_user.id, std_user.role)
-    client.cookies.set("veditor_session", user_token)
-    res_user = client.get(f"/studio/talks/{talk.id}")
-    assert res_user.status_code == 404 or "Pipeline Milestones" not in res_user.text
+    client.cookies.set('veditor_session', user_token)
+    res_user = client.get(f'/studio/talks/{talk.id}')
+    assert res_user.status_code == 404 or 'Pipeline Milestones' not in res_user.text
 
     # Clean up cookie
-    client.cookies.delete("veditor_session")
+    client.cookies.delete('veditor_session')
 
 
 def test_studio_organizer_bumper_studio_in_pending_intro_outro(
@@ -1652,9 +1666,9 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     """Test organizer Intro & Outro bumper studio card is rendered in pending_intro_outro."""
 
     organizer = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password=hash_password("password123"),
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password=hash_password('password123'),
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(organizer)
@@ -1662,7 +1676,7 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     db_session.refresh(organizer)
 
     event = models.Event(
-        name=f"Event {uuid.uuid4().hex}", created_by_user_id=organizer.id
+        name=f'Event {uuid.uuid4().hex}', created_by_user_id=organizer.id
     )
     db_session.add(event)
     db_session.commit()
@@ -1671,13 +1685,13 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Bumper Studio Talk",
-        status="pending_intro_outro",
+        title='Bumper Studio Talk',
+        status=TalkStatus.PENDING_INTRO_OUTRO,
         start=now,
         end=now + timedelta(minutes=30),
         include_intro=True,
-        intro_source="custom",
-        custom_intro_path="/tmp/custom_intro.mp4",
+        intro_source='custom',
+        custom_intro_path='/tmp/custom_intro.mp4',
         include_outro=False,
     )
     db_session.add(talk)
@@ -1686,10 +1700,10 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
 
     # 1. Standard session cookie organizer
     token = create_session_token(organizer.id, organizer.role)
-    client.cookies.set("veditor_session", token)
-    res = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', token)
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
-    assert "EVENT BRANDING & BUMPERS" in res.text
+    assert 'EVENT BRANDING & BUMPERS' in res.text
     assert 'id="check-include-intro"' in res.text
     assert 'name="intro_source"' in res.text
     assert 'id="custom-intro-file"' in res.text
@@ -1697,40 +1711,40 @@ def test_studio_organizer_bumper_studio_in_pending_intro_outro(
     assert 'id="check-include-outro"' in res.text
     assert 'name="outro_source"' in res.text
     assert 'id="custom-outro-file"' in res.text
-    assert "Handoff to Speaker" in res.text
+    assert 'Handoff to Speaker' in res.text
     assert 'id="handoff-speaker-email"' in res.text
-    assert "Assign Speaker (Email)" in res.text
+    assert 'Assign Speaker (Email)' in res.text
 
     # Verify talk with speaker_email already set renders assigned email display (no input)
-    talk.speaker_email = "presenter@example.com"
+    talk.speaker_email = 'presenter@example.com'
     db_session.commit()
-    res_with_speaker = client.get(f"/studio/talks/{talk.id}")
+    res_with_speaker = client.get(f'/studio/talks/{talk.id}')
     assert res_with_speaker.status_code == 200
     assert 'id="handoff-speaker-email"' not in res_with_speaker.text
-    assert "Assigned Speaker" in res_with_speaker.text
-    assert "presenter@example.com" in res_with_speaker.text
+    assert 'Assigned Speaker' in res_with_speaker.text
+    assert 'presenter@example.com' in res_with_speaker.text
 
     # 2. SSO Organizer session
     sso_org_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="organizer"
+        scope_type='talk', scope_id=talk.id, role=AuthRole.ORGANIZER
     )
-    client.cookies.set("veditor_session", sso_org_token)
-    res_sso = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', sso_org_token)
+    res_sso = client.get(f'/studio/talks/{talk.id}')
     assert res_sso.status_code == 200
-    assert "EVENT BRANDING & BUMPERS" in res_sso.text
-    client.cookies.delete("veditor_session")
+    assert 'EVENT BRANDING & BUMPERS' in res_sso.text
+    client.cookies.delete('veditor_session')
 
 
 def test_studio_minimizable_sidebar_controls(
     client: TestClient, db_session: Session
 ) -> None:
     """Test right panel minimize and restore button controls exist in DOM."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1738,8 +1752,8 @@ def test_studio_minimizable_sidebar_controls(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Sidebar Toggle Talk",
-        status="preview",
+        title='Sidebar Toggle Talk',
+        status=TalkStatus.PREVIEW,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1747,7 +1761,7 @@ def test_studio_minimizable_sidebar_controls(
     db_session.commit()
     db_session.refresh(talk)
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
     assert 'id="btn-toggle-right-panel"' in res.text
     assert 'id="btn-expand-right-panel"' in res.text
@@ -1761,12 +1775,12 @@ def test_studio_done_talk_download_actions(
     make_clip: Callable[..., Path],
 ) -> None:
     """Test studio provides prominent download action when talk is published and complete."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -1774,8 +1788,8 @@ def test_studio_done_talk_download_actions(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Published Keynote Talk",
-        status="done",
+        title='Published Keynote Talk',
+        status=TalkStatus.DONE,
         start=now,
         end=now + timedelta(minutes=30),
     )
@@ -1785,35 +1799,35 @@ def test_studio_done_talk_download_actions(
 
     clip = make_clip(duration_s=1.0)
     try:
-        temp_storage.put(f"{talk.id}/final/final.mp4", clip)
-        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
+        temp_storage.put(f'{talk.id}/final/final.mp4', clip)
+        temp_storage.put(f'{talk.id}/preview/preview.mp4', clip)
 
         # 1. Studio page renders download actions
-        res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+        res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
         assert res.status_code == 200
-        assert "Completed" in res.text
+        assert 'Completed' in res.text
         assert 'id="btn-download-master"' in res.text
-        assert "Download Master Video" in res.text
-        assert "download" in res.text
-        assert f"/studio/media/{talk.id}/final/final.mp4?download=true" in res.text
+        assert 'Download Master Video' in res.text
+        assert 'download' in res.text
+        assert f'/studio/media/{talk.id}/final/final.mp4?download=true' in res.text
 
         # 2. Media route with ?download=true sets Content-Disposition: attachment with safe filename
         download_res = client.get(
-            f"/studio/media/{talk.id}/final/final.mp4?download=true",
-            headers={"X-API-Key": api_key},
+            f'/studio/media/{talk.id}/final/final.mp4?download=true',
+            headers={'X-API-Key': api_key},
         )
         assert download_res.status_code == 200
-        content_disp = download_res.headers.get("content-disposition", "")
-        assert "attachment" in content_disp
-        assert "Published_Keynote_Talk_final.mp4" in content_disp
+        content_disp = download_res.headers.get('content-disposition', '')
+        assert 'attachment' in content_disp
+        assert 'Published_Keynote_Talk_final.mp4' in content_disp
 
         # 3. Media route without ?download=true allows normal inline streaming
         stream_res = client.get(
-            f"/studio/media/{talk.id}/final/final.mp4",
-            headers={"X-API-Key": api_key},
+            f'/studio/media/{talk.id}/final/final.mp4',
+            headers={'X-API-Key': api_key},
         )
         assert stream_res.status_code == 200
-        assert "attachment" not in stream_res.headers.get("content-disposition", "")
+        assert 'attachment' not in stream_res.headers.get('content-disposition', '')
     finally:
         clip.unlink(missing_ok=True)
 
@@ -1822,7 +1836,7 @@ def test_studio_speaker_timeline_omits_bumpers(
     client: TestClient, db_session: Session
 ) -> None:
     """When viewed with a speaker token, studio scrubber omits INTRO/OUTRO and enables speaker mode."""
-    event = models.Event(name=f"Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -1830,22 +1844,22 @@ def test_studio_speaker_timeline_omits_bumpers(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Speaker Talk",
-        room="Room 1",
+        title='Speaker Talk',
+        room='Room 1',
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     speaker_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type='talk', scope_id=talk.id, role=AuthRole.SPEAKER
     )
-    client.cookies.set("veditor_session", speaker_token)
+    client.cookies.set('veditor_session', speaker_token)
 
-    res = client.get(f"/studio/talks/{talk.id}")
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
 
     # Speaker must NOT see INTRO or OUTRO bumper blocks
@@ -1861,15 +1875,15 @@ def test_studio_organizer_timeline_omits_bumpers(
 ) -> None:
     """When viewed by an organizer, studio scrubber also omits INTRO and OUTRO bumper blocks from timeline."""
     org = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
 
-    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    event = models.Event(name=f'Event {uuid.uuid4().hex}', created_by_user_id=org.id)
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -1877,20 +1891,20 @@ def test_studio_organizer_timeline_omits_bumpers(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Organizer Talk",
-        room="Room 1",
+        title='Organizer Talk',
+        room='Room 1',
         start=now,
         end=now + timedelta(minutes=45),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     token = create_session_token(org.id, org.role)
-    client.cookies.set("veditor_session", token)
+    client.cookies.set('veditor_session', token)
 
-    res = client.get(f"/studio/talks/{talk.id}")
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
 
     # INTRO and OUTRO bumper blocks are NOT on the timeline
@@ -1905,15 +1919,15 @@ def test_studio_upload_pending_state_hides_timeline(
     client: TestClient, db_session: Session
 ) -> None:
     org = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
 
-    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=org.id)
+    event = models.Event(name=f'Event {uuid.uuid4().hex}', created_by_user_id=org.id)
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -1922,75 +1936,75 @@ def test_studio_upload_pending_state_hides_timeline(
     # 1. Talk in waiting_for_files state (upload pending)
     pending_talk = models.Talk(
         event_id=event.id,
-        title="Pending Upload Talk",
-        room="Hall 1",
+        title='Pending Upload Talk',
+        room='Hall 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     # 2. Talk in preview state (video available)
     ready_talk = models.Talk(
         event_id=event.id,
-        title="Ready Preview Talk",
-        room="Hall 2",
+        title='Ready Preview Talk',
+        room='Hall 2',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(pending_talk)
     db_session.add(ready_talk)
     db_session.commit()
 
     token = create_session_token(org.id, org.role)
-    client.cookies.set("veditor_session", token)
+    client.cookies.set('veditor_session', token)
 
     # When upload is pending:
-    res_pending = client.get(f"/studio/talks/{pending_talk.id}")
+    res_pending = client.get(f'/studio/talks/{pending_talk.id}')
     assert res_pending.status_code == 200
     # Shows the upload dropzone box and browse button
-    assert "upload-dropzone-box" in res_pending.text
-    assert "Attach Recording Video" in res_pending.text
+    assert 'upload-dropzone-box' in res_pending.text
+    assert 'Attach Recording Video' in res_pending.text
     assert 'id="btn-browse-file"' in res_pending.text
     assert 'id="video-file-input"' in res_pending.text
     # Hides timeline track, controls, and timecode bar
     assert 'id="timeline-track"' not in res_pending.text
-    assert "timeline-section" not in res_pending.text
-    assert "player-controls" not in res_pending.text
-    assert "timecode-bar" not in res_pending.text
+    assert 'timeline-section' not in res_pending.text
+    assert 'player-controls' not in res_pending.text
+    assert 'timecode-bar' not in res_pending.text
     assert 'id="main-video"' not in res_pending.text
 
     # When upload is complete / preview ready:
-    res_ready = client.get(f"/studio/talks/{ready_talk.id}")
+    res_ready = client.get(f'/studio/talks/{ready_talk.id}')
     assert res_ready.status_code == 200
     # Shows video player, timecode bar, player controls, and timeline track
     assert 'id="main-video"' in res_ready.text
-    assert "timecode-bar" in res_ready.text
-    assert "player-controls" in res_ready.text
-    assert "timeline-section" in res_ready.text
+    assert 'timecode-bar' in res_ready.text
+    assert 'player-controls' in res_ready.text
+    assert 'timeline-section' in res_ready.text
     assert 'id="timeline-track"' in res_ready.text
     assert 'id="timeline-ticks"' in res_ready.text
     # Does NOT show upload-pending-container
-    assert "upload-pending-container" not in res_ready.text
+    assert 'upload-pending-container' not in res_ready.text
     # Does NOT show cut bounds controls (only timeline scrub track for video)
     assert 'id="tl-start-marker"' not in res_ready.text
     assert 'id="tl-end-marker"' not in res_ready.text
     assert 'id="tl-content"' not in res_ready.text
     assert 'id="btn-set-in"' not in res_ready.text
-    assert "timeline-inputs-bar" not in res_ready.text
+    assert 'timeline-inputs-bar' not in res_ready.text
 
     # When bounds cutting is needed (pending_bounds or needs_work):
     bounds_talk = models.Talk(
         event_id=event.id,
-        title="Bounds Cut Talk",
-        room="Hall 3",
+        title='Bounds Cut Talk',
+        room='Hall 3',
         start=now,
         end=now + timedelta(minutes=30),
-        status="pending_bounds",
+        status=TalkStatus.PENDING_BOUNDS,
     )
     db_session.add(bounds_talk)
     db_session.commit()
 
-    res_bounds = client.get(f"/studio/talks/{bounds_talk.id}")
+    res_bounds = client.get(f'/studio/talks/{bounds_talk.id}')
     assert res_bounds.status_code == 200
     # Shows timeline AND cut bounds markers/inputs
     assert 'id="timeline-track"' in res_bounds.text
@@ -2001,14 +2015,14 @@ def test_studio_upload_pending_state_hides_timeline(
     assert 'id="btn-set-out"' in res_bounds.text
     assert 'id="cut-duration-badge"' in res_bounds.text
     assert 'id="btn-play-cut"' in res_bounds.text
-    assert "timeline-inputs-bar" in res_bounds.text
+    assert 'timeline-inputs-bar' in res_bounds.text
 
 
 def test_talk_studio_offset_aware_start_normalizes_to_utc(
     client: TestClient, db_session: Session
 ) -> None:
 
-    event = models.Event(name=f"TZ Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'TZ Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -2020,17 +2034,17 @@ def test_talk_studio_offset_aware_start_normalizes_to_utc(
 
     talk = models.Talk(
         event_id=event.id,
-        title="TZ Talk",
-        room="Hall A",
+        title='TZ Talk',
+        room='Hall A',
         start=start_ist,
         end=end_ist,
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(
         hashed_key=hash_api_key(api_key),
         event_ids=[event.id],
@@ -2038,16 +2052,16 @@ def test_talk_studio_offset_aware_start_normalizes_to_utc(
     db_session.add(client_model)
     db_session.commit()
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "Sep 15, 10:00 – 10:45 UTC" in res.text
-    assert "(45m)" in res.text
+    assert 'Sep 15, 10:00 – 10:45 UTC' in res.text
+    assert '(45m)' in res.text
 
 
 def test_talk_studio_duration_with_seconds_remainder(
     client: TestClient, db_session: Session
 ) -> None:
-    event = models.Event(name=f"Remainder Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Remainder Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -2055,17 +2069,17 @@ def test_talk_studio_duration_with_seconds_remainder(
     now = datetime(2026, 9, 15, 10, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Short Talk",
-        room="Hall B",
+        title='Short Talk',
+        room='Hall B',
         start=now,
         end=now + timedelta(seconds=90),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(
         hashed_key=hash_api_key(api_key),
         event_ids=[event.id],
@@ -2073,10 +2087,10 @@ def test_talk_studio_duration_with_seconds_remainder(
     db_session.add(client_model)
     db_session.commit()
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "Sep 15, 10:00 – 10:01 UTC" in res.text
-    assert "(1m 30s)" in res.text
+    assert 'Sep 15, 10:00 – 10:01 UTC' in res.text
+    assert '(1m 30s)' in res.text
 
 
 def test_user_menu_accessibility_attributes(
@@ -2084,9 +2098,9 @@ def test_user_menu_accessibility_attributes(
 ) -> None:
 
     user = models.User(
-        email="a11y@test.com",
-        hashed_password="hash",
-        role="organizer",
+        email='a11y@test.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(user)
@@ -2094,9 +2108,9 @@ def test_user_menu_accessibility_attributes(
     db_session.refresh(user)
 
     session_token = create_session_token(user_id=user.id, role=user.role)
-    client.cookies.set("veditor_session", session_token)
+    client.cookies.set('veditor_session', session_token)
 
-    res = client.get("/studio")
+    res = client.get('/studio')
     assert res.status_code == 200
     assert 'aria-label="User menu"' in res.text
     assert 'aria-expanded="false"' in res.text
@@ -2110,7 +2124,7 @@ def test_talk_studio_media_source_selector_and_download(
     tmp_path: Path,
 ) -> None:
 
-    event = models.Event(name=f"Media Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'Media Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -2118,17 +2132,17 @@ def test_talk_studio_media_source_selector_and_download(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Media Talk",
-        room="Hall C",
+        title='Media Talk',
+        room='Hall C',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(
         hashed_key=hash_api_key(api_key),
         event_ids=[event.id],
@@ -2137,28 +2151,28 @@ def test_talk_studio_media_source_selector_and_download(
     db_session.commit()
 
     # When no media files exist
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
     assert 'id="media-source-select"' not in res.text
 
     # Store raw, preview, cut, and final
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        temp_storage.put(f"{talk.id}/raw/raw.mp4", clip)
-        temp_storage.put(f"{talk.id}/preview/preview.mp4", clip)
-        temp_storage.put(f"{talk.id}/cut/cut.mp4", clip)
-        temp_storage.put(f"{talk.id}/final/final.mp4", clip)
+        temp_storage.put(f'{talk.id}/raw/raw.mp4', clip)
+        temp_storage.put(f'{talk.id}/preview/preview.mp4', clip)
+        temp_storage.put(f'{talk.id}/cut/cut.mp4', clip)
+        temp_storage.put(f'{talk.id}/final/final.mp4', clip)
 
-        res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+        res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
         assert res.status_code == 200
         assert 'id="media-source-select"' in res.text
         assert 'id="media-download-btn"' in res.text
-        assert "Master Video (Final)" in res.text
-        assert "Preview Video" in res.text
-        assert "Raw Recording" in res.text
+        assert 'Master Video (Final)' in res.text
+        assert 'Preview Video' in res.text
+        assert 'Raw Recording' in res.text
         # Cut is internal intermediate and should NOT be shown in the UI source dropdown
-        assert "Cut Talk Clip" not in res.text
-        assert f"/studio/media/{talk.id}/cut/cut.mp4" not in res.text
+        assert 'Cut Talk Clip' not in res.text
+        assert f'/studio/media/{talk.id}/cut/cut.mp4' not in res.text
     finally:
         clip.unlink(missing_ok=True)
 
@@ -2168,9 +2182,9 @@ def test_talk_studio_speaker_mode_body_class(
 ) -> None:
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex}@test.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex}@test.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(org_user)
@@ -2178,7 +2192,7 @@ def test_talk_studio_speaker_mode_body_class(
     db_session.refresh(org_user)
 
     event = models.Event(
-        name=f"Speaker Mode Event {uuid.uuid4().hex}",
+        name=f'Speaker Mode Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2188,18 +2202,18 @@ def test_talk_studio_speaker_mode_body_class(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Speaker Mode Talk",
-        room="Hall D",
+        title='Speaker Mode Talk',
+        room='Hall D',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
     db_session.refresh(talk)
 
     # API key only (no user session) -> treated as speaker mode
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(
         hashed_key=hash_api_key(api_key),
         event_ids=[event.id],
@@ -2207,40 +2221,40 @@ def test_talk_studio_speaker_mode_body_class(
     db_session.add(client_model)
     db_session.commit()
 
-    res = client.get(f"/studio/talks/{talk.id}", headers={"X-API-Key": api_key})
+    res = client.get(f'/studio/talks/{talk.id}', headers={'X-API-Key': api_key})
     assert res.status_code == 200
-    assert "is-speaker" in res.text
+    assert 'is-speaker' in res.text
     assert 'id="sidebar-toggle-btn"' in res.text
     assert 'id="app-sidebar"' in res.text
 
     # Organizer session -> NOT speaker mode
     session_token = create_session_token(user_id=org_user.id, role=org_user.role)
-    client.cookies.set("veditor_session", session_token)
+    client.cookies.set('veditor_session', session_token)
 
-    res_org = client.get(f"/studio/talks/{talk.id}")
+    res_org = client.get(f'/studio/talks/{talk.id}')
     assert res_org.status_code == 200
-    assert "is-speaker" not in res_org.text
+    assert 'is-speaker' not in res_org.text
     assert 'id="sidebar-toggle-btn"' in res_org.text
     assert 'id="app-sidebar"' in res_org.text
 
     # SSO Organizer session -> NOT speaker mode
 
     sso_org_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="organizer"
+        scope_type='talk', scope_id=talk.id, role=AuthRole.ORGANIZER
     )
-    client.cookies.set("veditor_session", sso_org_token)
-    res_sso_org = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', sso_org_token)
+    res_sso_org = client.get(f'/studio/talks/{talk.id}')
     assert res_sso_org.status_code == 200
-    assert "is-speaker" not in res_sso_org.text
+    assert 'is-speaker' not in res_sso_org.text
 
     # SSO Speaker session -> IS speaker mode
     sso_spk_token = create_sso_token(
-        scope_type="talk", scope_id=talk.id, role="speaker"
+        scope_type='talk', scope_id=talk.id, role=AuthRole.SPEAKER
     )
-    client.cookies.set("veditor_session", sso_spk_token)
-    res_sso_spk = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', sso_spk_token)
+    res_sso_spk = client.get(f'/studio/talks/{talk.id}')
     assert res_sso_spk.status_code == 200
-    assert "is-speaker" in res_sso_spk.text
+    assert 'is-speaker' in res_sso_spk.text
 
 
 def test_talk_studio_speaker_preview_quality_notice(
@@ -2249,14 +2263,14 @@ def test_talk_studio_speaker_preview_quality_notice(
     """Test low-quality preview notice is displayed when viewing preview in speaker mode."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
-        email="speaker@domain.com",
-        hashed_password="hash",
-        role="speaker",
+        email='speaker@domain.com',
+        hashed_password='hash',
+        role=AuthRole.SPEAKER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2265,7 +2279,7 @@ def test_talk_studio_speaker_preview_quality_notice(
     db_session.refresh(speaker_user)
 
     event = models.Event(
-        name=f"Preview Notice Event {uuid.uuid4().hex}",
+        name=f'Preview Notice Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2275,12 +2289,12 @@ def test_talk_studio_speaker_preview_quality_notice(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Preview Quality Talk",
-        room="Hall P",
+        title='Preview Quality Talk',
+        room='Hall P',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
-        speaker_email="speaker@domain.com",
+        status=TalkStatus.PREVIEW,
+        speaker_email='speaker@domain.com',
     )
     db_session.add(talk)
     db_session.commit()
@@ -2290,16 +2304,16 @@ def test_talk_studio_speaker_preview_quality_notice(
     speaker_token = create_session_token(
         user_id=speaker_user.id, role=speaker_user.role
     )
-    client.cookies.set("veditor_session", speaker_token)
-    res_speaker = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', speaker_token)
+    res_speaker = client.get(f'/studio/talks/{talk.id}')
     assert res_speaker.status_code == 200
     assert 'id="preview-quality-notice"' in res_speaker.text
-    assert "Low-Quality Preview" in res_speaker.text
+    assert 'Low-Quality Preview' in res_speaker.text
 
     # 2. Organizer session -> preview quality notice is omitted
     org_token = create_session_token(user_id=org_user.id, role=org_user.role)
-    client.cookies.set("veditor_session", org_token)
-    res_org = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', org_token)
+    res_org = client.get(f'/studio/talks/{talk.id}')
     assert res_org.status_code == 200
     assert 'id="preview-quality-notice"' not in res_org.text
 
@@ -2308,19 +2322,19 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
     """Verify speaker and user roles cannot see management and delete buttons on dashboard."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
-        email="speaker_dash@domain.com",
-        hashed_password="hash",
-        role="speaker",
+        email='speaker_dash@domain.com',
+        hashed_password='hash',
+        role=AuthRole.SPEAKER,
     )
     regular_user = models.User(
-        email=f"user_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="user",
+        email=f'user_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.USER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2328,7 +2342,7 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
     db_session.commit()
 
     event = models.Event(
-        name=f"Dashboard Visibility Event {uuid.uuid4().hex}",
+        name=f'Dashboard Visibility Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2338,12 +2352,12 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Dashboard Visibility Talk",
-        room="Hall D",
+        title='Dashboard Visibility Talk',
+        room='Hall D',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="speaker_dash@domain.com",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='speaker_dash@domain.com',
     )
     db_session.add(talk)
     db_session.commit()
@@ -2353,7 +2367,7 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
         'id="btn-open-import"',
         'id="btn-open-room-attach"',
         'id="btn-open-quick-talk"',
-        "btn-delete-talk",
+        'btn-delete-talk',
         'id="bulk-actions-bar"',
         'id="select-all-talks"',
         'class="talk-checkbox"',
@@ -2367,28 +2381,28 @@ def test_dashboard_role_visibility(client: TestClient, db_session: Session) -> N
     speaker_token = create_session_token(
         user_id=speaker_user.id, role=speaker_user.role
     )
-    client.cookies.set("veditor_session", speaker_token)
-    res_speaker = client.get("/studio")
+    client.cookies.set('veditor_session', speaker_token)
+    res_speaker = client.get('/studio')
     assert res_speaker.status_code == 200
-    assert "Dashboard Visibility Talk" in res_speaker.text
-    assert "Open Studio" in res_speaker.text
+    assert 'Dashboard Visibility Talk' in res_speaker.text
+    assert 'Open Studio' in res_speaker.text
     for elem in restricted_elements:
         assert elem not in res_speaker.text
 
     # 2. Regular user session: cannot see restricted controls
     user_token = create_session_token(user_id=regular_user.id, role=regular_user.role)
-    client.cookies.set("veditor_session", user_token)
-    res_user = client.get("/studio")
+    client.cookies.set('veditor_session', user_token)
+    res_user = client.get('/studio')
     assert res_user.status_code == 200
     for elem in restricted_elements:
         assert elem not in res_user.text
 
     # 3. Organizer session: can see all management controls
     org_token = create_session_token(user_id=org_user.id, role=org_user.role)
-    client.cookies.set("veditor_session", org_token)
-    res_org = client.get("/studio")
+    client.cookies.set('veditor_session', org_token)
+    res_org = client.get('/studio')
     assert res_org.status_code == 200
-    assert "Dashboard Visibility Talk" in res_org.text
+    assert 'Dashboard Visibility Talk' in res_org.text
     for elem in restricted_elements:
         assert elem in res_org.text
 
@@ -2399,9 +2413,9 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     """Verify Reset to Raw modal is present and extra-step btn-retry is absent in studio UI."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex}@test.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex}@test.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     db_session.add(org_user)
@@ -2409,7 +2423,7 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     db_session.refresh(org_user)
 
     event = models.Event(
-        name=f"Modal Test Event {uuid.uuid4().hex}",
+        name=f'Modal Test Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2419,11 +2433,11 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Reset Raw Modal Talk",
-        room="Main Hall",
+        title='Reset Raw Modal Talk',
+        room='Main Hall',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
         cut_start=10.0,
         cut_end=20.0,
     )
@@ -2432,20 +2446,20 @@ def test_talk_studio_reset_to_raw_modal_and_no_retry_button(
     db_session.refresh(talk)
 
     token = create_session_token(user_id=org_user.id, role=org_user.role)
-    client.cookies.set("veditor_session", token)
+    client.cookies.set('veditor_session', token)
 
-    res = client.get(f"/studio/talks/{talk.id}")
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
     # Native website modal elements for resetting to raw
     assert 'id="modal-reset-raw"' in res.text
     assert 'id="btn-confirm-reset-raw"' in res.text
     assert 'id="btn-cancel-reset-raw-modal"' in res.text
     assert 'id="btn-close-reset-raw-modal"' in res.text
-    assert "Reset Video" in res.text
+    assert 'Reset Video' in res.text
     assert 'id="btn-reject"' in res.text
     # Ensure extra step retry lifecycle button is removed
     assert 'id="btn-retry"' not in res.text
-    assert "Retry Talk Lifecycle" not in res.text
+    assert 'Retry Talk Lifecycle' not in res.text
 
 
 def test_dashboard_speaker_email_case_insensitivity(
@@ -2454,25 +2468,25 @@ def test_dashboard_speaker_email_case_insensitivity(
     """Verify that speaker dashboard queries match talks case-insensitively while respecting event_id."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
-        email="Speaker.Case@Example.com",
-        hashed_password="hash",
-        role="speaker",
+        email='Speaker.Case@Example.com',
+        hashed_password='hash',
+        role=AuthRole.SPEAKER,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
     db_session.commit()
 
     event1 = models.Event(
-        name=f"Event 1 {uuid.uuid4().hex}",
+        name=f'Event 1 {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     event2 = models.Event(
-        name=f"Event 2 {uuid.uuid4().hex}",
+        name=f'Event 2 {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event1)
@@ -2482,30 +2496,30 @@ def test_dashboard_speaker_email_case_insensitivity(
     now = datetime.now(tz=UTC)
     talk1 = models.Talk(
         event_id=event1.id,
-        title="Matching Talk Upper",
-        room="Room 1",
+        title='Matching Talk Upper',
+        room='Room 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="SPEAKER.CASE@EXAMPLE.COM",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='SPEAKER.CASE@EXAMPLE.COM',
     )
     talk2 = models.Talk(
         event_id=event2.id,
-        title="Matching Talk Lower",
-        room="Room 2",
+        title='Matching Talk Lower',
+        room='Room 2',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="speaker.case@example.com",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='speaker.case@example.com',
     )
     talk_other = models.Talk(
         event_id=event1.id,
-        title="Unrelated Other Talk",
-        room="Room 3",
+        title='Unrelated Other Talk',
+        room='Room 3',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="someone.else@example.com",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='someone.else@example.com',
     )
     db_session.add(talk1)
     db_session.add(talk2)
@@ -2513,21 +2527,21 @@ def test_dashboard_speaker_email_case_insensitivity(
     db_session.commit()
 
     token = create_session_token(user_id=speaker_user.id, role=speaker_user.role)
-    client.cookies.set("veditor_session", token)
+    client.cookies.set('veditor_session', token)
 
     # 1. Unfiltered dashboard shows both case-matching talks, excludes unrelated talk
-    res = client.get("/studio")
+    res = client.get('/studio')
     assert res.status_code == 200
-    assert "Matching Talk Upper" in res.text
-    assert "Matching Talk Lower" in res.text
-    assert "Unrelated Other Talk" not in res.text
+    assert 'Matching Talk Upper' in res.text
+    assert 'Matching Talk Lower' in res.text
+    assert 'Unrelated Other Talk' not in res.text
 
     # 2. Filtered dashboard by event_id shows only matching talk in that event
-    res_event1 = client.get(f"/studio?event_id={event1.id}")
+    res_event1 = client.get(f'/studio?event_id={event1.id}')
     assert res_event1.status_code == 200
-    assert "Matching Talk Upper" in res_event1.text
-    assert "Matching Talk Lower" not in res_event1.text
-    assert "Unrelated Other Talk" not in res_event1.text
+    assert 'Matching Talk Upper' in res_event1.text
+    assert 'Matching Talk Lower' not in res_event1.text
+    assert 'Unrelated Other Talk' not in res_event1.text
 
 
 def test_talk_jobs_log_path_gated_for_speakers(
@@ -2536,19 +2550,19 @@ def test_talk_jobs_log_path_gated_for_speakers(
     """Verify speakers can view talk jobs status and progress but never log_path, preserving it for organizer/admin."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     speaker_user = models.User(
-        email="speaker.dev@example.com",
-        hashed_password="hash",
-        role="speaker",
+        email='speaker.dev@example.com',
+        hashed_password='hash',
+        role=AuthRole.SPEAKER,
     )
     admin_user = models.User(
-        email=f"admin_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="admin",
+        email=f'admin_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ADMIN,
     )
     db_session.add(org_user)
     db_session.add(speaker_user)
@@ -2556,7 +2570,7 @@ def test_talk_jobs_log_path_gated_for_speakers(
     db_session.commit()
 
     event = models.Event(
-        name=f"Event {uuid.uuid4().hex}",
+        name=f'Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2565,21 +2579,21 @@ def test_talk_jobs_log_path_gated_for_speakers(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Job Log Security Talk",
-        room="Hall Security",
+        title='Job Log Security Talk',
+        room='Hall Security',
         start=now,
         end=now + timedelta(minutes=30),
-        status="transcoding",
-        speaker_email="SPEAKER.DEV@EXAMPLE.COM",
+        status=TalkStatus.TRANSCODING,
+        speaker_email='SPEAKER.DEV@EXAMPLE.COM',
     )
     db_session.add(talk)
     db_session.commit()
 
-    log_key = f"{talk.id}/logs/job_sensitive.log"
+    log_key = f'{talk.id}/logs/job_sensitive.log'
     job = models.Job(
         talk_id=talk.id,
-        kind="transcode",
-        status="running",
+        kind=JobKind.TRANSCODE,
+        status=JobStatus.RUNNING,
         progress_pct=45.0,
         log_path=log_key,
         started_at=now - timedelta(seconds=20),
@@ -2592,30 +2606,30 @@ def test_talk_jobs_log_path_gated_for_speakers(
     speaker_token = create_session_token(
         user_id=speaker_user.id, role=speaker_user.role
     )
-    client.cookies.set("veditor_session", speaker_token)
-    res_speaker = client.get(f"/talks/{talk.id}/jobs")
+    client.cookies.set('veditor_session', speaker_token)
+    res_speaker = client.get(f'/talks/{talk.id}/jobs')
     assert res_speaker.status_code == 200
     data_speaker = res_speaker.json()
-    assert data_speaker["status"] == "transcoding"
-    assert len(data_speaker["jobs"]) == 1
-    assert data_speaker["jobs"][0]["progress_pct"] == 45.0
-    assert data_speaker["jobs"][0]["log_path"] is None
+    assert data_speaker['status'] == 'transcoding'
+    assert len(data_speaker['jobs']) == 1
+    assert data_speaker['jobs'][0]['progress_pct'] == 45.0
+    assert data_speaker['jobs'][0]['log_path'] is None
 
     # 2. Organizer session: preserves log_path
     org_token = create_session_token(user_id=org_user.id, role=org_user.role)
-    client.cookies.set("veditor_session", org_token)
-    res_org = client.get(f"/talks/{talk.id}/jobs")
+    client.cookies.set('veditor_session', org_token)
+    res_org = client.get(f'/talks/{talk.id}/jobs')
     assert res_org.status_code == 200
     data_org = res_org.json()
-    assert data_org["jobs"][0]["log_path"] == log_key
+    assert data_org['jobs'][0]['log_path'] == log_key
 
     # 3. Admin session: preserves log_path
     admin_token = create_session_token(user_id=admin_user.id, role=admin_user.role)
-    client.cookies.set("veditor_session", admin_token)
-    res_admin = client.get(f"/talks/{talk.id}/jobs")
+    client.cookies.set('veditor_session', admin_token)
+    res_admin = client.get(f'/talks/{talk.id}/jobs')
     assert res_admin.status_code == 200
     data_admin = res_admin.json()
-    assert data_admin["jobs"][0]["log_path"] == log_key
+    assert data_admin['jobs'][0]['log_path'] == log_key
 
 
 def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
@@ -2624,15 +2638,15 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
     """Verify event-scoped speaker SSO tokens only view and access assigned talks in the event."""
 
     org_user = models.User(
-        email=f"org_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org_user)
     db_session.commit()
 
     event = models.Event(
-        name=f"SSO Event {uuid.uuid4().hex}",
+        name=f'SSO Event {uuid.uuid4().hex}',
         created_by_user_id=org_user.id,
     )
     db_session.add(event)
@@ -2641,69 +2655,69 @@ def test_event_scoped_speaker_sso_talk_filtering_and_authorization(
     now = datetime.now(tz=UTC)
     my_talk = models.Talk(
         event_id=event.id,
-        title="Speaker Assigned Talk",
-        room="Hall 1",
+        title='Speaker Assigned Talk',
+        room='Hall 1',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="speaker.auth@example.com",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='speaker.auth@example.com',
     )
     other_talk = models.Talk(
         event_id=event.id,
-        title="Other Speaker Talk",
-        room="Hall 2",
+        title='Other Speaker Talk',
+        room='Hall 2',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
-        speaker_email="someone.else@example.com",
+        status=TalkStatus.WAITING_FILES,
+        speaker_email='someone.else@example.com',
     )
     db_session.add(my_talk)
     db_session.add(other_talk)
     db_session.commit()
 
     sso_token = create_sso_token(
-        scope_type="event",
+        scope_type='event',
         scope_id=event.id,
-        role="speaker",
-        email="speaker.auth@example.com",
-        display_name="Assigned Speaker",
+        role=AuthRole.SPEAKER,
+        email='speaker.auth@example.com',
+        display_name='Assigned Speaker',
     )
-    client.cookies.set("veditor_session", sso_token)
+    client.cookies.set('veditor_session', sso_token)
 
     # 1. Dashboard only shows assigned talk, excludes other talk in same event
-    res_dash = client.get("/studio")
+    res_dash = client.get('/studio')
     assert res_dash.status_code == 200
-    assert "Speaker Assigned Talk" in res_dash.text
-    assert "Other Speaker Talk" not in res_dash.text
+    assert 'Speaker Assigned Talk' in res_dash.text
+    assert 'Other Speaker Talk' not in res_dash.text
 
     # 2. Studio editor allows access to assigned talk
-    res_my_talk = client.get(f"/studio/talks/{my_talk.id}")
+    res_my_talk = client.get(f'/studio/talks/{my_talk.id}')
     assert res_my_talk.status_code == 200
-    assert "Speaker Assigned Talk" in res_my_talk.text
+    assert 'Speaker Assigned Talk' in res_my_talk.text
 
     # 3. Studio editor rejects access to other speaker's talk in same event (404)
-    res_other_talk = client.get(f"/studio/talks/{other_talk.id}")
+    res_other_talk = client.get(f'/studio/talks/{other_talk.id}')
     assert res_other_talk.status_code == 404
 
     # 4. Direct query-param handoff for assigned talk succeeds (303)
-    client.cookies.delete("veditor_session")
+    client.cookies.delete('veditor_session')
     res_handoff_my = client.get(
-        f"/studio/talks/{my_talk.id}?sso_token={sso_token}", follow_redirects=False
+        f'/studio/talks/{my_talk.id}?sso_token={sso_token}', follow_redirects=False
     )
     assert res_handoff_my.status_code == 303
 
     # 5. Direct query-param handoff for unrelated talk is forbidden (403)
     res_handoff_other = client.get(
-        f"/studio/talks/{other_talk.id}?sso_token={sso_token}", follow_redirects=False
+        f'/studio/talks/{other_talk.id}?sso_token={sso_token}', follow_redirects=False
     )
     assert res_handoff_other.status_code == 403
 
     # 6. Backend API with check_talk_access allows assigned talk and forbids other talk
-    client.cookies.set("veditor_session", sso_token)
-    res_api_my = client.get(f"/talks/{my_talk.id}")
+    client.cookies.set('veditor_session', sso_token)
+    res_api_my = client.get(f'/talks/{my_talk.id}')
     assert res_api_my.status_code == 200
 
-    res_api_other = client.get(f"/talks/{other_talk.id}")
+    res_api_other = client.get(f'/talks/{other_talk.id}')
     assert res_api_other.status_code == 403
 
 
@@ -2714,11 +2728,11 @@ def test_attach_room_recording_multi_talk(
     tmp_path: Path,
 ) -> None:
     user = models.User(
-        email="org@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email='org@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
-    event = models.Event(name="Summit 2026", created_by_user=user)
+    event = models.Event(name='Summit 2026', created_by_user=user)
     db_session.add(user)
     db_session.add(event)
     db_session.commit()
@@ -2726,41 +2740,41 @@ def test_attach_room_recording_multi_talk(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk1 = models.Talk(
         event_id=event.id,
-        title="Opening Keynote",
-        room="Main Auditorium",
+        title='Opening Keynote',
+        room='Main Auditorium',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
-        title="Deep Dive AI",
-        room="Main Auditorium",
+        title='Deep Dive AI',
+        room='Main Auditorium',
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk3 = models.Talk(
         event_id=event.id,
-        title="Panel Discussion",
-        room="Main Auditorium",
+        title='Panel Discussion',
+        room='Main Auditorium',
         start=now + timedelta(minutes=60),
         end=now + timedelta(minutes=90),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_other = models.Talk(
         event_id=event.id,
-        title="Workshop in Room B",
-        room="Room B",
+        title='Workshop in Room B',
+        room='Room B',
         start=now,
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     for t in [talk1, talk2, talk3, talk_other]:
         db_session.add(t)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -2768,25 +2782,25 @@ def test_attach_room_recording_multi_talk(
     clip = generate_clip(1.0, output_dir=tmp_path)
     try:
         with (
-            patch("app.routes.talks.light_queue") as mq,
-            patch("app.routes.talks.container_duration_seconds", return_value=5400.0),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue') as mq,
+            patch('app.routes.talks.container_duration_seconds', return_value=5400.0),
+            open(clip, 'rb') as f_vid,
         ):
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Main Auditorium",
-                    "event_id": str(event.id),
+                    'room': 'Main Auditorium',
+                    'event_id': str(event.id),
                 },
-                files={"file": ("morning_session.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('morning_session.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 200, res.text
             data = res.json()
-            assert data["attached_count"] == 3
-            assert data["room"] == "Main Auditorium"
-            assert data["event_id"] == event.id
-            assert set(data["talk_ids"]) == {talk1.id, talk2.id, talk3.id}
+            assert data['attached_count'] == 3
+            assert data['room'] == 'Main Auditorium'
+            assert data['event_id'] == event.id
+            assert set(data['talk_ids']) == {talk1.id, talk2.id, talk3.id}
 
             db_session.refresh(talk1)
             db_session.refresh(talk2)
@@ -2799,9 +2813,9 @@ def test_attach_room_recording_multi_talk(
             assert talk_other.status == TalkStatus.WAITING_FILES
 
             # Check zero-copy hardlink: same inode on local disk backend
-            p1 = temp_storage.get(f"{talk1.id}/raw/raw.mp4")
-            p2 = temp_storage.get(f"{talk2.id}/raw/raw.mp4")
-            p3 = temp_storage.get(f"{talk3.id}/raw/raw.mp4")
+            p1 = temp_storage.get(f'{talk1.id}/raw/raw.mp4')
+            p2 = temp_storage.get(f'{talk2.id}/raw/raw.mp4')
+            p3 = temp_storage.get(f'{talk3.id}/raw/raw.mp4')
             assert p1.stat().st_ino == p2.stat().st_ino == p3.stat().st_ino
 
             # Check queued jobs
@@ -2818,11 +2832,11 @@ def test_attach_room_recording_with_recording_start_filter(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Filter Event")
+    event = models.Event(name='Filter Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -2830,19 +2844,19 @@ def test_attach_room_recording_with_recording_start_filter(
     day_start = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk_morning = models.Talk(
         event_id=event.id,
-        title="Morning Session",
-        room="Track 1",
+        title='Morning Session',
+        room='Track 1',
         start=day_start,
         end=day_start + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_afternoon = models.Talk(
         event_id=event.id,
-        title="Afternoon Session",
-        room="Track 1",
+        title='Afternoon Session',
+        room='Track 1',
         start=day_start + timedelta(hours=5),
         end=day_start + timedelta(hours=5, minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk_morning)
     db_session.add(talk_afternoon)
@@ -2851,23 +2865,23 @@ def test_attach_room_recording_with_recording_start_filter(
     clip = generate_clip(1.0, output_dir=tmp_path)
     try:
         with (
-            patch("app.routes.talks.light_queue"),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue'),
+            open(clip, 'rb') as f_vid,
         ):
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Track 1",
-                    "event_id": str(event.id),
-                    "recording_start": day_start.isoformat(),
+                    'room': 'Track 1',
+                    'event_id': str(event.id),
+                    'recording_start': day_start.isoformat(),
                 },
-                files={"file": ("morning.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('morning.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 200, res.text
             data = res.json()
-            assert data["attached_count"] == 1
-            assert data["talk_ids"] == [talk_morning.id]
+            assert data['attached_count'] == 1
+            assert data['talk_ids'] == [talk_morning.id]
 
             db_session.refresh(talk_morning)
             db_session.refresh(talk_afternoon)
@@ -2883,11 +2897,11 @@ def test_attach_room_recording_no_waiting_talks_conflict(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Conflict Event")
+    event = models.Event(name='Conflict Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -2895,29 +2909,29 @@ def test_attach_room_recording_no_waiting_talks_conflict(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Already Processed",
-        room="Track A",
+        title='Already Processed',
+        room='Track A',
         start=now,
         end=now + timedelta(minutes=30),
-        status="done",
+        status=TalkStatus.DONE,
     )
     db_session.add(talk)
     db_session.commit()
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        with open(clip, "rb") as f_vid:
+        with open(clip, 'rb') as f_vid:
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Track A",
-                    "event_id": str(event.id),
+                    'room': 'Track A',
+                    'event_id': str(event.id),
                 },
-                files={"file": ("conflict.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('conflict.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 409
-            assert "waiting for files" in res.json()["detail"].lower()
+            assert 'waiting for files' in res.json()['detail'].lower()
     finally:
         clip.unlink(missing_ok=True)
 
@@ -2929,17 +2943,17 @@ def test_attach_room_recording_from_ingest_roots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ingest_dir = tmp_path / "ingest_root"
+    ingest_dir = tmp_path / 'ingest_root'
     ingest_dir.mkdir()
-    monkeypatch.setattr("app.config.settings.ingest_roots", [ingest_dir])
+    monkeypatch.setattr('app.config.settings.ingest_roots', [ingest_dir])
 
     clip = generate_clip(0.5, output_dir=ingest_dir)
 
-    event = models.Event(name="Ingest Root Event")
+    event = models.Event(name='Ingest Root Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -2947,27 +2961,27 @@ def test_attach_room_recording_from_ingest_roots(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Ingest Root Session",
-        room="Hall B",
+        title='Ingest Root Session',
+        room='Hall B',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
 
-    with patch("app.routes.talks.light_queue"):
+    with patch('app.routes.talks.light_queue'):
         res = client.post(
-            "/talks/room/attach-recording",
-            json={
-                "room": "Hall B",
-                "event_id": event.id,
-                "relative_key": clip.name,
+            '/talks/room/attach-recording',
+            data={
+                'room': 'Hall B',
+                'event_id': str(event.id),
+                'relative_key': clip.name,
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200, res.text
-        assert res.json()["attached_count"] == 1
+        assert res.json()['attached_count'] == 1
         # Ingest source file must still exist
         assert clip.is_file()
 
@@ -2979,8 +2993,8 @@ def test_attach_room_recording_unauthorized(
     client: TestClient, db_session: Session
 ) -> None:
     res = client.post(
-        "/talks/room/attach-recording",
-        data={"room": "Hall 1"},
+        '/talks/room/attach-recording',
+        data={'room': 'Hall 1'},
     )
     assert res.status_code == 401
 
@@ -2991,11 +3005,11 @@ def test_attach_room_recording_studio_alias(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Alias Event")
+    event = models.Event(name='Alias Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -3003,26 +3017,26 @@ def test_attach_room_recording_studio_alias(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Alias Session",
-        room="Hall C",
+        title='Alias Session',
+        room='Hall C',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+        with patch('app.routes.talks.light_queue'), open(clip, 'rb') as f_vid:
             res = client.post(
-                "/studio/room/attach-recording",
-                data={"room": "Hall C", "event_id": str(event.id)},
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                '/studio/room/attach-recording',
+                data={'room': 'Hall C', 'event_id': str(event.id)},
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 200
-            assert res.json()["attached_count"] == 1
+            assert res.json()['attached_count'] == 1
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3031,28 +3045,28 @@ def test_link_or_copy_fallback_preserves_source_for_multiple_talks(
     tmp_path: Path,
 ) -> None:
 
-    storage = LocalDiskBackend(data_dir=tmp_path / "storage")
-    source_file = storage.get_temp_dir() / "shared_recording.mp4"
+    storage = LocalDiskBackend(data_dir=tmp_path / 'storage')
+    source_file = storage.get_temp_dir() / 'shared_recording.mp4'
     source_file.parent.mkdir(parents=True, exist_ok=True)
-    source_file.write_bytes(b"video content bytes for multi talk attachment")
+    source_file.write_bytes(b'video content bytes for multi talk attachment')
 
     # Simulate cross-device or unsupported hardlinks by forcing os.link to raise OSError
-    with patch("os.link", side_effect=OSError("Cross-device link")):
-        storage.link_or_copy("talk_1/raw/raw.mp4", source_file)
+    with patch('os.link', side_effect=OSError('Cross-device link')):
+        storage.link_or_copy('talk_1/raw/raw.mp4', source_file)
         # Verify source file still exists and was not moved or deleted!
         assert source_file.exists(), (
-            "source file must not be deleted or moved during fallback copy"
+            'source file must not be deleted or moved during fallback copy'
         )
         assert (
-            storage.get("talk_1/raw/raw.mp4").read_bytes()
-            == b"video content bytes for multi talk attachment"
+            storage.get('talk_1/raw/raw.mp4').read_bytes()
+            == b'video content bytes for multi talk attachment'
         )
 
         # Attach second talk with the same source file
-        storage.link_or_copy("talk_2/raw/raw.mp4", source_file)
+        storage.link_or_copy('talk_2/raw/raw.mp4', source_file)
         assert (
-            storage.get("talk_2/raw/raw.mp4").read_bytes()
-            == b"video content bytes for multi talk attachment"
+            storage.get('talk_2/raw/raw.mp4').read_bytes()
+            == b'video content bytes for multi talk attachment'
         )
         assert source_file.exists()
 
@@ -3065,7 +3079,7 @@ def test_attach_room_recording_sso_discovery_without_event_id(
 ) -> None:
 
     event = models.Event(
-        name="SSO Room Event",
+        name='SSO Room Event',
     )
     db_session.add(event)
     db_session.commit()
@@ -3073,11 +3087,11 @@ def test_attach_room_recording_sso_discovery_without_event_id(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="SSO Talk",
-        room="Hall SSO",
+        title='SSO Talk',
+        room='Hall SSO',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3085,20 +3099,20 @@ def test_attach_room_recording_sso_discovery_without_event_id(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=888,
         role=AuthRole.ORGANIZER,
-        source="sso",
+        source='sso',
         event_ids=[event.id],
     )
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+        with patch('app.routes.talks.light_queue'), open(clip, 'rb') as f_vid:
             res = client.post(
-                "/talks/room/attach-recording",
-                data={"room": "Hall SSO"},  # Note: event_id is omitted!
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                '/talks/room/attach-recording',
+                data={'room': 'Hall SSO'},  # Note: event_id is omitted!
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
             )
             assert res.status_code == 200
-            assert res.json()["attached_count"] == 1
+            assert res.json()['attached_count'] == 1
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         clip.unlink(missing_ok=True)
@@ -3110,11 +3124,11 @@ def test_attach_room_recording_staging_failure_cleans_up(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Rollback Event")
+    event = models.Event(name='Rollback Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -3122,19 +3136,19 @@ def test_attach_room_recording_staging_failure_cleans_up(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     t1 = models.Talk(
         event_id=event.id,
-        title="Talk 1",
-        room="Rollback Room",
+        title='Talk 1',
+        room='Rollback Room',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t2 = models.Talk(
         event_id=event.id,
-        title="Talk 2",
-        room="Rollback Room",
+        title='Talk 2',
+        room='Rollback Room',
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.add(t2)
@@ -3148,27 +3162,27 @@ def test_attach_room_recording_staging_failure_cleans_up(
         nonlocal call_count
         call_count += 1
         if call_count == 2:
-            raise RuntimeError("Disk write failed on talk 2")
+            raise RuntimeError('Disk write failed on talk 2')
         return real_link_or_copy(key, source)
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         with (
             pytest.raises(RuntimeError),
-            patch("app.routes.talks.container_duration_seconds", return_value=3600.0),
-            patch.object(temp_storage, "link_or_copy", side_effect=mock_link_or_copy),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.container_duration_seconds', return_value=3600.0),
+            patch.object(temp_storage, 'link_or_copy', side_effect=mock_link_or_copy),
+            open(clip, 'rb') as f_vid,
         ):
             client.post(
-                "/talks/room/attach-recording",
-                data={"room": "Rollback Room", "event_id": str(event.id)},
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                '/talks/room/attach-recording',
+                data={'room': 'Rollback Room', 'event_id': str(event.id)},
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
 
         # Assert talk 1 raw file was cleaned up on failure!
-        assert not temp_storage.exists(f"{t1_id}/raw/raw.mp4")
-        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
+        assert not temp_storage.exists(f'{t1_id}/raw/raw.mp4')
+        assert not temp_storage.exists(f'{t2_id}/raw/raw.mp4')
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3181,7 +3195,7 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
 ) -> None:
 
     event = models.Event(
-        name="Platform Room Event",
+        name='Platform Room Event',
     )
     db_session.add(event)
     db_session.commit()
@@ -3189,11 +3203,11 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Platform Talk",
-        room="Hall Platform",
+        title='Platform Talk',
+        room='Hall Platform',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3202,21 +3216,21 @@ def test_attach_room_recording_platform_client_discovery_without_event_id(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=1,
         role=AuthRole.ADMIN,
-        source="api_key",
+        source='api_key',
         event_ids=[],
         is_platform=True,
     )
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        with patch("app.routes.talks.light_queue"), open(clip, "rb") as f_vid:
+        with patch('app.routes.talks.light_queue'), open(clip, 'rb') as f_vid:
             res = client.post(
-                "/talks/room/attach-recording",
-                data={"room": "Hall Platform"},
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
+                '/talks/room/attach-recording',
+                data={'room': 'Hall Platform'},
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
             )
             assert res.status_code == 200
-            assert res.json()["attached_count"] == 1
+            assert res.json()['attached_count'] == 1
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         clip.unlink(missing_ok=True)
@@ -3229,11 +3243,11 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     tmp_path: Path,
 ) -> None:
 
-    event = models.Event(name="Restore Event")
+    event = models.Event(name='Restore Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -3241,19 +3255,19 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     t1 = models.Talk(
         event_id=event.id,
-        title="Talk 1 Already Detecting",
-        room="Restore Room",
+        title='Talk 1 Already Detecting',
+        room='Restore Room',
         start=now,
         end=now + timedelta(minutes=30),
-        status="detecting",
+        status=TalkStatus.DETECTING,
     )
     t2 = models.Talk(
         event_id=event.id,
-        title="Talk 2",
-        room="Restore Room",
+        title='Talk 2',
+        room='Restore Room',
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.add(t2)
@@ -3261,8 +3275,8 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     t1_id, t2_id = t1.id, t2.id
 
     # Seed existing raw file for Talk 1
-    t1_orig_bytes = b"original existing raw content for talk 1"
-    temp_storage.put(f"{t1_id}/raw/raw.mp4", t1_orig_bytes)
+    t1_orig_bytes = b'original existing raw content for talk 1'
+    temp_storage.put(f'{t1_id}/raw/raw.mp4', t1_orig_bytes)
 
     real_link_or_copy = temp_storage.link_or_copy
     calls: list[str] = []
@@ -3270,31 +3284,31 @@ def test_attach_room_recording_staging_failure_restores_existing_raw(
     def mock_link_or_copy(key: str, source: Path) -> None:
         calls.append(key)
         # Fail when staging talk 2
-        if key == f"{t2_id}/raw/raw.mp4":
-            raise RuntimeError("Simulated failure on talk 2")
+        if key == f'{t2_id}/raw/raw.mp4':
+            raise RuntimeError('Simulated failure on talk 2')
         return real_link_or_copy(key, source)
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         with (
             pytest.raises(RuntimeError),
-            patch("app.routes.talks.container_duration_seconds", return_value=3600.0),
-            patch.object(temp_storage, "link_or_copy", side_effect=mock_link_or_copy),
-            patch("app.routes.talks._cancel_talk_jobs") as mock_cancel,
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.container_duration_seconds', return_value=3600.0),
+            patch.object(temp_storage, 'link_or_copy', side_effect=mock_link_or_copy),
+            patch('app.routes.talks._cancel_talk_jobs') as mock_cancel,
+            open(clip, 'rb') as f_vid,
         ):
             client.post(
-                "/talks/room/attach-recording",
-                data={"room": "Restore Room", "event_id": str(event.id)},
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                '/talks/room/attach-recording',
+                data={'room': 'Restore Room', 'event_id': str(event.id)},
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
 
         # Talk 1 original raw file must be preserved / restored!
-        assert temp_storage.exists(f"{t1_id}/raw/raw.mp4")
-        assert temp_storage.get(f"{t1_id}/raw/raw.mp4").read_bytes() == t1_orig_bytes
+        assert temp_storage.exists(f'{t1_id}/raw/raw.mp4')
+        assert temp_storage.get(f'{t1_id}/raw/raw.mp4').read_bytes() == t1_orig_bytes
         # Talk 2 raw file should not exist
-        assert not temp_storage.exists(f"{t2_id}/raw/raw.mp4")
+        assert not temp_storage.exists(f'{t2_id}/raw/raw.mp4')
         # _cancel_talk_jobs is called prior to staging to prevent in-flight workers from touching overwritten assets
         mock_cancel.assert_called_once_with(t1_id)
     finally:
@@ -3307,11 +3321,11 @@ def test_attach_room_recording_talk_starts_before_recording(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Overlap Event")
+    event = models.Event(name='Overlap Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -3320,11 +3334,11 @@ def test_attach_room_recording_talk_starts_before_recording(
     # Talk starts at 9:00, ends at 9:30
     talk = models.Talk(
         event_id=event.id,
-        title="Session Started Early",
-        room="Auditorium C",
+        title='Session Started Early',
+        room='Auditorium C',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3334,24 +3348,24 @@ def test_attach_room_recording_talk_starts_before_recording(
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         with (
-            patch("app.routes.talks.light_queue"),
-            patch("app.routes.talks.container_duration_seconds", return_value=1500.0),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue'),
+            patch('app.routes.talks.container_duration_seconds', return_value=1500.0),
+            open(clip, 'rb') as f_vid,
         ):
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Auditorium C",
-                    "event_id": str(event.id),
-                    "recording_start": rec_start.isoformat(),
+                    'room': 'Auditorium C',
+                    'event_id': str(event.id),
+                    'recording_start': rec_start.isoformat(),
                 },
-                files={"file": ("recording.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('recording.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 200, res.text
             data = res.json()
-            assert data["attached_count"] == 1
-            assert data["talk_ids"] == [talk.id]
+            assert data['attached_count'] == 1
+            assert data['talk_ids'] == [talk.id]
 
             db_session.refresh(talk)
             # Talk started before recording, so cut_start must be 0.0 and cut_end must be 25 mins (1500.0s)
@@ -3367,11 +3381,11 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
     temp_storage: LocalDiskBackend,
     tmp_path: Path,
 ) -> None:
-    event = models.Event(name="Window Exclude Event")
+    event = models.Event(name='Window Exclude Event')
     db_session.add(event)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
@@ -3379,19 +3393,19 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk_day1 = models.Talk(
         event_id=event.id,
-        title="Day 1 Talk",
-        room="Room Window",
+        title='Day 1 Talk',
+        room='Room Window',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk_day2 = models.Talk(
         event_id=event.id,
-        title="Day 2 Talk",
-        room="Room Window",
+        title='Day 2 Talk',
+        room='Room Window',
         start=now + timedelta(days=1),
         end=now + timedelta(days=1, minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk_day1)
     db_session.add(talk_day2)
@@ -3400,26 +3414,26 @@ def test_attach_room_recording_omitted_start_excludes_out_of_window_talks(
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         with (
-            patch("app.routes.talks.light_queue"),
+            patch('app.routes.talks.light_queue'),
             # 45-minute recording starting at talk_day1 start time (9:00 to 9:45)
-            patch("app.routes.talks.container_duration_seconds", return_value=2700.0),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.container_duration_seconds', return_value=2700.0),
+            open(clip, 'rb') as f_vid,
         ):
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Room Window",
-                    "event_id": str(event.id),
-                    "target_date": "2026-09-25",
+                    'room': 'Room Window',
+                    'event_id': str(event.id),
+                    'target_date': '2026-09-25',
                 },
-                files={"file": ("day1_recording.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('day1_recording.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 200, res.text
             data = res.json()
             # Must attach only day 1 talk; day 2 talk is outside [rec_start, rec_end]
-            assert data["attached_count"] == 1
-            assert data["talk_ids"] == [talk_day1.id]
+            assert data['attached_count'] == 1
+            assert data['talk_ids'] == [talk_day1.id]
 
             db_session.refresh(talk_day1)
             db_session.refresh(talk_day2)
@@ -3437,7 +3451,7 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
 ) -> None:
 
     event = models.Event(
-        name="Enqueue Failure Room Event",
+        name='Enqueue Failure Room Event',
     )
     db_session.add(event)
     db_session.commit()
@@ -3445,11 +3459,11 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Enqueue Fail Talk",
-        room="Hall Fail",
+        title='Enqueue Fail Talk',
+        room='Hall Fail',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3457,28 +3471,28 @@ def test_attach_room_recording_enqueue_failure_marks_talks_broken(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         user_id=888,
         role=AuthRole.ADMIN,
-        source="jwt",
+        source='jwt',
         event_ids=[event.id],
     )
 
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
         mock_light_q = MagicMock()
-        mock_light_q.enqueue.side_effect = RedisError("Simulated Redis outage")
+        mock_light_q.enqueue.side_effect = RedisError('Simulated Redis outage')
         with (
-            patch("app.routes.talks.light_queue", mock_light_q),
-            open(clip, "rb") as f_vid,
+            patch('app.routes.talks.light_queue', mock_light_q),
+            open(clip, 'rb') as f_vid,
         ):
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Hall Fail",
-                    "event_id": str(event.id),
+                    'room': 'Hall Fail',
+                    'event_id': str(event.id),
                 },
-                files={"file": ("recording.mp4", f_vid, "video/mp4")},
+                files={'file': ('recording.mp4', f_vid, 'video/mp4')},
             )
             assert res.status_code == 503
-            assert "Detection queue is unavailable" in res.json()["detail"]
+            assert 'Detection queue is unavailable' in res.json()['detail']
 
             db_session.refresh(talk)
             assert talk.status == TalkStatus.BROKEN
@@ -3492,7 +3506,7 @@ def test_sso_organizer_management_controls_visible(
 ) -> None:
     """Verify organizers arriving via SSO have full access to management buttons while speakers do not."""
 
-    event = models.Event(name=f"SSO Org Event {uuid.uuid4().hex}")
+    event = models.Event(name=f'SSO Org Event {uuid.uuid4().hex}')
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -3500,10 +3514,10 @@ def test_sso_organizer_management_controls_visible(
     now_utc = datetime.now(UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Keynote Session",
-        speaker_email="speaker.sso@example.com",
-        status="waiting_for_files",
-        room="Auditorium A",
+        title='Keynote Session',
+        speaker_email='speaker.sso@example.com',
+        status=TalkStatus.WAITING_FILES,
+        room='Auditorium A',
         start=now_utc,
         end=now_utc + timedelta(minutes=30),
     )
@@ -3513,39 +3527,39 @@ def test_sso_organizer_management_controls_visible(
 
     # 1. Organizer via SSO
     org_token = create_sso_token(
-        scope_type="event", scope_id=event.id, role="organizer"
+        scope_type='event', scope_id=event.id, role=AuthRole.ORGANIZER
     )
-    client.cookies.set("veditor_session", org_token)
+    client.cookies.set('veditor_session', org_token)
 
-    res_org_dash = client.get(f"/studio?event_id={event.id}")
+    res_org_dash = client.get(f'/studio?event_id={event.id}')
     assert res_org_dash.status_code == 200
     assert 'id="btn-open-room-attach"' in res_org_dash.text
     assert 'id="modal-attach-room"' in res_org_dash.text
     assert 'id="btn-open-import"' not in res_org_dash.text
     assert 'id="btn-open-quick-talk"' not in res_org_dash.text
 
-    res_org_studio = client.get(f"/studio/talks/{talk.id}")
+    res_org_studio = client.get(f'/studio/talks/{talk.id}')
     assert res_org_studio.status_code == 200
     assert 'id="btn-edit-talk-studio"' not in res_org_studio.text
     assert 'id="modal-edit-talk-studio"' not in res_org_studio.text
 
     # 2. Speaker via SSO
     spk_token = create_sso_token(
-        scope_type="event",
+        scope_type='event',
         scope_id=event.id,
-        role="speaker",
-        email="speaker.sso@example.com",
+        role=AuthRole.SPEAKER,
+        email='speaker.sso@example.com',
     )
-    client.cookies.set("veditor_session", spk_token)
+    client.cookies.set('veditor_session', spk_token)
 
-    res_spk_dash = client.get(f"/studio?event_id={event.id}")
+    res_spk_dash = client.get(f'/studio?event_id={event.id}')
     assert res_spk_dash.status_code == 200
     assert 'id="btn-open-room-attach"' not in res_spk_dash.text
     assert 'id="btn-open-import"' not in res_spk_dash.text
     assert 'id="btn-open-quick-talk"' not in res_spk_dash.text
     assert 'id="modal-attach-room"' not in res_spk_dash.text
 
-    res_spk_studio = client.get(f"/studio/talks/{talk.id}")
+    res_spk_studio = client.get(f'/studio/talks/{talk.id}')
     assert res_spk_studio.status_code == 200
     assert 'id="btn-edit-talk-studio"' not in res_spk_studio.text
     assert 'id="modal-edit-talk-studio"' not in res_spk_studio.text
@@ -3556,11 +3570,11 @@ def test_attach_room_recording_with_video_url(
 ) -> None:
 
     user = models.User(
-        email="org_url@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email='org_url@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
-    event = models.Event(name="URL Ingest Summit", created_by_user=user)
+    event = models.Event(name='URL Ingest Summit', created_by_user=user)
     db_session.add(user)
     db_session.add(event)
     db_session.commit()
@@ -3568,45 +3582,45 @@ def test_attach_room_recording_with_video_url(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk1 = models.Talk(
         event_id=event.id,
-        title="Keynote Streamed",
-        room="Auditorium Stream",
+        title='Keynote Streamed',
+        room='Auditorium Stream',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     talk2 = models.Talk(
         event_id=event.id,
-        title="Session 2 Streamed",
-        room="Auditorium Stream",
+        title='Session 2 Streamed',
+        room='Auditorium Stream',
         start=now + timedelta(minutes=30),
         end=now + timedelta(minutes=60),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk1)
     db_session.add(talk2)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
-    with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
-        # 1. Test JSON payload
+    with patch('app.routes.talks.heavy_queue') as mock_heavy_q:
+        # 1. Test video_url ingest
         res = client.post(
-            "/talks/room/attach-recording",
-            json={
-                "room": "Auditorium Stream",
-                "event_id": event.id,
-                "video_url": "https://example.com/recordings/livestream123.mp4",
+            '/talks/room/attach-recording',
+            data={
+                'room': 'Auditorium Stream',
+                'event_id': str(event.id),
+                'video_url': 'https://example.com/recordings/livestream123.mp4',
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200, res.text
         data = res.json()
-        assert data["attached_count"] == 2
-        assert set(data["talk_ids"]) == {talk1.id, talk2.id}
-        assert data["recording_duration_seconds"] is None
+        assert data['attached_count'] == 2
+        assert set(data['talk_ids']) == {talk1.id, talk2.id}
+        assert data['recording_duration_seconds'] is None
 
         db_session.refresh(talk1)
         db_session.refresh(talk2)
@@ -3616,8 +3630,8 @@ def test_attach_room_recording_with_video_url(
         mock_heavy_q.enqueue.assert_called_once()
         call_args = mock_heavy_q.enqueue.call_args
         assert call_args.args[1] == event.id
-        assert call_args.args[2] == "Auditorium Stream"
-        assert call_args.args[3] == "https://example.com/recordings/livestream123.mp4"
+        assert call_args.args[2] == 'Auditorium Stream'
+        assert call_args.args[3] == 'https://example.com/recordings/livestream123.mp4'
 
 
 def test_attach_room_recording_with_video_url_multipart(
@@ -3625,11 +3639,11 @@ def test_attach_room_recording_with_video_url_multipart(
 ) -> None:
 
     user = models.User(
-        email="org_url_mp@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email='org_url_mp@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
-    event = models.Event(name="URL Ingest Summit MP", created_by_user=user)
+    event = models.Event(name='URL Ingest Summit MP', created_by_user=user)
     db_session.add(user)
     db_session.add(event)
     db_session.commit()
@@ -3637,34 +3651,34 @@ def test_attach_room_recording_with_video_url_multipart(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Keynote Streamed MP",
-        room="Auditorium Stream MP",
+        title='Keynote Streamed MP',
+        room='Auditorium Stream MP',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
-    with patch("app.routes.talks.heavy_queue") as mock_heavy_q:
+    with patch('app.routes.talks.heavy_queue') as mock_heavy_q:
         res = client.post(
-            "/talks/room/attach-recording",
+            '/talks/room/attach-recording',
             data={
-                "room": "Auditorium Stream MP",
-                "event_id": str(event.id),
-                "video_url": "https://example.com/recordings/room_stream.mp4",
+                'room': 'Auditorium Stream MP',
+                'event_id': str(event.id),
+                'video_url': 'https://example.com/recordings/room_stream.mp4',
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200, res.text
         data = res.json()
-        assert data["attached_count"] == 1
-        assert data["talk_ids"] == [talk.id]
+        assert data['attached_count'] == 1
+        assert data['talk_ids'] == [talk.id]
         mock_heavy_q.enqueue.assert_called_once()
 
 
@@ -3673,11 +3687,11 @@ def test_attach_room_recording_url_and_source_validations(
 ) -> None:
 
     user = models.User(
-        email="org_val@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email='org_val@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
-    event = models.Event(name="Validation Summit", created_by_user=user)
+    event = models.Event(name='Validation Summit', created_by_user=user)
     db_session.add(user)
     db_session.add(event)
     db_session.commit()
@@ -3685,64 +3699,64 @@ def test_attach_room_recording_url_and_source_validations(
     now = datetime(2026, 9, 25, 9, 0, 0, tzinfo=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Validation Talk",
-        room="Val Room",
+        title='Validation Talk',
+        room='Val Room',
         start=now,
         end=now + timedelta(minutes=30),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(talk)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     # 1. Invalid URL scheme
     res = client.post(
-        "/talks/room/attach-recording",
-        json={
-            "room": "Val Room",
-            "event_id": event.id,
-            "video_url": "ftp://bad-scheme.com/video.mp4",
+        '/talks/room/attach-recording',
+        data={
+            'room': 'Val Room',
+            'event_id': str(event.id),
+            'video_url': 'ftp://bad-scheme.com/video.mp4',
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 400
-    assert "video_url must start with http:// or https://" in res.json()["detail"]
+    assert 'video_url must start with http:// or https://' in res.json()['detail']
 
     # 2. No source provided
     res = client.post(
-        "/talks/room/attach-recording",
-        json={
-            "room": "Val Room",
-            "event_id": event.id,
+        '/talks/room/attach-recording',
+        data={
+            'room': 'Val Room',
+            'event_id': str(event.id),
         },
-        headers={"X-API-Key": api_key},
+        headers={'X-API-Key': api_key},
     )
     assert res.status_code == 400
     assert (
-        "Either video_url, a video file upload, or relative_key/source_path"
-        in res.json()["detail"]
+        'Either video_url, a video file upload, or relative_key/source_path'
+        in res.json()['detail']
     )
 
     # 3. Conflicting sources: both file and video_url
     clip = generate_clip(0.5, output_dir=tmp_path)
     try:
-        with open(clip, "rb") as f_vid:
+        with open(clip, 'rb') as f_vid:
             res = client.post(
-                "/talks/room/attach-recording",
+                '/talks/room/attach-recording',
                 data={
-                    "room": "Val Room",
-                    "event_id": str(event.id),
-                    "video_url": "https://example.com/recordings/conflict.mp4",
+                    'room': 'Val Room',
+                    'event_id': str(event.id),
+                    'video_url': 'https://example.com/recordings/conflict.mp4',
                 },
-                files={"file": ("clip.mp4", f_vid, "video/mp4")},
-                headers={"X-API-Key": api_key},
+                files={'file': ('clip.mp4', f_vid, 'video/mp4')},
+                headers={'X-API-Key': api_key},
             )
             assert res.status_code == 400
-            assert "Provide only one recording source" in res.json()["detail"]
+            assert 'Provide only one recording source' in res.json()['detail']
     finally:
         clip.unlink(missing_ok=True)
 
@@ -3752,16 +3766,16 @@ def test_talk_studio_organizer_request_prompt(
 ) -> None:
     """Standard user sees organizer request banner and modal in Studio; SSO and organizer do not."""
     user = models.User(
-        email=f"std_user_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="user",
+        email=f'std_user_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.USER,
         organizer_requested=False,
     )
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
 
-    event = models.Event(name=f"Event {uuid.uuid4().hex}", created_by_user_id=user.id)
+    event = models.Event(name=f'Event {uuid.uuid4().hex}', created_by_user_id=user.id)
     db_session.add(event)
     db_session.commit()
     db_session.refresh(event)
@@ -3769,11 +3783,11 @@ def test_talk_studio_organizer_request_prompt(
     now = datetime.now(tz=UTC)
     talk = models.Talk(
         event_id=event.id,
-        title="Studio Role Request Talk",
-        room="Room B",
+        title='Studio Role Request Talk',
+        room='Room B',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk)
     db_session.commit()
@@ -3781,36 +3795,52 @@ def test_talk_studio_organizer_request_prompt(
 
     # 1. Standard user without pending request sees request banner & modal
     token = create_session_token(user.id, user.role)
-    client.cookies.set("veditor_session", token)
-    res = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', token)
+    res = client.get(f'/studio/talks/{talk.id}')
     assert res.status_code == 200
-    assert "btn-request-organizer" in res.text
-    assert "modal-request-organizer" in res.text
-    assert "Request Organizer Role" in res.text
-    assert "Organizer Privileges Required" in res.text
+    assert 'btn-request-organizer' in res.text
+    assert 'modal-request-organizer' in res.text
+    assert 'Request Organizer Role' in res.text
+    assert 'Organizer Privileges Required' in res.text
+    assert '0 / 500' in res.text
+    assert 'maxlength="500"' not in res.text
+    assert (
+        re.search(
+            r'<textarea[^>]*id="organizer-request-note"[^>]*class="[^"]*\binput-field\b',
+            res.text,
+        )
+        is not None
+    )
+    assert (
+        re.search(
+            r'<textarea[^>]*id="organizer-request-note"[^>]*\bmaxlength\b',
+            res.text,
+        )
+        is None
+    )
 
     # 2. Standard user with pending request sees pending banner
     user.organizer_requested = True
     db_session.commit()
-    res_pending = client.get(f"/studio/talks/{talk.id}")
+    res_pending = client.get(f'/studio/talks/{talk.id}')
     assert res_pending.status_code == 200
-    assert "role-request-pending" in res_pending.text
-    assert "pending administrator review" in res_pending.text
-    assert "Organizer Request Pending Review" in res_pending.text
-    assert "btn-request-organizer" not in res_pending.text
+    assert 'role-request-pending' in res_pending.text
+    assert 'pending administrator review' in res_pending.text
+    assert 'Organizer Request Pending Review' in res_pending.text
+    assert 'btn-request-organizer' not in res_pending.text
 
     # 3. Organizer user does not see organizer request prompt
     org = models.User(
-        email=f"org_user_{uuid.uuid4().hex[:8]}@example.com",
-        hashed_password="hash",
-        role="organizer",
+        email=f'org_user_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
 
     event_org = models.Event(
-        name=f"Org Event {uuid.uuid4().hex}", created_by_user_id=org.id
+        name=f'Org Event {uuid.uuid4().hex}', created_by_user_id=org.id
     )
     db_session.add(event_org)
     db_session.commit()
@@ -3818,33 +3848,70 @@ def test_talk_studio_organizer_request_prompt(
 
     talk_org = models.Talk(
         event_id=event_org.id,
-        title="Org Talk",
-        room="Main",
+        title='Org Talk',
+        room='Main',
         start=now,
         end=now + timedelta(minutes=30),
-        status="preview",
+        status=TalkStatus.PREVIEW,
     )
     db_session.add(talk_org)
     db_session.commit()
     db_session.refresh(talk_org)
 
     org_token = create_session_token(org.id, org.role)
-    client.cookies.set("veditor_session", org_token)
-    res_org = client.get(f"/studio/talks/{talk_org.id}")
+    client.cookies.set('veditor_session', org_token)
+    res_org = client.get(f'/studio/talks/{talk_org.id}')
     assert res_org.status_code == 200
-    assert "btn-request-organizer" not in res_org.text
-    assert "modal-request-organizer" not in res_org.text
+    assert 'btn-request-organizer' not in res_org.text
+    assert 'modal-request-organizer' not in res_org.text
 
     # 4. SSO user does not see organizer request prompt
 
     sso_token = create_sso_token(
-        scope_type="event", scope_id=event_org.id, role="organizer"
+        scope_type='event', scope_id=event_org.id, role=AuthRole.ORGANIZER
     )
-    client.cookies.set("veditor_session", sso_token)
-    res_sso = client.get(f"/studio/talks/{talk_org.id}")
+    client.cookies.set('veditor_session', sso_token)
+    res_sso = client.get(f'/studio/talks/{talk_org.id}')
     assert res_sso.status_code == 200
-    assert "btn-request-organizer" not in res_sso.text
-    assert "modal-request-organizer" not in res_sso.text
+    assert 'btn-request-organizer' not in res_sso.text
+    assert 'modal-request-organizer' not in res_sso.text
+
+
+def test_dashboard_organizer_request_modal(
+    client: TestClient, db_session: Session
+) -> None:
+    """Standard user sees redesigned organizer request modal on talks dashboard."""
+    user = models.User(
+        email=f'dash_user_{uuid.uuid4().hex[:8]}@example.com',
+        hashed_password='hash',
+        role=AuthRole.USER,
+        organizer_requested=False,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    token = create_session_token(user.id, user.role)
+    client.cookies.set('veditor_session', token)
+    res = client.get('/studio')
+    assert res.status_code == 200
+    assert 'modal-request-organizer' in res.text
+    assert '0 / 500' in res.text
+    assert 'maxlength="500"' not in res.text
+    assert (
+        re.search(
+            r'<textarea[^>]*id="organizer-request-note"[^>]*class="[^"]*\binput-field\b',
+            res.text,
+        )
+        is not None
+    )
+    assert (
+        re.search(
+            r'<textarea[^>]*id="organizer-request-note"[^>]*\bmaxlength\b',
+            res.text,
+        )
+        is None
+    )
 
 
 def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -> None:
@@ -3853,12 +3920,12 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
     now = datetime.now(UTC)
 
     user = models.User(
-        email="promoted_speaker@example.com",
-        hashed_password="hash",
-        role="user",
+        email='promoted_speaker@example.com',
+        hashed_password='hash',
+        role=AuthRole.USER,
         is_active=True,
     )
-    event = models.Event(name="Role Persist Event")
+    event = models.Event(name='Role Persist Event')
     db_session.add(user)
     db_session.add(event)
     db_session.commit()
@@ -3866,8 +3933,8 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
 
     talk = models.Talk(
         event_id=event.id,
-        title="Keynote",
-        speaker_email="promoted_speaker@example.com",
+        title='Keynote',
+        speaker_email='promoted_speaker@example.com',
         start=now,
         end=now,
     )
@@ -3876,9 +3943,9 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
 
     current_user = CurrentUser(
         user_id=user.id,
-        email="promoted_speaker@example.com",
+        email='promoted_speaker@example.com',
         role=AuthRole.USER,
-        source="cookie",
+        source='cookie',
     )
     check_talk_access(talk, current_user, db_session)
     assert current_user.role == AuthRole.SPEAKER
@@ -3886,7 +3953,7 @@ def test_check_talk_access_persists_promoted_speaker_role(db_session: Session) -
     # Reload directly from database to verify persistence
     persisted = db_session.scalar(select(models.User).where(models.User.id == user.id))
     assert persisted is not None
-    assert persisted.role == "speaker"
+    assert persisted.role == AuthRole.SPEAKER
 
 
 def test_organizer_dashboard_includes_assigned_speaker_talks(
@@ -3897,26 +3964,26 @@ def test_organizer_dashboard_includes_assigned_speaker_talks(
     now = datetime.now(UTC)
 
     org_a = models.User(
-        email="org_a@example.com", hashed_password="hash", role="organizer"
+        email='org_a@example.com', hashed_password='hash', role=AuthRole.ORGANIZER
     )
     org_b = models.User(
-        email="org_b@example.com", hashed_password="hash", role="organizer"
+        email='org_b@example.com', hashed_password='hash', role=AuthRole.ORGANIZER
     )
     db_session.add(org_a)
     db_session.add(org_b)
     db_session.commit()
 
-    event_a = models.Event(name="Event A", created_by_user_id=org_a.id)
-    event_b = models.Event(name="Event B", created_by_user_id=org_b.id)
+    event_a = models.Event(name='Event A', created_by_user_id=org_a.id)
+    event_b = models.Event(name='Event B', created_by_user_id=org_b.id)
     db_session.add(event_a)
     db_session.add(event_b)
     db_session.commit()
 
-    talk_a = models.Talk(event_id=event_a.id, title="Talk A Hosted", start=now, end=now)
+    talk_a = models.Talk(event_id=event_a.id, title='Talk A Hosted', start=now, end=now)
     talk_b = models.Talk(
         event_id=event_b.id,
-        title="Talk B Speaker Slot",
-        speaker_email="org_a@example.com",
+        title='Talk B Speaker Slot',
+        speaker_email='org_a@example.com',
         start=now,
         end=now,
     )
@@ -3925,11 +3992,11 @@ def test_organizer_dashboard_includes_assigned_speaker_talks(
     db_session.commit()
 
     token_a = create_session_token(org_a.id, org_a.role)
-    client.cookies.set("veditor_session", token_a)
-    resp = client.get("/studio")
+    client.cookies.set('veditor_session', token_a)
+    resp = client.get('/studio')
     assert resp.status_code == 200
-    assert "Talk A Hosted" in resp.text
-    assert "Talk B Speaker Slot" in resp.text
+    assert 'Talk A Hosted' in resp.text
+    assert 'Talk B Speaker Slot' in resp.text
 
 
 def test_studio_handoff_utc_format_and_cooldown_attr(
@@ -3942,20 +4009,20 @@ def test_studio_handoff_utc_format_and_cooldown_attr(
     handoff_time = datetime(2026, 10, 14, 18, 0, tzinfo=tz_ist)
 
     user = models.User(
-        email="org_utc@example.com", hashed_password="hash", role="organizer"
+        email='org_utc@example.com', hashed_password='hash', role=AuthRole.ORGANIZER
     )
     db_session.add(user)
     db_session.commit()
 
-    event = models.Event(name="UTC Event", created_by_user_id=user.id)
+    event = models.Event(name='UTC Event', created_by_user_id=user.id)
     db_session.add(event)
     db_session.commit()
 
     talk = models.Talk(
         event_id=event.id,
-        title="Timezone Talk",
-        status="pending_bounds",
-        speaker_email="speaker@example.com",
+        title='Timezone Talk',
+        status=TalkStatus.PENDING_BOUNDS,
+        speaker_email='speaker@example.com',
         handed_off_at=handoff_time,
         start=now,
         end=now,
@@ -3964,14 +4031,14 @@ def test_studio_handoff_utc_format_and_cooldown_attr(
     db_session.commit()
 
     token = create_session_token(user.id, user.role)
-    client.cookies.set("veditor_session", token)
-    resp = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', token)
+    resp = client.get(f'/studio/talks/{talk.id}')
     assert resp.status_code == 200
     # 18:00 IST = 12:30 UTC
-    assert "Oct 14, 2026 at 12:30 UTC" in resp.text
+    assert 'Oct 14, 2026 at 12:30 UTC' in resp.text
     assert 'data-handed-off-at="' in resp.text
-    assert "btn-resend-handoff" in resp.text
-    assert "Speaker handoff requested" in resp.text
+    assert 'btn-resend-handoff' in resp.text
+    assert 'Speaker handoff requested' in resp.text
 
 
 def test_sso_speaker_view_derived_from_email_match(
@@ -3980,15 +4047,15 @@ def test_sso_speaker_view_derived_from_email_match(
     """Ensure speaker matching speaker_email gets speaker controls even if role is 'user'."""
     now = datetime.now(UTC)
 
-    event = models.Event(name="SSO Speaker Event")
+    event = models.Event(name='SSO Speaker Event')
     db_session.add(event)
     db_session.commit()
 
     talk = models.Talk(
         event_id=event.id,
-        title="SSO Speaker Talk",
-        status="pending_bounds",
-        speaker_email="assigned_sso_speaker@example.com",
+        title='SSO Speaker Talk',
+        status=TalkStatus.PENDING_BOUNDS,
+        speaker_email='assigned_sso_speaker@example.com',
         start=now,
         end=now,
     )
@@ -3997,34 +4064,116 @@ def test_sso_speaker_view_derived_from_email_match(
 
     # 1. SSO token with matching email
     sso_token = create_sso_token(
-        scope_type="event",
+        scope_type='event',
         scope_id=event.id,
-        role="speaker",
-        email="assigned_sso_speaker@example.com",
+        role=AuthRole.SPEAKER,
+        email='assigned_sso_speaker@example.com',
     )
     resp = client.get(
-        f"/studio/talks/{talk.id}?sso_token={sso_token}", follow_redirects=True
+        f'/studio/talks/{talk.id}?sso_token={sso_token}', follow_redirects=True
     )
     assert resp.status_code == 200
-    assert "Awaiting Speaker to Submit Timestamps" not in resp.text
-    assert "Submit Timestamps" in resp.text
+    assert 'Awaiting Speaker to Submit Timestamps' not in resp.text
+    assert 'Submit Timestamps' in resp.text
 
     # 2. Registered user with role="user" matching talk.speaker_email
     human_speaker = models.User(
-        email="assigned_sso_speaker@example.com",
-        hashed_password="pw",
-        role="user",
+        email='assigned_sso_speaker@example.com',
+        hashed_password='pw',
+        role=AuthRole.USER,
         is_active=True,
     )
     db_session.add(human_speaker)
     db_session.commit()
 
     user_token = create_session_token(human_speaker.id, human_speaker.role)
-    client.cookies.set("veditor_session", user_token)
-    resp2 = client.get(f"/studio/talks/{talk.id}")
+    client.cookies.set('veditor_session', user_token)
+    resp2 = client.get(f'/studio/talks/{talk.id}')
     assert resp2.status_code == 200
-    assert "Awaiting Speaker to Submit Timestamps" not in resp2.text
-    assert "Submit Timestamps" in resp2.text
+    assert 'Awaiting Speaker to Submit Timestamps' not in resp2.text
+    assert 'Submit Timestamps' in resp2.text
+
+
+def test_admin_account_with_speaker_role_accesses_speaker_editor(
+    client: TestClient, db_session: Session
+) -> None:
+    """When an account has role='admin' but opens a talk where they are the assigned speaker
+
+    (via matching speaker_email or speaker SSO token), they must access the speaker editor
+    with video-cutting controls unlocked, and without being locked into view-only or redirected to admin console.
+    """
+    admin_user = models.User(
+        email='admin_speaker@example.com',
+        hashed_password='pw',
+        role=AuthRole.ADMIN,
+        is_active=True,
+    )
+    db_session.add(admin_user)
+
+    other_org = models.User(
+        email='other_org@example.com',
+        hashed_password='pw',
+        role=AuthRole.ORGANIZER,
+        is_active=True,
+    )
+    db_session.add(other_org)
+    db_session.commit()
+
+    event = models.Event(name='Summit 2026', created_by_user_id=other_org.id)
+    db_session.add(event)
+    db_session.commit()
+
+    now = datetime.now(UTC)
+    talk = models.Talk(
+        title='Admin Keynote',
+        event_id=event.id,
+        status=TalkStatus.PENDING_BOUNDS,
+        speaker_email='admin_speaker@example.com',
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    # 1. User visits talk via speaker SSO link without pre-existing session cookies
+    client.cookies.clear()
+    sso_token = create_sso_token(
+        scope_type='talk',
+        scope_id=talk.id,
+        role=AuthRole.SPEAKER,
+        email='admin_speaker@example.com',
+    )
+    resp = client.get(
+        f'/studio/talks/{talk.id}?sso_token={sso_token}', follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert 'is-view-only' not in resp.text
+    assert 'Awaiting Speaker to Submit Timestamps' not in resp.text
+    assert 'Submit Timestamps' in resp.text
+    assert 'btn-set-in' in resp.text
+    assert 'input-in-point' in resp.text
+    assert 'Admin Console' not in resp.text
+
+    # 2. Admin visits their assigned talk directly using their admin login session (no SSO token)
+    client.cookies.clear()
+    admin_token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set('veditor_session', admin_token)
+    resp2 = client.get(f'/studio/talks/{talk.id}')
+    assert resp2.status_code == 200
+    assert 'is-view-only' not in resp2.text
+    assert 'Awaiting Speaker to Submit Timestamps' not in resp2.text
+    assert 'Submit Timestamps' in resp2.text
+    assert 'btn-set-in' in resp2.text
+    assert 'input-in-point' in resp2.text
+
+    # 3. Admin visits talk via speaker SSO link while logged into their admin account
+    resp3 = client.get(
+        f'/studio/talks/{talk.id}?sso_token={sso_token}', follow_redirects=True
+    )
+    assert resp3.status_code == 200
+    assert 'is-view-only' not in resp3.text
+    assert 'Awaiting Speaker to Submit Timestamps' not in resp3.text
+    assert 'Submit Timestamps' in resp3.text
 
 
 def test_talk_speaker_email_index() -> None:
@@ -4032,10 +4181,144 @@ def test_talk_speaker_email_index() -> None:
     assert models.Talk.__table__.c.speaker_email.index is True
 
 
+def test_admin_can_edit_completed_talk_ui(
+    client: TestClient, db_session: Session
+) -> None:
+    """Admin viewing a 'done' talk sees both 'Download Master Video' and 'Edit Video' buttons."""
+    now = datetime.now(UTC)
+    admin = models.User(
+        email='admin_studio_test@example.com',
+        hashed_password='hash',
+        role='admin',
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    event = models.Event(name='Completed Talk Event', created_by_user_id=admin.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title='Completed Talk With Speaker Cuts',
+        status='done',
+        speaker_email='speaker@example.com',
+        cut_start=20.0,
+        cut_end=120.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set('veditor_session', token)
+
+    response = client.get(f'/studio/talks/{talk.id}')
+    assert response.status_code == 200
+    assert 'Download Master Video' in response.text
+    assert 'btn-needs-work' in response.text
+    assert 'Edit Video' in response.text
+    client.cookies.clear()
+
+
+def test_admin_viewing_other_organizer_completed_talk_renders_edit_control_in_view_only(
+    client: TestClient, db_session: Session
+) -> None:
+    """Admin viewing another organizer's completed talk sees 'Edit Video' with view-only protection."""
+    now = datetime.now(UTC)
+    other_org = models.User(
+        email='other_org@example.com',
+        hashed_password='hash',
+        role='organizer',
+        is_active=True,
+    )
+    admin = models.User(
+        email='viewing_admin@example.com',
+        hashed_password='hash',
+        role='admin',
+        is_active=True,
+    )
+    db_session.add_all([other_org, admin])
+    db_session.commit()
+
+    event = models.Event(name='Other Org Event', created_by_user_id=other_org.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title='Other Org Completed Talk',
+        status='done',
+        cut_start=10.0,
+        cut_end=60.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set('veditor_session', token)
+
+    response = client.get(f'/studio/talks/{talk.id}')
+    assert response.status_code == 200
+    assert 'Download Master Video' in response.text
+    assert 'btn-needs-work' in response.text
+    assert 'Edit Video' in response.text
+    assert 'data-edit-control="true"' in response.text
+    assert 'studio-shell is-view-only' in response.text
+    assert 'Enable Edit Mode' in response.text
+    client.cookies.clear()
+
+
+def test_admin_not_blocked_by_awaiting_speaker_in_preview(
+    client: TestClient, db_session: Session
+) -> None:
+    """Admin viewing a talk in 'preview' status with assigned speaker sees review action buttons."""
+    now = datetime.now(UTC)
+    admin = models.User(
+        email='admin_preview_test@example.com',
+        hashed_password='hash',
+        role='admin',
+        is_active=True,
+    )
+    db_session.add(admin)
+    db_session.commit()
+
+    event = models.Event(name='Preview Event', created_by_user_id=admin.id)
+    db_session.add(event)
+    db_session.commit()
+
+    talk = models.Talk(
+        event_id=event.id,
+        title='Preview Talk With Speaker',
+        status='preview',
+        speaker_email='speaker@example.com',
+        cut_start=10.0,
+        cut_end=60.0,
+        start=now,
+        end=now,
+    )
+    db_session.add(talk)
+    db_session.commit()
+
+    token = create_session_token(admin.id, admin.role)
+    client.cookies.set('veditor_session', token)
+
+    response = client.get(f'/studio/talks/{talk.id}')
+    assert response.status_code == 200
+    assert 'Awaiting Speaker to Review Preview' not in response.text
+    assert 'Approve Video' in response.text
+    assert 'Edit Video' in response.text
+    client.cookies.clear()
+
+
 def test_room_days_and_targeted_multi_day_room_attachment(
     client: TestClient, db_session: Session
 ) -> None:
-    event = models.Event(name="Multi-Day Conf", start_date=date(2026, 10, 25))
+    event = models.Event(name='Multi-Day Conf', start_date=date(2026, 10, 25))
     db_session.add(event)
     db_session.commit()
 
@@ -4044,84 +4327,84 @@ def test_room_days_and_targeted_multi_day_room_attachment(
 
     t1_d1 = models.Talk(
         event_id=event.id,
-        title="Day 1 Morning",
-        room="Auditorium A",
+        title='Day 1 Morning',
+        room='Auditorium A',
         start=day1_start,
         end=day1_start + timedelta(hours=1),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t2_d1 = models.Talk(
         event_id=event.id,
-        title="Day 1 Afternoon",
-        room="Auditorium A",
+        title='Day 1 Afternoon',
+        room='Auditorium A',
         start=day1_start + timedelta(hours=2),
         end=day1_start + timedelta(hours=3),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t3_d2 = models.Talk(
         event_id=event.id,
-        title="Day 2 Morning",
-        room="Auditorium A",
+        title='Day 2 Morning',
+        room='Auditorium A',
         start=day2_start,
         end=day2_start + timedelta(hours=1),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     for t in [t1_d1, t2_d1, t3_d2]:
         db_session.add(t)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     # 1. Test GET /talks/room/days
     resp_days = client.get(
-        f"/talks/room/days?room=Auditorium%20A&event_id={event.id}",
-        headers={"X-API-Key": api_key},
+        f'/talks/room/days?room=Auditorium%20A&event_id={event.id}',
+        headers={'X-API-Key': api_key},
     )
     assert resp_days.status_code == 200
     days_data = resp_days.json()
     assert len(days_data) == 2
-    assert days_data[0]["date"] == "2026-10-25"
-    assert days_data[0]["session_count"] == 2
-    assert "Day 1" in days_data[0]["label"]
-    assert days_data[1]["date"] == "2026-10-26"
-    assert days_data[1]["session_count"] == 1
-    assert "Day 2" in days_data[1]["label"]
+    assert days_data[0]['date'] == '2026-10-25'
+    assert days_data[0]['session_count'] == 2
+    assert 'Day 1' in days_data[0]['label']
+    assert days_data[1]['date'] == '2026-10-26'
+    assert days_data[1]['session_count'] == 1
+    assert 'Day 2' in days_data[1]['label']
 
     # 2. Attaching to multi-day room without target_date returns 400
-    with patch("app.routes.talks.heavy_queue"):
+    with patch('app.routes.talks.heavy_queue'):
         res_no_day = client.post(
-            "/talks/room/attach-recording",
+            '/talks/room/attach-recording',
             data={
-                "room": "Auditorium A",
-                "event_id": str(event.id),
-                "video_url": "https://example.com/day1.mp4",
+                'room': 'Auditorium A',
+                'event_id': str(event.id),
+                'video_url': 'https://example.com/day1.mp4',
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res_no_day.status_code == 400
-        assert "spans 2 days" in res_no_day.json()["detail"]
-        assert "target day" in res_no_day.json()["detail"]
+        assert 'spans 2 days' in res_no_day.json()['detail']
+        assert 'target day' in res_no_day.json()['detail']
 
     # 3. Attaching to multi-day room with target_date for Day 1 only binds to Day 1 talks
-    with patch("app.routes.talks.heavy_queue"):
+    with patch('app.routes.talks.heavy_queue'):
         res_target = client.post(
-            "/talks/room/attach-recording",
+            '/talks/room/attach-recording',
             data={
-                "room": "Auditorium A",
-                "event_id": str(event.id),
-                "video_url": "https://example.com/day1.mp4",
-                "target_date": "2026-10-25",
+                'room': 'Auditorium A',
+                'event_id': str(event.id),
+                'video_url': 'https://example.com/day1.mp4',
+                'target_date': '2026-10-25',
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res_target.status_code == 200
         data = res_target.json()
-        assert data["attached_count"] == 2
-        assert set(data["talk_ids"]) == {t1_d1.id, t2_d1.id}
-        assert data["target_date"] == "2026-10-25"
+        assert data['attached_count'] == 2
+        assert set(data['talk_ids']) == {t1_d1.id, t2_d1.id}
+        assert data['target_date'] == '2026-10-25'
 
         db_session.refresh(t1_d1)
         db_session.refresh(t2_d1)
@@ -4130,32 +4413,30 @@ def test_room_days_and_targeted_multi_day_room_attachment(
         assert t2_d1.status == TalkStatus.DETECTING
         assert t3_d2.status == TalkStatus.WAITING_FILES
 
-    # 4. Attaching with invalid JSON target_date returns 400
-    res_invalid_json_date = client.post(
-        "/talks/room/attach-recording",
-        json={
-            "room": "Auditorium A",
-            "event_id": event.id,
-            "video_url": "https://example.com/day1.mp4",
-            "target_date": "not-a-valid-date",
+    # 4. Attaching with invalid target_date is rejected by request validation
+    res_invalid_date = client.post(
+        '/talks/room/attach-recording',
+        data={
+            'room': 'Auditorium A',
+            'event_id': str(event.id),
+            'video_url': 'https://example.com/day1.mp4',
+            'target_date': 'not-a-valid-date',
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={'X-API-Key': api_key},
     )
-    assert res_invalid_json_date.status_code == 400
-    assert "Invalid target_date format" in res_invalid_json_date.json()["detail"]
+    assert res_invalid_date.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
-    res_non_string_json_date = client.post(
-        "/talks/room/attach-recording",
-        json={
-            "room": "Auditorium A",
-            "event_id": event.id,
-            "video_url": "https://example.com/day1.mp4",
-            "target_date": 12345,
+    res_non_string_date = client.post(
+        '/talks/room/attach-recording',
+        data={
+            'room': 'Auditorium A',
+            'event_id': str(event.id),
+            'video_url': 'https://example.com/day1.mp4',
+            'target_date': '12345',
         },
-        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        headers={'X-API-Key': api_key},
     )
-    assert res_non_string_json_date.status_code == 400
-    assert "Invalid target_date format" in res_non_string_json_date.json()["detail"]
+    assert res_non_string_date.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
 def test_room_days_day_numbering_relative_to_event_start(
@@ -4164,7 +4445,7 @@ def test_room_days_day_numbering_relative_to_event_start(
     """Verify Day numbering matches event schedule even if room has sessions only on later days."""
     # Event starts on Oct 24, but room only has sessions on Oct 25 (Day 2) and Oct 26 (Day 3)
     event = models.Event(
-        name="Scheduled Summit",
+        name='Scheduled Summit',
         start_date=date(2026, 10, 24),
         end_date=date(2026, 10, 26),
     )
@@ -4173,77 +4454,77 @@ def test_room_days_day_numbering_relative_to_event_start(
 
     t_day2 = models.Talk(
         event_id=event.id,
-        title="Late Room Talk Day 2",
-        room="Hall B",
+        title='Late Room Talk Day 2',
+        room='Hall B',
         start=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     t_day3 = models.Talk(
         event_id=event.id,
-        title="Late Room Talk Day 3",
-        room="Hall B",
+        title='Late Room Talk Day 3',
+        room='Hall B',
         start=datetime(2026, 10, 26, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 26, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([t_day2, t_day3])
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     resp = client.get(
-        f"/talks/room/days?room=Hall%20B&event_id={event.id}",
-        headers={"X-API-Key": api_key},
+        f'/talks/room/days?room=Hall%20B&event_id={event.id}',
+        headers={'X-API-Key': api_key},
     )
     assert resp.status_code == 200
     days = resp.json()
     assert len(days) == 2
     # Even though Oct 25 is the 1st day for Hall B, it must be labeled Day 2
-    assert days[0]["day_number"] == 2
-    assert "Day 2: Oct 25, 2026" in days[0]["label"]
+    assert days[0]['day_number'] == 2
+    assert 'Day 2: Oct 25, 2026' in days[0]['label']
     # Oct 26 must be labeled Day 3
-    assert days[1]["day_number"] == 3
-    assert "Day 3: Oct 26, 2026" in days[1]["label"]
+    assert days[1]['day_number'] == 3
+    assert 'Day 3: Oct 26, 2026' in days[1]['label']
 
 
 def test_room_days_without_event_start_date(
     client: TestClient, db_session: Session
 ) -> None:
     """Verify that if event has no start_date, Day N is omitted from labels."""
-    event = models.Event(name="Dateless Event", start_date=None)
+    event = models.Event(name='Dateless Event', start_date=None)
     db_session.add(event)
     db_session.commit()
 
     t1 = models.Talk(
         event_id=event.id,
-        title="Dateless Talk",
-        room="Hall C",
+        title='Dateless Talk',
+        room='Hall C',
         start=datetime(2026, 10, 25, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 11, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t1)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     resp = client.get(
-        f"/talks/room/days?room=Hall%20C&event_id={event.id}",
-        headers={"X-API-Key": api_key},
+        f'/talks/room/days?room=Hall%20C&event_id={event.id}',
+        headers={'X-API-Key': api_key},
     )
     assert resp.status_code == 200
     days = resp.json()
     assert len(days) == 1
-    assert days[0]["day_number"] is None
-    assert "Day" not in days[0]["label"]
-    assert days[0]["label"] == "Oct 25, 2026 (1 session)"
+    assert days[0]['day_number'] is None
+    assert 'Day' not in days[0]['label']
+    assert days[0]['label'] == 'Oct 25, 2026 (1 session)'
 
 
 def test_room_days_and_attachment_with_event_timezone(
@@ -4252,8 +4533,8 @@ def test_room_days_and_attachment_with_event_timezone(
     """Verify talk dates are computed using the event's timezone, not UTC."""
     # 2026-10-25 22:00:00 UTC is 2026-10-26 07:00:00 in Asia/Tokyo (UTC+9)
     event = models.Event(
-        name="Tokyo Summit",
-        timezone="Asia/Tokyo",
+        name='Tokyo Summit',
+        timezone='Asia/Tokyo',
         start_date=date(2026, 10, 26),
     )
     db_session.add(event)
@@ -4261,69 +4542,67 @@ def test_room_days_and_attachment_with_event_timezone(
 
     t_tokyo = models.Talk(
         event_id=event.id,
-        title="Tokyo Morning Session",
-        room="Room Tokyo",
+        title='Tokyo Morning Session',
+        room='Room Tokyo',
         start=datetime(2026, 10, 25, 22, 0, tzinfo=UTC),
         end=datetime(2026, 10, 25, 23, 0, tzinfo=UTC),
-        status="waiting_for_files",
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add(t_tokyo)
     db_session.commit()
 
-    api_key = f"key_{uuid.uuid4().hex}"
+    api_key = f'key_{uuid.uuid4().hex}'
     client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[event.id])
     db_session.add(client_model)
     db_session.commit()
 
     # 1. get_room_days should report Oct 26, NOT Oct 25
     resp = client.get(
-        f"/talks/room/days?room=Room%20Tokyo&event_id={event.id}",
-        headers={"X-API-Key": api_key},
+        f'/talks/room/days?room=Room%20Tokyo&event_id={event.id}',
+        headers={'X-API-Key': api_key},
     )
     assert resp.status_code == 200
     days = resp.json()
     assert len(days) == 1
-    assert days[0]["date"] == "2026-10-26"
-    assert days[0]["day_number"] == 1
-    assert "Oct 26, 2026" in days[0]["label"]
+    assert days[0]['date'] == '2026-10-26'
+    assert days[0]['day_number'] == 1
+    assert 'Oct 26, 2026' in days[0]['label']
 
     # 2. attach_room_recording with target_date=2026-10-26 should match this talk
-    with patch("app.routes.talks.heavy_queue"):
+    with patch('app.routes.talks.heavy_queue'):
         res = client.post(
-            "/talks/room/attach-recording",
+            '/talks/room/attach-recording',
             data={
-                "room": "Room Tokyo",
-                "event_id": str(event.id),
-                "video_url": "https://example.com/tokyo.mp4",
-                "target_date": "2026-10-26",
+                'room': 'Room Tokyo',
+                'event_id': str(event.id),
+                'video_url': 'https://example.com/tokyo.mp4',
+                'target_date': '2026-10-26',
             },
-            headers={"X-API-Key": api_key},
+            headers={'X-API-Key': api_key},
         )
         assert res.status_code == 200
         data = res.json()
-        assert data["attached_count"] == 1
-        assert data["talk_ids"] == [t_tokyo.id]
-        assert data["target_date"] == "2026-10-26"
+        assert data['attached_count'] == 1
+        assert data['talk_ids'] == [t_tokyo.id]
+        assert data['target_date'] == '2026-10-26'
 
 
 def test_multiday_room_recording_client_validation_and_labels(
     client: TestClient,
 ) -> None:
     """Verify Issue #376 regression test: multi-day room recording client validation and submit label behavior."""
-    dash_js = client.get("/static/js/dashboard.js")
+    dash_js = client.get('/static/js/dashboard.js')
     assert dash_js.status_code == 200
     js_content = dash_js.text
 
     # Verify key client-side guards are present in dashboard.js
-    assert "_hasMultipleDays" in js_content
+    assert '_hasMultipleDays' in js_content
+    assert '_loadRoomDays' in js_content
     assert "btn.textContent = 'Select Day to Attach Recording'" in js_content
-    assert (
-        "This room spans multiple days. Please select a target day to attach recording."
-        in js_content
-    )
+    assert 'Please select a target day for this multi-day room recording.' in js_content
 
-    # If node is installed, execute full DOM simulation tests for all 5 scenarios
-    node_bin = shutil.which("node")
+    # If node is installed, execute full DOM simulation tests for all scenarios
+    node_bin = shutil.which('node')
     if node_bin:
         node_script = """
 const assert = require('assert');
@@ -4336,7 +4615,19 @@ function setupEnvironment() {
       id,
       tagName: tag.toUpperCase(),
       value: '',
-      textContent: '',
+      _textContent: '',
+      get textContent() {
+        return this._textContent || '';
+      },
+      set textContent(v) {
+        this._textContent = v;
+        if (v === '') {
+          this.options = [];
+          this._selectedIndex = undefined;
+          this.selectedOptions = [];
+          this.value = '';
+        }
+      },
       dataset: {},
       options: [],
       selectedOptions: [],
@@ -4348,13 +4639,25 @@ function setupEnvironment() {
       addEventListener: () => {},
       appendChild: (child) => {
         el.options.push(child);
-        if (el.options.length === 1) el.selectedIndex = 0;
+        if (el.options.length === 1 && el._selectedIndex === undefined) {
+          el.selectedIndex = 0;
+        }
+      },
+      replaceChildren: (...children) => {
+        el.options = [];
+        el._selectedIndex = undefined;
+        el.selectedOptions = [];
+        el.value = '';
+        el.textContent = '';
+        for (const child of children) {
+          el.appendChild(child);
+        }
       },
       files: []
     };
     Object.defineProperty(el, 'selectedIndex', {
       get() {
-        return el._selectedIndex || 0;
+        return el._selectedIndex !== undefined ? el._selectedIndex : (el.options.length > 0 ? 0 : -1);
       },
       set(idx) {
         el._selectedIndex = idx;
@@ -4372,12 +4675,13 @@ function setupEnvironment() {
     querySelectorAll: () => [],
     addEventListener: () => {},
     createElement: (tag) => {
-      return {
+      const el = {
         tagName: tag.toUpperCase(),
         value: '',
         textContent: '',
         classList: { add: () => {}, remove: () => {} }
       };
+      return el;
     },
     createTextNode: (text) => ({ textContent: text })
   };
@@ -4396,114 +4700,184 @@ function setupEnvironment() {
     append(k, v) { this.data[k] = v; }
   };
   const fetchCalls = [];
+  const roomDaysResponses = {};
   const fetch = async (url, opts) => {
     fetchCalls.push({ url, opts });
+    if (url.startsWith('/talks/room/days')) {
+      const u = new URL('http://localhost' + url);
+      const room = u.searchParams.get('room');
+      const resp = roomDaysResponses[room];
+      if (resp && resp.error) {
+        return { ok: false, status: 500, json: async () => ({ detail: 'Server Error' }) };
+      }
+      return { ok: true, json: async () => (resp ? resp.days : []) };
+    }
     return { ok: true, json: async () => ({ attached_count: 1, room: 'Room A' }) };
   };
 
   const fn = new Function('window', 'document', 'Modal', 'FormData', 'fetch', code);
   fn(window, document, Modal, FormData, fetch);
 
-  return { getElement: (id) => document.getElementById(id), window, document, Modal, fetchCalls };
+  return { getElement: (id) => document.getElementById(id), window, document, Modal, fetchCalls, roomDaysResponses };
 }
 
 async function runTests() {
-  // Test 1 & 4: Multi-day room with no selected day: submission blocked & button label correct
+  // Test 1: Multi-day room loaded via _loadRoomDays:
+  // submission blocked with exact message, button label correct, day selection enables submission
   {
     const env = setupEnvironment();
     const roomSel = env.getElement('attach-room-select');
-    roomSel.value = 'Room A';
+    roomSel.value = 'Room Multi';
     const dateSel = env.getElement('attach-room-date');
     const btn = env.getElement('btn-submit-attach-room');
     const urlInput = env.getElement('attach-room-url');
     urlInput.value = 'https://example.com/recording.mp4';
 
-    dateSel.dataset.hasMultipleDays = 'true';
-    dateSel.options = [
-      { value: '', textContent: 'Select Day (2 days found)' },
-      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' },
-      { value: '2026-11-09', textContent: 'Day 2: Nov 9, 2026 (1 session)' }
-    ];
-    dateSel.selectedIndex = 0;
+    env.roomDaysResponses['Room Multi'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
 
-    // 4. Button label is correct when no day is selected
-    env.window._updateAttachSubmitLabel();
+    await env.window._loadRoomDays('Room Multi');
+    assert.strictEqual(dateSel.dataset.roomDaysStatus, 'loaded');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'true');
+    assert.strictEqual(dateSel.options[0].textContent, 'Select Day (2 days found)');
+    assert.strictEqual(dateSel.value, '');
+
+    // Submit button label check
     assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
-    assert.notStrictEqual(btn.textContent, 'Attach to All Sessions in Room A');
+    assert.notStrictEqual(btn.textContent, 'Attach to All Sessions in Room Multi');
 
-    // 1. Multi-day room with no selected day: submission blocked
+    // Submission blocked without date
     await env.window.submitAttachRoomRecording();
-    assert.strictEqual(env.fetchCalls.length, 0, 'No fetch call should be made');
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0, 'No POST request should be made when day is unselected');
     assert.strictEqual(env.Modal.alerts.length, 1);
     assert.strictEqual(env.Modal.alerts[0].title, 'Validation Error');
-    assert.match(env.Modal.alerts[0].message, /select a target day/i);
-  }
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'Please select a target day for this multi-day room recording.'
+    );
 
-  // Test 2 & 5: Multi-day room with a selected day: submission allowed & button label updates correctly
-  {
-    const env = setupEnvironment();
-    const roomSel = env.getElement('attach-room-select');
-    roomSel.value = 'Room A';
-    const dateSel = env.getElement('attach-room-date');
-    const btn = env.getElement('btn-submit-attach-room');
-    const urlInput = env.getElement('attach-room-url');
-    urlInput.value = 'https://example.com/recording.mp4';
-
-    dateSel.dataset.hasMultipleDays = 'true';
-    dateSel.options = [
-      { value: '', textContent: 'Select Day (2 days found)' },
-      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' },
-      { value: '2026-11-09', textContent: 'Day 2: Nov 9, 2026 (1 session)' }
-    ];
-
-    // 5. Button label updates correctly after selecting a day
+    // Select Day 1
     dateSel.selectedIndex = 1;
     env.window._updateAttachSubmitLabel();
-    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room A)');
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Multi)');
 
-    // 2. Multi-day room with a selected day: submission allowed
+    // Submission allowed with selected day
     await env.window.submitAttachRoomRecording();
-    assert.strictEqual(env.fetchCalls.length, 1, 'Fetch call should be made');
-    assert.strictEqual(env.fetchCalls[0].url, '/talks/room/attach-recording');
-    assert.strictEqual(env.fetchCalls[0].opts.body.data.room, 'Room A');
-    assert.strictEqual(env.fetchCalls[0].opts.body.data.target_date, '2026-11-08');
-
-    // Deselect back to empty
-    dateSel.selectedIndex = 0;
-    env.window._updateAttachSubmitLabel();
-    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+    const updatedPostCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(updatedPostCalls.length, 1, 'POST request should be made when day is selected');
+    assert.strictEqual(updatedPostCalls[0].url, '/talks/room/attach-recording');
+    assert.strictEqual(updatedPostCalls[0].opts.body.data.room, 'Room Multi');
+    assert.strictEqual(updatedPostCalls[0].opts.body.data.target_date, '2026-11-08');
   }
 
-  // Test 3: Single-day room: existing behavior preserved
+  // Test 2: Single-day room loaded via _loadRoomDays:
+  // single day is auto-selected and submission succeeds with that day
   {
     const env = setupEnvironment();
     const roomSel = env.getElement('attach-room-select');
-    roomSel.value = 'Room B';
+    roomSel.value = 'Room Single';
     const dateSel = env.getElement('attach-room-date');
     const btn = env.getElement('btn-submit-attach-room');
     const urlInput = env.getElement('attach-room-url');
     urlInput.value = 'https://example.com/recording.mp4';
 
-    dateSel.dataset.hasMultipleDays = 'false';
-    dateSel.options = [
-      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' }
-    ];
-    dateSel.selectedIndex = 0;
+    env.roomDaysResponses['Room Single'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' }
+      ]
+    };
 
-    env.window._updateAttachSubmitLabel();
-    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room B)');
+    await env.window._loadRoomDays('Room Single');
+    assert.strictEqual(dateSel.dataset.roomDaysStatus, 'loaded');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'false');
+    assert.strictEqual(dateSel.selectedIndex, 0);
+    assert.strictEqual(dateSel.value, '2026-11-08');
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Single)');
 
     await env.window.submitAttachRoomRecording();
-    assert.strictEqual(env.fetchCalls.length, 1, 'Fetch call should be made');
-    assert.strictEqual(env.fetchCalls[0].opts.body.data.room, 'Room B');
-    assert.strictEqual(env.fetchCalls[0].opts.body.data.target_date, '2026-11-08');
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 1, 'POST request should be made');
+    assert.strictEqual(postCalls[0].opts.body.data.room, 'Room Single');
+    assert.strictEqual(postCalls[0].opts.body.data.target_date, '2026-11-08');
+  }
 
-    // Single-day room without specific day selected preserves attach to all sessions
-    dateSel.options = [{ value: '', textContent: 'All Days / Select Day' }];
-    dateSel.selectedIndex = 0;
-    dateSel.dataset.hasMultipleDays = 'false';
-    env.window._updateAttachSubmitLabel();
-    assert.strictEqual(btn.textContent, 'Attach to All Sessions in Room B');
+  // Test 3: Room days loading state and stale room selection guard
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Pending';
+    const dateSel = env.getElement('attach-room-date');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    dateSel.dataset.roomDaysStatus = 'loading';
+    dateSel.dataset.loadedRoom = 'Room Pending';
+
+    await env.window.submitAttachRoomRecording();
+    let postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0);
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(env.Modal.alerts[0].message, 'Loading schedule for this room. Please wait a moment.');
+
+    // Stale room mismatch
+    dateSel.dataset.roomDaysStatus = 'loaded';
+    dateSel.dataset.loadedRoom = 'Room Old';
+    roomSel.value = 'Room Changed';
+
+    await env.window.submitAttachRoomRecording();
+    postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0);
+    assert.strictEqual(env.Modal.alerts.length, 2);
+    assert.strictEqual(env.Modal.alerts[1].message, 'Loading schedule for this room. Please wait a moment.');
+  }
+
+  // Test 4: Failed room-day lookup state
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Error';
+    const dateSel = env.getElement('attach-room-date');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    env.roomDaysResponses['Room Error'] = { error: true };
+    await env.window._loadRoomDays('Room Error');
+    assert.strictEqual(dateSel.dataset.roomDaysStatus, 'error');
+
+    await env.window.submitAttachRoomRecording();
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0);
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'Failed to load schedule for this room. Please re-select the room.'
+    );
+  }
+
+  // Test 5: Empty room selection and helper functions
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = '';
+    const dateSel = env.getElement('attach-room-date');
+    await env.window._loadRoomDays('');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'false');
+
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(env.Modal.alerts[0].message, 'Please enter or select a room name.');
+
+    // Helper functions direct checks
+    assert.strictEqual(env.window._hasMultipleDays(null), false);
+    assert.strictEqual(env.window._hasMultipleDays({ dataset: { hasMultipleDays: 'true' } }), true);
+    assert.strictEqual(env.window._hasMultipleDays({ dataset: { hasMultipleDays: 'false' } }), false);
+    assert.strictEqual(env.window._hasMultipleDays({ options: [{ value: '' }, { value: '2026-11-01' }, { value: '2026-11-02' }] }), true);
+    assert.strictEqual(env.window._hasMultipleDays({ options: [{ value: '2026-11-01' }] }), false);
   }
 }
 
@@ -4513,7 +4887,7 @@ runTests().catch(err => {
 });
 """
         proc = subprocess.run(
-            [node_bin, "-e", node_script, js_content],
+            [node_bin, '-e', node_script, js_content],
             capture_output=True,
             text=True,
             check=True,

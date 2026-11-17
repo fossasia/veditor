@@ -75,10 +75,10 @@ from sqlalchemy.orm import Session
 
 
 def test_get_talk(db_session: Session):
-    event = models.Event(name="Test Event")
+    event = models.Event(name='Test Event')
     db_session.add(event)
     db_session.commit()
-    talk = models.Talk(event_id=event.id, title="T", start=..., end=...)
+    talk = models.Talk(event_id=event.id, title='T', start=..., end=...)
     db_session.add(talk)
     db_session.commit()
     ...

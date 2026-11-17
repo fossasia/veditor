@@ -3,7 +3,8 @@ from collections.abc import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.config import settings
+from .config import settings
+
 
 engine = create_engine(settings.database_url, echo=False)
 # Out-of-process code (RQ workers, CLI, and out-of-band request writes) has no
@@ -16,7 +17,7 @@ SessionLocal = sessionmaker(
     bind=engine,
     # No-op for engine binds; lets tests rebind to a connection already inside
     # an outer transaction without committing it on session.commit().
-    join_transaction_mode="create_savepoint",
+    join_transaction_mode='create_savepoint',
 )
 
 
