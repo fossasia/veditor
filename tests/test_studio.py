@@ -4189,7 +4189,7 @@ def test_admin_can_edit_completed_talk_ui(
     admin = models.User(
         email='admin_studio_test@example.com',
         hashed_password='hash',
-        role='admin',
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(admin)
@@ -4202,7 +4202,7 @@ def test_admin_can_edit_completed_talk_ui(
     talk = models.Talk(
         event_id=event.id,
         title='Completed Talk With Speaker Cuts',
-        status='done',
+        status=TalkStatus.DONE,
         speaker_email='speaker@example.com',
         cut_start=20.0,
         cut_end=120.0,
@@ -4231,13 +4231,13 @@ def test_admin_viewing_other_organizer_completed_talk_renders_edit_control_in_vi
     other_org = models.User(
         email='other_org@example.com',
         hashed_password='hash',
-        role='organizer',
+        role=AuthRole.ORGANIZER,
         is_active=True,
     )
     admin = models.User(
         email='viewing_admin@example.com',
         hashed_password='hash',
-        role='admin',
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add_all([other_org, admin])
@@ -4250,7 +4250,7 @@ def test_admin_viewing_other_organizer_completed_talk_renders_edit_control_in_vi
     talk = models.Talk(
         event_id=event.id,
         title='Other Org Completed Talk',
-        status='done',
+        status=TalkStatus.DONE,
         cut_start=10.0,
         cut_end=60.0,
         start=now,
@@ -4281,7 +4281,7 @@ def test_admin_not_blocked_by_awaiting_speaker_in_preview(
     admin = models.User(
         email='admin_preview_test@example.com',
         hashed_password='hash',
-        role='admin',
+        role=AuthRole.ADMIN,
         is_active=True,
     )
     db_session.add(admin)
@@ -4294,7 +4294,7 @@ def test_admin_not_blocked_by_awaiting_speaker_in_preview(
     talk = models.Talk(
         event_id=event.id,
         title='Preview Talk With Speaker',
-        status='preview',
+        status=TalkStatus.PREVIEW,
         speaker_email='speaker@example.com',
         cut_start=10.0,
         cut_end=60.0,
@@ -4685,9 +4685,15 @@ function setupEnvironment() {
     },
     createTextNode: (text) => ({ textContent: text })
   };
+  let reloadCount = 0;
+  const location = {
+    reload: () => {
+      reloadCount++;
+    }
+  };
   const window = {
     document,
-    location: { reload: () => {} }
+    location
   };
   const Modal = {
     alerts: [],
@@ -4715,10 +4721,19 @@ function setupEnvironment() {
     return { ok: true, json: async () => ({ attached_count: 1, room: 'Room A' }) };
   };
 
-  const fn = new Function('window', 'document', 'Modal', 'FormData', 'fetch', code);
-  fn(window, document, Modal, FormData, fetch);
+  const fn = new Function('window', 'document', 'Modal', 'FormData', 'fetch', 'location', code);
+  fn(window, document, Modal, FormData, fetch, location);
 
-  return { getElement: (id) => document.getElementById(id), window, document, Modal, fetchCalls, roomDaysResponses };
+  return {
+    getElement: (id) => document.getElementById(id),
+    window,
+    document,
+    location,
+    getReloadCount: () => reloadCount,
+    Modal,
+    fetchCalls,
+    roomDaysResponses
+  };
 }
 
 async function runTests() {
@@ -4773,6 +4788,11 @@ async function runTests() {
     assert.strictEqual(updatedPostCalls[0].url, '/talks/room/attach-recording');
     assert.strictEqual(updatedPostCalls[0].opts.body.data.room, 'Room Multi');
     assert.strictEqual(updatedPostCalls[0].opts.body.data.target_date, '2026-11-08');
+    assert.strictEqual(env.getReloadCount(), 1, 'location.reload should be called on success');
+    const failedAlerts = env.Modal.alerts.filter(a => a.title === 'Attachment Failed');
+    assert.strictEqual(failedAlerts.length, 0, 'No Attachment Failed alert should occur on success');
+    const successAlerts = env.Modal.alerts.filter(a => a.title === 'Attachment Successful');
+    assert.strictEqual(successAlerts.length, 1, 'Attachment Successful alert should occur');
   }
 
   // Test 2: Single-day room loaded via _loadRoomDays:
@@ -4804,6 +4824,11 @@ async function runTests() {
     assert.strictEqual(postCalls.length, 1, 'POST request should be made');
     assert.strictEqual(postCalls[0].opts.body.data.room, 'Room Single');
     assert.strictEqual(postCalls[0].opts.body.data.target_date, '2026-11-08');
+    assert.strictEqual(env.getReloadCount(), 1, 'location.reload should be called on success');
+    const failedAlerts = env.Modal.alerts.filter(a => a.title === 'Attachment Failed');
+    assert.strictEqual(failedAlerts.length, 0, 'No Attachment Failed alert should occur on success');
+    const successAlerts = env.Modal.alerts.filter(a => a.title === 'Attachment Successful');
+    assert.strictEqual(successAlerts.length, 1, 'Attachment Successful alert should occur');
   }
 
   // Test 3: Room days loading state and stale room selection guard
@@ -4878,6 +4903,196 @@ async function runTests() {
     assert.strictEqual(env.window._hasMultipleDays({ dataset: { hasMultipleDays: 'false' } }), false);
     assert.strictEqual(env.window._hasMultipleDays({ options: [{ value: '' }, { value: '2026-11-01' }, { value: '2026-11-02' }] }), true);
     assert.strictEqual(env.window._hasMultipleDays({ options: [{ value: '2026-11-01' }] }), false);
+  }
+
+  // Test 6: Schedule change: Multi-day to single-day before submission
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Dynamic Single';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    // Room initially spans 2 days; user has not selected a day
+    env.roomDaysResponses['Room Dynamic Single'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+    await env.window._loadRoomDays('Room Dynamic Single');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'true');
+    assert.strictEqual(dateSel.value, '');
+    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+
+    // Another organizer removes Day 2 on server (now single-day)
+    env.roomDaysResponses['Room Dynamic Single'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' }
+      ]
+    };
+
+    // User submits without manual refresh
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'false');
+    assert.strictEqual(dateSel.value, '2026-11-08');
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Dynamic Single)');
+
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 1, 'Submission should succeed after room becomes single-day');
+    assert.strictEqual(postCalls[0].opts.body.data.room, 'Room Dynamic Single');
+    assert.strictEqual(postCalls[0].opts.body.data.target_date, '2026-11-08');
+    assert.strictEqual(env.getReloadCount(), 1, 'location.reload should be called');
+    assert.strictEqual(env.Modal.alerts.filter(a => a.title === 'Attachment Failed').length, 0);
+    assert.strictEqual(env.Modal.alerts.filter(a => a.title === 'Attachment Successful').length, 1);
+  }
+
+  // Test 7: Schedule change: Single-day to multi-day before submission
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Dynamic Multi';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    // Room initially spans 1 day
+    env.roomDaysResponses['Room Dynamic Multi'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' }
+      ]
+    };
+    await env.window._loadRoomDays('Room Dynamic Multi');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'false');
+    assert.strictEqual(dateSel.value, '2026-11-08');
+
+    // Deselect the day to test multi-day requirement
+    dateSel.selectedIndex = 0;
+    dateSel.value = '';
+
+    // Another organizer adds Day 2 on server (now multi-day)
+    env.roomDaysResponses['Room Dynamic Multi'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+
+    // User submits without a target date selected
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'true');
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0, 'Submission must be blocked when room becomes multi-day without selected day');
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(env.Modal.alerts[0].title, 'Validation Error');
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'Please select a target day for this multi-day room recording.'
+    );
+    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+  }
+
+  // Test 8: Selected date removed by another organizer before submission
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Removed Date';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    // Modal initially loads 2 days
+    env.roomDaysResponses['Room Removed Date'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+    await env.window._loadRoomDays('Room Removed Date');
+    // User selects Day 2
+    dateSel.selectedIndex = 2;
+    dateSel.value = '2026-11-09';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 2 Sessions (Room Removed Date)');
+
+    // Organizer removes Day 2, adds Day 3 instead
+    env.roomDaysResponses['Room Removed Date'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-10', label: 'Day 3: Nov 10, 2026 (1 session)' }
+      ]
+    };
+
+    // User submits with stale Day 2 selection
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(dateSel.value, '', 'Selected date must be cleared when removed from server schedule');
+    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0, 'Submission must be blocked when previously selected date was removed');
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'Please select a target day for this multi-day room recording.'
+    );
+  }
+
+  // Test 9: Valid target date preserved across schedule refresh
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Preserved Date';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    env.roomDaysResponses['Room Preserved Date'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+    await env.window._loadRoomDays('Room Preserved Date');
+    dateSel.selectedIndex = 1;
+    dateSel.value = '2026-11-08';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Preserved Date)');
+
+    // Organizer adds Day 3 on server; Day 1 remains valid
+    env.roomDaysResponses['Room Preserved Date'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' },
+        { date: '2026-11-10', label: 'Day 3: Nov 10, 2026 (1 session)' }
+      ]
+    };
+
+    await env.window.submitAttachRoomRecording();
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 1);
+    assert.strictEqual(postCalls[0].opts.body.data.target_date, '2026-11-08');
+    assert.strictEqual(env.getReloadCount(), 1);
+    assert.strictEqual(env.Modal.alerts.filter(a => a.title === 'Attachment Failed').length, 0);
+  }
+
+  // Test 10: Deduplication of concurrent in-flight requests
+  {
+    const env = setupEnvironment();
+    env.roomDaysResponses['Room Dedup'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' }
+      ]
+    };
+    const p1 = env.window._loadRoomDays('Room Dedup');
+    const p2 = env.window._loadRoomDays('Room Dedup');
+    await Promise.all([p1, p2]);
+
+    const getCalls = env.fetchCalls.filter(c => c.url.startsWith('/talks/room/days?room=Room%20Dedup'));
+    assert.strictEqual(getCalls.length, 1, 'Concurrent requests for the same room should be deduplicated');
   }
 }
 
