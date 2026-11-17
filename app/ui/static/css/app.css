@@ -202,6 +202,11 @@ a:hover { color: var(--v-primary-hover); }
   transition: margin-left 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ── No Sidebar (e.g. login/signup) ──────────────────────────── */
+.app-shell:not(:has(.sidebar)) .main-content {
+  margin-left: 0;
+}
+
 /* ── Sidebar Collapsed State ─────────────────────────────────── */
 html[data-sidebar="collapsed"] .sidebar {
   transform: translateX(-100%);

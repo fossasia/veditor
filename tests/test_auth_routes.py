@@ -194,6 +194,23 @@ def test_get_signup_already_authenticated(
     assert res_unsafe.headers['location'] == '/studio'
 
 
+@pytest.mark.parametrize(
+    'path',
+    [
+        '/forgot-password',
+        '/reset-password',
+        '/verify-email',
+        '/verify-email/pending',
+        '/verify-email/resend',
+    ],
+)
+def test_auth_pages_hide_sidebar(client: TestClient, path: str) -> None:
+    response = client.get(path)
+    assert 'class="auth-container"' in response.text
+    assert 'id="app-sidebar"' not in response.text
+    assert 'id="sidebar-toggle-btn"' not in response.text
+
+
 def test_post_signup_validation_errors(client: TestClient) -> None:
     # Invalid email regex
     res = client.post(
