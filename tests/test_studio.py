@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import subprocess
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -4302,3 +4304,218 @@ def test_room_days_and_attachment_with_event_timezone(
         assert data["attached_count"] == 1
         assert data["talk_ids"] == [t_tokyo.id]
         assert data["target_date"] == "2026-10-26"
+
+
+def test_multiday_room_recording_client_validation_and_labels(
+    client: TestClient,
+) -> None:
+    """Verify Issue #376 regression test: multi-day room recording client validation and submit label behavior."""
+    dash_js = client.get("/static/js/dashboard.js")
+    assert dash_js.status_code == 200
+    js_content = dash_js.text
+
+    # Verify key client-side guards are present in dashboard.js
+    assert "_hasMultipleDays" in js_content
+    assert "btn.textContent = 'Select Day to Attach Recording'" in js_content
+    assert (
+        "This room spans multiple days. Please select a target day to attach recording."
+        in js_content
+    )
+
+    # If node is installed, execute full DOM simulation tests for all 5 scenarios
+    node_bin = shutil.which("node")
+    if node_bin:
+        node_script = """
+const assert = require('assert');
+const code = process.argv[1];
+
+function setupEnvironment() {
+  const elements = {};
+  function makeElement(id, tag = 'div') {
+    const el = {
+      id,
+      tagName: tag.toUpperCase(),
+      value: '',
+      textContent: '',
+      dataset: {},
+      options: [],
+      selectedOptions: [],
+      classList: {
+        contains: (c) => false,
+        add: () => {},
+        remove: () => {}
+      },
+      addEventListener: () => {},
+      appendChild: (child) => {
+        el.options.push(child);
+        if (el.options.length === 1) el.selectedIndex = 0;
+      },
+      files: []
+    };
+    Object.defineProperty(el, 'selectedIndex', {
+      get() {
+        return el._selectedIndex || 0;
+      },
+      set(idx) {
+        el._selectedIndex = idx;
+        el.selectedOptions = el.options[idx] ? [el.options[idx]] : [];
+        el.value = el.options[idx] ? el.options[idx].value : '';
+      }
+    });
+    elements[id] = el;
+    return el;
+  }
+
+  const document = {
+    getElementById: (id) => elements[id] || makeElement(id),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    createElement: (tag) => {
+      return {
+        tagName: tag.toUpperCase(),
+        value: '',
+        textContent: '',
+        classList: { add: () => {}, remove: () => {} }
+      };
+    },
+    createTextNode: (text) => ({ textContent: text })
+  };
+  const window = {
+    document,
+    location: { reload: () => {} }
+  };
+  const Modal = {
+    alerts: [],
+    alert: async (opts) => {
+      Modal.alerts.push(opts);
+    }
+  };
+  const FormData = class {
+    constructor() { this.data = {}; }
+    append(k, v) { this.data[k] = v; }
+  };
+  const fetchCalls = [];
+  const fetch = async (url, opts) => {
+    fetchCalls.push({ url, opts });
+    return { ok: true, json: async () => ({ attached_count: 1, room: 'Room A' }) };
+  };
+
+  const fn = new Function('window', 'document', 'Modal', 'FormData', 'fetch', code);
+  fn(window, document, Modal, FormData, fetch);
+
+  return { getElement: (id) => document.getElementById(id), window, document, Modal, fetchCalls };
+}
+
+async function runTests() {
+  // Test 1 & 4: Multi-day room with no selected day: submission blocked & button label correct
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room A';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    dateSel.dataset.hasMultipleDays = 'true';
+    dateSel.options = [
+      { value: '', textContent: 'Select Day (2 days found)' },
+      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' },
+      { value: '2026-11-09', textContent: 'Day 2: Nov 9, 2026 (1 session)' }
+    ];
+    dateSel.selectedIndex = 0;
+
+    // 4. Button label is correct when no day is selected
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+    assert.notStrictEqual(btn.textContent, 'Attach to All Sessions in Room A');
+
+    // 1. Multi-day room with no selected day: submission blocked
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(env.fetchCalls.length, 0, 'No fetch call should be made');
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(env.Modal.alerts[0].title, 'Validation Error');
+    assert.match(env.Modal.alerts[0].message, /select a target day/i);
+  }
+
+  // Test 2 & 5: Multi-day room with a selected day: submission allowed & button label updates correctly
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room A';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    dateSel.dataset.hasMultipleDays = 'true';
+    dateSel.options = [
+      { value: '', textContent: 'Select Day (2 days found)' },
+      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' },
+      { value: '2026-11-09', textContent: 'Day 2: Nov 9, 2026 (1 session)' }
+    ];
+
+    // 5. Button label updates correctly after selecting a day
+    dateSel.selectedIndex = 1;
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room A)');
+
+    // 2. Multi-day room with a selected day: submission allowed
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(env.fetchCalls.length, 1, 'Fetch call should be made');
+    assert.strictEqual(env.fetchCalls[0].url, '/talks/room/attach-recording');
+    assert.strictEqual(env.fetchCalls[0].opts.body.data.room, 'Room A');
+    assert.strictEqual(env.fetchCalls[0].opts.body.data.target_date, '2026-11-08');
+
+    // Deselect back to empty
+    dateSel.selectedIndex = 0;
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+  }
+
+  // Test 3: Single-day room: existing behavior preserved
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room B';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    dateSel.dataset.hasMultipleDays = 'false';
+    dateSel.options = [
+      { value: '2026-11-08', textContent: 'Day 1: Nov 8, 2026 (1 session)' }
+    ];
+    dateSel.selectedIndex = 0;
+
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room B)');
+
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(env.fetchCalls.length, 1, 'Fetch call should be made');
+    assert.strictEqual(env.fetchCalls[0].opts.body.data.room, 'Room B');
+    assert.strictEqual(env.fetchCalls[0].opts.body.data.target_date, '2026-11-08');
+
+    // Single-day room without specific day selected preserves attach to all sessions
+    dateSel.options = [{ value: '', textContent: 'All Days / Select Day' }];
+    dateSel.selectedIndex = 0;
+    dateSel.dataset.hasMultipleDays = 'false';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to All Sessions in Room B');
+  }
+}
+
+runTests().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+        proc = subprocess.run(
+            [node_bin, "-e", node_script, js_content],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert proc.returncode == 0

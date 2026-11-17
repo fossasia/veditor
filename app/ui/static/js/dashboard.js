@@ -251,16 +251,29 @@ async function _loadAttachRooms(eventId, selectedRoom = '') {
   }
 }
 
+function _hasMultipleDays(dateSel) {
+  if (!dateSel) return false;
+  if (dateSel.dataset && dateSel.dataset.hasMultipleDays === 'true') return true;
+  if (dateSel.dataset && dateSel.dataset.hasMultipleDays === 'false') return false;
+  const validDayOptions = Array.from(dateSel.options || []).filter(opt => opt.value && opt.value.trim() !== '');
+  return validDayOptions.length > 1;
+}
+
 async function _loadRoomDays(room) {
   const currentSeq = ++_loadRoomDaysSeq;
   const dateSel = document.getElementById('attach-room-date');
   if (!dateSel) return;
   dateSel.textContent = '';
+  delete dateSel.dataset.hasMultipleDays;
   const initialOpt = document.createElement('option');
   initialOpt.value = '';
   initialOpt.textContent = 'All Days / Select Day';
   dateSel.appendChild(initialOpt);
-  if (!room || !room.trim()) return;
+  if (!room || !room.trim()) {
+    dateSel.dataset.hasMultipleDays = 'false';
+    _updateAttachSubmitLabel();
+    return;
+  }
 
   const eventId = _getResolvedEventId();
   let url = `/talks/room/days?room=${encodeURIComponent(room.trim())}`;
@@ -277,10 +290,13 @@ async function _loadRoomDays(room) {
     if (Array.isArray(days) && days.length > 0) {
       dateSel.textContent = '';
       if (days.length > 1) {
+        dateSel.dataset.hasMultipleDays = 'true';
         const defaultOpt = document.createElement('option');
         defaultOpt.value = '';
         defaultOpt.textContent = `Select Day (${days.length} days found)`;
         dateSel.appendChild(defaultOpt);
+      } else {
+        dateSel.dataset.hasMultipleDays = 'false';
       }
       days.forEach(d => {
         const opt = document.createElement('option');
@@ -291,10 +307,13 @@ async function _loadRoomDays(room) {
       if (days.length === 1) {
         dateSel.selectedIndex = 0;
       }
+    } else {
+      dateSel.dataset.hasMultipleDays = 'false';
     }
   } catch (e) {
     if (currentSeq === _loadRoomDaysSeq) {
       console.warn('Failed to load room days:', e);
+      dateSel.dataset.hasMultipleDays = 'false';
     }
   } finally {
     if (currentSeq === _loadRoomDaysSeq) {
@@ -318,12 +337,17 @@ function _updateAttachSubmitLabel() {
     const dayMatch = text.match(/^(Day \d+)/);
     const dayPrefix = dayMatch ? dayMatch[1] : selectedDate;
     btn.textContent = `Attach to ${dayPrefix} Sessions (${room})`;
+  } else if (room && _hasMultipleDays(dateSel)) {
+    btn.textContent = 'Select Day to Attach Recording';
   } else if (room) {
     btn.textContent = `Attach to All Sessions in ${room}`;
   } else {
     btn.textContent = 'Attach Recording';
   }
 }
+
+window._hasMultipleDays = _hasMultipleDays;
+window._updateAttachSubmitLabel = _updateAttachSubmitLabel;
 
 function _initAttachRoomModal() {
   const eventId = _getResolvedEventId();
@@ -365,6 +389,14 @@ window.submitAttachRoomRecording = async function() {
 
   if (!roomInput.trim()) {
     await Modal.alert({ title: 'Validation Error', message: 'Please enter or select a room name.' });
+    return;
+  }
+
+  if (_hasMultipleDays(dateSelect) && !targetDate) {
+    await Modal.alert({
+      title: 'Validation Error',
+      message: 'This room spans multiple days. Please select a target day to attach recording.',
+    });
     return;
   }
 
