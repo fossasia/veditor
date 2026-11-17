@@ -443,6 +443,7 @@ html[data-sidebar="hidden"] .settings-bottom-dock {
 
 .modal-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
   width: 100%;
   margin-top: 0.5rem;
@@ -451,8 +452,8 @@ html[data-sidebar="hidden"] .settings-bottom-dock {
 .btn-modal-cancel,
 .btn-modal-danger,
 .btn-modal-primary {
-  flex: 1;
-  padding: 0.6rem 1rem;
+  flex: 1 1 100px;
+  padding: 0.6rem 0.75rem;
   border-radius: 8px;
   font-size: 0.85rem;
   cursor: pointer;
@@ -480,6 +481,12 @@ html[data-sidebar="hidden"] .settings-bottom-dock {
 
 .btn-modal-primary:hover {
   background: var(--v-primary-hover, #1d4ed8);
+}
+
+@media (max-width: 360px) {
+  .modal-card {
+    padding: 1.25rem 0.85rem;
+  }
 }
 
 /* ── Overview Summary Panel ── */
