@@ -542,8 +542,17 @@ window.submitAttachRoomRecording = async function() {
       return;
     }
 
+    // Inspect already-loaded room-day metadata before issuing any network requests
+    const currentSelectedDate = (dateSelect.value || '').trim();
+    if (status === 'loaded' && _hasMultipleDays(dateSelect) && !currentSelectedDate) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'Please select a target day for this multi-day room recording.',
+      });
+      return;
+    }
+
     // Refresh and reconcile room-day schedule with server before validating to avoid stale cached state
-    const currentSelectedDate = dateSelect.value || '';
     const reconciliation = await _loadRoomDays(capturedRoom, currentSelectedDate, capturedEventId);
 
     // Verify event identity and room selection consistency immediately after the await

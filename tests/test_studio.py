@@ -4768,10 +4768,14 @@ async function runTests() {
     assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
     assert.notStrictEqual(btn.textContent, 'Attach to All Sessions in Room Multi');
 
-    // Submission blocked without date
+    const getCallsBefore = env.fetchCalls.filter(c => c.url.startsWith('/talks/room/days')).length;
+
+    // Submission blocked without date: must abort before ANY network call (0 GET, 0 POST)
     await env.window.submitAttachRoomRecording();
+    const getCallsAfter = env.fetchCalls.filter(c => c.url.startsWith('/talks/room/days')).length;
+    assert.strictEqual(getCallsAfter - getCallsBefore, 0, 'Zero schedule GET requests should be issued when target date is unselected');
     const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
-    assert.strictEqual(postCalls.length, 0, 'No POST request should be made when day is unselected');
+    assert.strictEqual(postCalls.length, 0, 'Zero attachment POST requests should be made when day is unselected');
     assert.strictEqual(env.Modal.alerts.length, 1);
     assert.strictEqual(env.Modal.alerts[0].title, 'Validation Error');
     assert.strictEqual(
@@ -4918,7 +4922,7 @@ async function runTests() {
     const urlInput = env.getElement('attach-room-url');
     urlInput.value = 'https://example.com/recording.mp4';
 
-    // Room initially spans 2 days; user has not selected a day
+    // Room initially spans 2 days; user selects Day 1
     env.roomDaysResponses['Room Dynamic Single'] = {
       days: [
         { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
@@ -4927,8 +4931,10 @@ async function runTests() {
     };
     await env.window._loadRoomDays('Room Dynamic Single');
     assert.strictEqual(dateSel.dataset.hasMultipleDays, 'true');
-    assert.strictEqual(dateSel.value, '');
-    assert.strictEqual(btn.textContent, 'Select Day to Attach Recording');
+    dateSel.selectedIndex = 1;
+    dateSel.value = '2026-11-08';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Dynamic Single)');
 
     // Another organizer removes Day 2 on server (now single-day)
     env.roomDaysResponses['Room Dynamic Single'] = {
@@ -4937,7 +4943,7 @@ async function runTests() {
       ]
     };
 
-    // User submits without manual refresh
+    // User submits: schedule is refreshed, room reconciles to single-day, Day 1 preserved and attached
     await env.window.submitAttachRoomRecording();
     assert.strictEqual(dateSel.dataset.hasMultipleDays, 'false');
     assert.strictEqual(dateSel.value, '2026-11-08');
