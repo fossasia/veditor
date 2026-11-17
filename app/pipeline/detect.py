@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import av
 from av.error import FFmpegError
@@ -136,7 +137,7 @@ def container_duration_seconds(container: av.container.InputContainer) -> float 
     return max(stream_durations) if stream_durations else None
 
 
-def container_creation_time(container) -> datetime | None:
+def container_creation_time(container: av.container.InputContainer) -> datetime | None:
     """Extract creation_time from container or video stream metadata."""
     c_time = container.metadata.get('creation_time')
     if not c_time and container.streams.video:
@@ -160,7 +161,7 @@ class TalkMatch:
 
 
 def match_talks_to_recording(
-    talks,
+    talks: list[Any],
     rec_start: datetime,
     rec_duration_seconds: float,
     min_overlap_fraction: float = 0.5,

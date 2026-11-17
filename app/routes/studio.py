@@ -1446,7 +1446,7 @@ def get_recording_studio(
     recording_id: int,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> Response:
     """Centralised recording studio page — review video, select talks, approve + handoff."""
     user = _get_authenticated_user_from_cookie(request, db)
     if not user:
@@ -1526,7 +1526,7 @@ def stream_recording_video(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> Response:
     """Stream recording video for HTML5 playback."""
     recording, _ = _authorize_studio_recording(recording_id, request, db)
 
@@ -1566,7 +1566,7 @@ def upload_recording_bumper_file(
     db: Annotated[Session, Depends(get_db)],
     file: Annotated[UploadFile, File()],
     kind: Annotated[str, Form()] = 'intro',
-):
+) -> dict[str, str]:
     """Upload a custom bumper file for this recording session."""
     _authorize_studio_recording(recording_id, request, db)
     if kind not in ('intro', 'outro'):
@@ -1616,7 +1616,7 @@ def bulk_approve_recording(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-):
+) -> dict[str, object]:
     """Approve recording, set cut bounds, configure bumpers, and handoff to speakers in one go."""
     from app.pipeline.detect import match_talks_to_recording
     from app.states import TRANSITIONS, advance
@@ -1734,7 +1734,7 @@ def bulk_approve_recording(
             'pending_bounds',
         ]:
             if talk.status in TRANSITIONS and step in TRANSITIONS[talk.status]:
-                advance(talk, step)
+                advance(talk, TalkStatus(step))
 
         if payload.handoff:
             talk.handed_off_at = now
@@ -1778,7 +1778,7 @@ def reject_recording(
     recording_id: int,
     request: Request,
     db: Annotated[Session, Depends(get_db)],
-):
+) -> dict[str, object]:
     """Mark recording as rejected."""
     recording, _ = _authorize_studio_recording(recording_id, request, db)
     recording.status = 'rejected'

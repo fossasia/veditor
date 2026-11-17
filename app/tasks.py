@@ -562,9 +562,9 @@ def job_ingest_room_url(
                 if job:
                     job.status = JobStatus.FAILED
                     job.updated_at = datetime.now(UTC)
-                talk = db.get(Talk, tid)
-                if talk and talk.status == TalkStatus.DETECTING:
-                    talk.status = TalkStatus.BROKEN
+                db_talk = db.get(Talk, tid)
+                if db_talk and db_talk.status == TalkStatus.DETECTING:
+                    db_talk.status = TalkStatus.BROKEN
             if recording_id:
                 rec = db.get(RoomRecording, recording_id)
                 if rec and rec.status == 'pending_analysis':

@@ -2256,7 +2256,7 @@ async def attach_room_recording(
         except (OSError, RedisError, RuntimeError) as exc:
             logger.error('Failed to enqueue room URL ingest job: %s', exc)
             for talk in eligible_talks:
-                talk.status = prev_statuses.get(talk.id, 'waiting_for_files')
+                talk.status = prev_statuses.get(talk.id, TalkStatus.WAITING_FILES)
             room_rec.status = 'broken'
             db.commit()
             raise HTTPException(
