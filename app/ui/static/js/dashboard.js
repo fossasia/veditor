@@ -330,6 +330,7 @@ async function _loadRoomDays(room, preserveDate = null, eventId = null) {
   if (preserveDate === null) {
     dateSel.textContent = '';
     delete dateSel.dataset.hasMultipleDays;
+    delete dateSel.dataset.targetRemoved;
     dateSel.appendChild(initialOpt);
   }
   dateSel.dataset.roomDaysStatus = 'loading';
@@ -368,10 +369,17 @@ async function _loadRoomDays(room, preserveDate = null, eventId = null) {
       return null;
     }
 
-    dateSel.textContent = '';
-    let targetRemoved = false;
+    const liveSelectedDate = (dateSel.value || '').trim();
     const hasPreviousTarget = Boolean(preserveDate && preserveDate.trim());
     const trimmedTarget = hasPreviousTarget ? preserveDate.trim() : '';
+
+    // Detect if selection changed while the schedule request was pending
+    const selectionChanged = hasPreviousTarget && liveSelectedDate !== trimmedTarget;
+    const targetToPreserve = selectionChanged ? liveSelectedDate : trimmedTarget;
+    const hasTargetToPreserve = Boolean(targetToPreserve);
+
+    dateSel.textContent = '';
+    let targetRemoved = false;
 
     if (Array.isArray(days) && days.length > 0) {
       if (days.length > 1) {
@@ -386,24 +394,28 @@ async function _loadRoomDays(room, preserveDate = null, eventId = null) {
           opt.value = d.date;
           opt.textContent = d.label;
           dateSel.appendChild(opt);
-          if (hasPreviousTarget && d.date === trimmedTarget) {
+          if (hasTargetToPreserve && d.date === targetToPreserve) {
             preservedIndex = idx + 1;
           }
         });
         if (preservedIndex > 0) {
           dateSel.selectedIndex = preservedIndex;
+          delete dateSel.dataset.targetRemoved;
         } else {
           dateSel.selectedIndex = 0;
           dateSel.value = '';
-          if (hasPreviousTarget) {
+          if (hasTargetToPreserve || dateSel.dataset.targetRemoved === 'true') {
             targetRemoved = true;
+            dateSel.dataset.targetRemoved = 'true';
           }
         }
       } else {
         dateSel.dataset.hasMultipleDays = 'false';
-        if (hasPreviousTarget && days[0].date !== trimmedTarget) {
+        const hasRemovedTarget = dateSel.dataset.targetRemoved === 'true';
+        if ((hasTargetToPreserve && days[0].date !== targetToPreserve) || (hasRemovedTarget && !hasTargetToPreserve)) {
           // The previous target date was removed from schedule! Do not auto-select the remaining date.
           targetRemoved = true;
+          dateSel.dataset.targetRemoved = 'true';
           const defaultOpt = document.createElement('option');
           defaultOpt.value = '';
           defaultOpt.textContent = 'Select Day';
@@ -415,6 +427,7 @@ async function _loadRoomDays(room, preserveDate = null, eventId = null) {
           dateSel.selectedIndex = 0;
           dateSel.value = '';
         } else {
+          delete dateSel.dataset.targetRemoved;
           const opt = document.createElement('option');
           opt.value = days[0].date;
           opt.textContent = days[0].label;
@@ -428,13 +441,14 @@ async function _loadRoomDays(room, preserveDate = null, eventId = null) {
       dateSel.appendChild(initialOpt);
       dateSel.selectedIndex = 0;
       dateSel.value = '';
-      if (hasPreviousTarget) {
+      if (hasTargetToPreserve || dateSel.dataset.targetRemoved === 'true') {
         targetRemoved = true;
+        dateSel.dataset.targetRemoved = 'true';
       }
     }
     dateSel.dataset.roomDaysStatus = 'loaded';
     dateSel.dataset.loadedRoom = trimmedRoom;
-    const result = Object.assign(days, { ok: true, days, targetRemoved });
+    const result = Object.assign(days, { ok: true, days, targetRemoved, selectionChanged });
     return result;
   } catch (e) {
     if (currentSeq === _loadRoomDaysSeq) {
@@ -464,11 +478,14 @@ function _updateAttachSubmitLabel() {
   const selectedDate = (dateSel && dateSel.value) ? dateSel.value : '';
 
   if (room && selectedDate && selectedDateOpt) {
+    if (dateSel && dateSel.dataset) {
+      delete dateSel.dataset.targetRemoved;
+    }
     const text = selectedDateOpt.textContent;
     const dayMatch = text.match(/^(Day \d+)/);
     const dayPrefix = dayMatch ? dayMatch[1] : selectedDate;
     btn.textContent = `Attach to ${dayPrefix} Sessions (${room})`;
-  } else if (room && _hasMultipleDays(dateSel)) {
+  } else if (room && (_hasMultipleDays(dateSel) || (dateSel && dateSel.dataset && dateSel.dataset.targetRemoved === 'true'))) {
     btn.textContent = 'Select Day to Attach Recording';
   } else if (room) {
     btn.textContent = `Attach to All Sessions in ${room}`;
@@ -482,6 +499,10 @@ window._loadRoomDays = _loadRoomDays;
 window._updateAttachSubmitLabel = _updateAttachSubmitLabel;
 
 function _initAttachRoomModal() {
+  const dateSel = document.getElementById('attach-room-date');
+  if (dateSel && dateSel.dataset) {
+    delete dateSel.dataset.targetRemoved;
+  }
   const eventId = _getResolvedEventId();
   const roomSel = document.getElementById('attach-room-select') || document.getElementById('attach-room-input');
   const currentRoom = (roomSel && roomSel.value) ? roomSel.value : '';
@@ -544,6 +565,16 @@ window.submitAttachRoomRecording = async function() {
 
     // Inspect already-loaded room-day metadata before issuing any network requests
     const currentSelectedDate = (dateSelect.value || '').trim();
+
+    // If a previously selected target date was removed from schedule and user hasn't selected a day yet
+    if (dateSelect.dataset && dateSelect.dataset.targetRemoved === 'true' && !currentSelectedDate) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The previously selected target date was removed from the schedule. Please select and confirm a new target date.',
+      });
+      return;
+    }
+
     if (status === 'loaded' && _hasMultipleDays(dateSelect) && !currentSelectedDate) {
       await Modal.alert({
         title: 'Validation Error',
@@ -579,6 +610,15 @@ window.submitAttachRoomRecording = async function() {
       await Modal.alert({
         title: 'Validation Error',
         message: 'The previously selected target date was removed from the schedule. Please select and confirm a new target date.',
+      });
+      return;
+    }
+
+    // Verify target date selection was not changed while schedule refresh was pending
+    if (reconciliation.selectionChanged) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The target date was changed during validation. Please review your selection and submit again.',
       });
       return;
     }
@@ -1160,6 +1200,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const roomSelect = document.getElementById('attach-room-select');
   if (roomSelect) {
     roomSelect.addEventListener('change', () => {
+      const dateSel = document.getElementById('attach-room-date');
+      if (dateSel && dateSel.dataset) {
+        delete dateSel.dataset.targetRemoved;
+      }
       _loadRoomDays(roomSelect.value);
     });
   }
@@ -1167,6 +1211,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateSelect = document.getElementById('attach-room-date');
   if (dateSelect) {
     dateSelect.addEventListener('change', () => {
+      if (dateSelect.value && dateSelect.value.trim()) {
+        delete dateSelect.dataset.targetRemoved;
+      }
       _updateAttachSubmitLabel();
     });
   }

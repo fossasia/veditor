@@ -4636,7 +4636,16 @@ function setupEnvironment() {
         add: () => {},
         remove: () => {}
       },
-      addEventListener: () => {},
+      listeners: {},
+      addEventListener: function(evt, handler) {
+        this.listeners[evt] = this.listeners[evt] || [];
+        this.listeners[evt].push(handler);
+      },
+      dispatchEvent: function(evt) {
+        const type = typeof evt === 'string' ? evt : (evt && evt.type ? evt.type : '');
+        const handlers = this.listeners[type] || [];
+        for (const h of handlers) h.call(this, evt);
+      },
       appendChild: (child) => {
         el.options.push(child);
         if (el.options.length === 1 && el._selectedIndex === undefined) {
@@ -4715,6 +4724,9 @@ function setupEnvironment() {
       const resp = roomDaysResponses[room];
       if (resp && resp.onFetch) {
         resp.onFetch();
+      }
+      if (resp && resp.promise) {
+        await resp.promise;
       }
       if (resp && resp.error) {
         return { ok: false, status: 500, json: async () => ({ detail: 'Server Error' }) };
@@ -5240,6 +5252,151 @@ async function runTests() {
     assert.strictEqual(postCalls[0].opts.body.data.room, 'Room Consistent');
     assert.strictEqual(postCalls[0].opts.body.data.event_id, 42);
     assert.strictEqual(postCalls[0].opts.body.data.target_date, '2026-11-08');
+  }
+
+  // Test 14 (Test A): Selection changed during delayed refresh
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Multi Delay';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    // 1. Load a multi-day room
+    const multiDays = [
+      { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+      { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+    ];
+    env.roomDaysResponses['Room Multi Delay'] = { days: multiDays };
+    await env.window._loadRoomDays('Room Multi Delay');
+    assert.strictEqual(dateSel.dataset.hasMultipleDays, 'true');
+
+    // 2. Select November 8
+    dateSel.selectedIndex = 1;
+    dateSel.value = '2026-11-08';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Multi Delay)');
+
+    // 3. Start submission with a delayed schedule response
+    let resolveSchedule;
+    const delayedPromise = new Promise(resolve => { resolveSchedule = resolve; });
+    env.roomDaysResponses['Room Multi Delay'] = {
+      days: multiDays,
+      promise: delayedPromise
+    };
+
+    const submitPromise = env.window.submitAttachRoomRecording();
+
+    // 4. While the response is pending, change the selection to November 9
+    dateSel.selectedIndex = 2;
+    dateSel.value = '2026-11-09';
+    env.window._updateAttachSubmitLabel();
+
+    // 5. Complete the response
+    resolveSchedule();
+    await submitPromise;
+
+    // 6. Assert the old date is not restored
+    assert.strictEqual(dateSel.value, '2026-11-09', 'Old date (Nov 8) must not overwrite newer selection (Nov 9)');
+    assert.strictEqual(dateSel.selectedIndex, 2);
+
+    // 7. Assert no attachment POST is sent for November 8 or November 9 during the aborted submission
+    const postCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls.length, 0, 'No POST request should be made during aborted submission');
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'The target date was changed during validation. Please review your selection and submit again.'
+    );
+
+    // 8. Verify the user can submit again using the latest selection
+    env.roomDaysResponses['Room Multi Delay'] = { days: multiDays };
+    await env.window.submitAttachRoomRecording();
+    const updatedPostCalls = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(updatedPostCalls.length, 1, 'Subsequent submission with latest selection should succeed');
+    assert.strictEqual(updatedPostCalls[0].opts.body.data.target_date, '2026-11-09', 'POST must attach to Nov 9');
+    assert.strictEqual(env.getReloadCount(), 1, 'location.reload called on success');
+    assert.strictEqual(env.Modal.alerts.filter(a => a.title === 'Attachment Successful').length, 1);
+  }
+
+  // Test 15 (Test B): Removed target and repeated submission
+  {
+    const env = setupEnvironment();
+    const roomSel = env.getElement('attach-room-select');
+    roomSel.value = 'Room Repeat Submit';
+    const dateSel = env.getElement('attach-room-date');
+    const btn = env.getElement('btn-submit-attach-room');
+    const urlInput = env.getElement('attach-room-url');
+    urlInput.value = 'https://example.com/recording.mp4';
+
+    // 1. Load a multi-day room and select November 8
+    env.roomDaysResponses['Room Repeat Submit'] = {
+      days: [
+        { date: '2026-11-08', label: 'Day 1: Nov 8, 2026 (1 session)' },
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+    await env.window._loadRoomDays('Room Repeat Submit');
+    dateSel.selectedIndex = 1;
+    dateSel.value = '2026-11-08';
+    env.window._updateAttachSubmitLabel();
+    assert.strictEqual(btn.textContent, 'Attach to Day 1 Sessions (Room Repeat Submit)');
+
+    // 2. Refresh the schedule with November 8 removed and only another date (Nov 9) remaining
+    env.roomDaysResponses['Room Repeat Submit'] = {
+      days: [
+        { date: '2026-11-09', label: 'Day 2: Nov 9, 2026 (1 session)' }
+      ]
+    };
+
+    // 3. Submit and verify the selection is cleared and submission is blocked
+    await env.window.submitAttachRoomRecording();
+    assert.strictEqual(dateSel.value, '', 'Target date selection must be cleared');
+    assert.strictEqual(dateSel.dataset.targetRemoved, 'true', 'Removed-target flag must be set');
+    const postCalls1 = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls1.length, 0, 'No POST should be sent on first aborted submission');
+    assert.strictEqual(env.Modal.alerts.length, 1);
+    assert.strictEqual(
+      env.Modal.alerts[0].message,
+      'The previously selected target date was removed from the schedule. Please select and confirm a new target date.'
+    );
+
+    // 4. Submit a second time without selecting a date
+    const getCallsBefore2nd = env.fetchCalls.filter(c => c.url.startsWith('/talks/room/days')).length;
+    await env.window.submitAttachRoomRecording();
+    const getCallsAfter2nd = env.fetchCalls.filter(c => c.url.startsWith('/talks/room/days')).length;
+
+    // 5. Assert the remaining date is NOT automatically selected
+    assert.strictEqual(dateSel.value, '', 'Remaining date must NOT be auto-selected on repeated submission');
+    assert.strictEqual(dateSel.dataset.targetRemoved, 'true', 'Removed-target flag must remain persisted');
+
+    // 6. Assert no attachment POST is sent (and no schedule GET calls made)
+    assert.strictEqual(getCallsAfter2nd, getCallsBefore2nd, 'No schedule GET request should be sent on 2nd submit');
+    const postCalls2 = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls2.length, 0, 'No POST should be sent on second submission without date');
+    assert.strictEqual(env.Modal.alerts.length, 2);
+    assert.strictEqual(
+      env.Modal.alerts[1].message,
+      'The previously selected target date was removed from the schedule. Please select and confirm a new target date.'
+    );
+
+    // 7. Explicitly select the remaining date
+    dateSel.selectedIndex = 1;
+    dateSel.value = '2026-11-09';
+    env.window._updateAttachSubmitLabel();
+
+    // 8. Verify the removed-target state clears and a valid submission can proceed
+    assert.strictEqual(dateSel.dataset.targetRemoved, undefined, 'Explicit selection must clear removed-target state');
+    assert.strictEqual(btn.textContent, 'Attach to Day 2 Sessions (Room Repeat Submit)');
+
+    await env.window.submitAttachRoomRecording();
+    const postCalls3 = env.fetchCalls.filter(c => c.opts && c.opts.method === 'POST');
+    assert.strictEqual(postCalls3.length, 1, 'Valid submission after explicit selection must succeed');
+    assert.strictEqual(postCalls3[0].opts.body.data.target_date, '2026-11-09');
+    assert.strictEqual(env.getReloadCount(), 1);
+    assert.strictEqual(env.Modal.alerts.filter(a => a.title === 'Attachment Successful').length, 1);
   }
 }
 
