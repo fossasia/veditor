@@ -380,6 +380,8 @@ function _initAttachRoomModal() {
     _loadRoomDays(currentRoom);
   }
   _setAttachSourceMode('url');
+  const startTimeInput = document.getElementById('attach-room-start-time');
+  if (startTimeInput) startTimeInput.value = '';
   _updateAttachSubmitLabel();
 }
 
@@ -430,8 +432,15 @@ window.submitAttachRoomRecording = async function() {
   try {
     const fd = new FormData();
     fd.append('room', roomInput.trim());
+    fd.append('stage_only', 'true');
     if (targetDate) {
       fd.append('target_date', targetDate);
+    }
+    const startTimeInput = document.getElementById('attach-room-start-time');
+    const startTimeVal = startTimeInput && startTimeInput.value ? startTimeInput.value.trim() : '';
+    if (startTimeVal) {
+      const baseDate = targetDate || new Date().toISOString().split('T')[0];
+      fd.append('recording_start', `${baseDate}T${startTimeVal}`);
     }
     if (isFileMode) {
       fd.append('file', fileInput.files[0]);
@@ -455,11 +464,12 @@ window.submitAttachRoomRecording = async function() {
     }
 
     const data = await res.json();
-    await Modal.alert({
-      title: 'Attachment Successful',
-      message: `Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!`,
-    });
-    location.reload();
+    if (data.recording_id) {
+      window.location.href = `/studio/recordings/${data.recording_id}`;
+    } else {
+      await Modal.alert({ title: 'Attachment Successful', message: `Successfully attached video to ${data.attached_count} session(s) in "${data.room}"!` });
+      location.reload();
+    }
   } catch (err) {
     await Modal.alert({ title: 'Attachment Failed', message: `Attachment failed: ${err.message}`, variant: 'danger' });
   } finally {

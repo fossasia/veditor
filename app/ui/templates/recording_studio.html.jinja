@@ -1,0 +1,259 @@
+{% extends "base.html.jinja" %}
+{% block title %}Recording Studio — {{ recording.room }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/studio.css">
+{% endblock %}
+
+{% block breadcrumb %}
+  <a href="/studio" class="breadcrumb-back">&larr; Talks</a>
+  <span class="sep">/</span>
+  <span class="breadcrumb-room">Recording Studio</span>
+  <span class="sep">/</span>
+  <span class="current">{{ recording.room }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="rec-studio-container">
+  <div class="rec-studio-grid">
+    <!-- Left Column: Video Preview and Metadata -->
+    <div class="rec-studio-left">
+      <div class="rec-player-card">
+        <div class="rec-player-wrapper">
+          <video id="rec-video-player" controls preload="metadata" class="rec-video-player">
+            <source src="/studio/recordings/{{ recording.id }}/stream" type="video/mp4">
+            Your browser does not support HTML5 video streaming.
+          </video>
+        </div>
+
+        <div class="rec-meta-box">
+          <h3 class="rec-meta-heading">Recording Information</h3>
+          <div class="rec-meta-grid">
+            <div class="rec-meta-item">
+              <span class="rec-meta-label">Room</span>
+              <span class="rec-meta-value">{{ recording.room }}</span>
+            </div>
+            {% if recording.recording_start %}
+            <div class="rec-meta-item">
+              <span class="rec-meta-label">Start Time</span>
+              <span class="rec-meta-value">{{ recording.recording_start.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
+            </div>
+            {% endif %}
+            {% if recording.duration_seconds %}
+            <div class="rec-meta-item">
+              <span class="rec-meta-label">Total Duration</span>
+              <span class="rec-meta-value">{{ (recording.duration_seconds // 3600)|int }}h {{ ((recording.duration_seconds % 3600) // 60)|int }}m {{ (recording.duration_seconds % 60)|int }}s</span>
+            </div>
+            {% endif %}
+            <div class="rec-meta-item">
+              <span class="rec-meta-label">Status</span>
+              <span class="badge badge-recording-status">
+                <span class="badge-dot"></span>{{ recording.status | replace('_', ' ') | title }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Talk Selection, Bumpers, and One-Go Handoff -->
+    <div class="rec-studio-right">
+      <div class="rec-panel-card">
+        <div class="rec-panel-header">
+          <h2 class="rec-panel-title">Matched Talks &amp; Speakers</h2>
+          <p class="rec-panel-description">
+            Recommended sessions are auto-selected based on timing. Start pointer is automatically positioned at scheduled start without cutting previous footage.
+          </p>
+        </div>
+
+        <form id="form-bulk-approve" class="rec-bulk-form" data-recording-id="{{ recording.id }}">
+          <div class="rec-talks-list" id="rec-talks-list">
+            {% if not room_talks %}
+              <div class="rec-empty-talks">No talks found for room {{ recording.room }}.</div>
+            {% endif %}
+            {% for talk in room_talks %}
+            {% set match = matched_by_id.get(talk.id) %}
+            <label class="rec-talk-card {% if match %}is-recommended{% endif %}" for="talk-chk-{{ talk.id }}" data-pointer-seconds="{{ match.cut_start_offset if match else 0 }}">
+              <div class="rec-talk-check-col">
+                <input
+                  type="checkbox"
+                  id="talk-chk-{{ talk.id }}"
+                  name="talk_ids"
+                  value="{{ talk.id }}"
+                  class="rec-talk-checkbox"
+                  {% if match %}checked{% endif %}
+                >
+              </div>
+              <div class="rec-talk-content-col">
+                <div class="rec-talk-title-row">
+                  <span class="rec-talk-title" title="{{ talk.title }}">{{ talk.title }}</span>
+                  {% if match %}
+                    {% if match.is_full %}
+                      <span class="coverage-badge coverage-badge-full">Full ({{ (match.overlap_fraction * 100)|int }}%)</span>
+                    {% else %}
+                      <span class="coverage-badge coverage-badge-partial">{{ (match.overlap_fraction * 100)|int }}% overlap</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="coverage-badge coverage-badge-outside">Outside window</span>
+                  {% endif %}
+                </div>
+                <div class="rec-talk-meta-row">
+                  <span class="rec-talk-schedule">
+                    {{ talk.start.strftime('%H:%M') }} &ndash; {{ talk.end.strftime('%H:%M') }}
+                  </span>
+                  {% if talk.speaker_email %}
+                    <span class="rec-talk-speaker" title="{{ talk.speaker_email }}">&bull; {{ talk.speaker_email }}</span>
+                  {% else %}
+                    <span class="rec-talk-speaker-missing">&bull; No speaker email</span>
+                  {% endif %}
+                </div>
+                <div class="rec-talk-offset-note">
+                  {% if match %}
+                    Start pointer at {{ (match.cut_start_offset // 60)|int }}m {{ (match.cut_start_offset % 60)|int }}s &bull; Session duration {{ ((match.cut_end_offset - match.cut_start_offset) // 60)|int }}m
+                  {% else %}
+                    Start pointer at 0m 0s &bull; Full video available
+                  {% endif %}
+                  <button type="button" class="btn-seek-pointer" data-seek="{{ match.cut_start_offset if match else 0 }}" title="Seek video player to pointer position">
+                    &bull; Jump to {{ (match.cut_start_offset // 60)|int if match else 0 }}:{{ '%02d' % ((match.cut_start_offset % 60)|int) if match else '00' }}
+                  </button>
+                </div>
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+
+          <!-- Bumpers Configuration (Identical to Studio) -->
+          <div class="rec-section-divider"></div>
+          <div class="bumper-studio-card" id="card-bumper-options">
+            <div class="bumper-studio-title">Event Branding &amp; Bumpers</div>
+
+            <!-- Opening Intro -->
+            <div class="bumper-group">
+              <div class="bumper-group-header">
+                <span class="bumper-group-title">Opening Intro</span>
+                <label class="bumper-toggle-label" for="check-include-intro" title="Enable Opening Intro">
+                  <input type="checkbox" id="check-include-intro" name="include_intro" class="toggle-checkbox">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <div class="bumper-nested-options is-hidden" id="intro-options-wrap">
+                <div class="bumper-segmented-control">
+                  <label class="bumper-segment is-active">
+                    <input type="radio" name="intro_source" value="generated" class="bumper-radio-input" checked>
+                    <span>Generated Title</span>
+                  </label>
+                  <label class="bumper-segment">
+                    <input type="radio" name="intro_source" value="custom" class="bumper-radio-input">
+                    <span>Custom Video</span>
+                  </label>
+                </div>
+
+                <div class="bumper-custom-wrap" id="intro-custom-wrap">
+                  <label for="custom-intro-file" class="bumper-dropzone" id="intro-dropzone" title="Click or drag &amp; drop custom intro clip">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <div class="bumper-dropzone-text">
+                      <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
+                      <span class="bumper-file-name" id="intro-file-name">Supports MP4, WebM, MOV</span>
+                    </div>
+                  </label>
+                  <input type="file" id="custom-intro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
+                  <input type="hidden" id="custom-intro-path" value="">
+                </div>
+              </div>
+            </div>
+
+            <!-- Closing Outro -->
+            <div class="bumper-group">
+              <div class="bumper-group-header">
+                <span class="bumper-group-title">Closing Outro</span>
+                <label class="bumper-toggle-label" for="check-include-outro" title="Enable Closing Outro">
+                  <input type="checkbox" id="check-include-outro" name="include_outro" class="toggle-checkbox">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <div class="bumper-nested-options is-hidden" id="outro-options-wrap">
+                <div class="bumper-segmented-control">
+                  <label class="bumper-segment is-active">
+                    <input type="radio" name="outro_source" value="generated" class="bumper-radio-input" checked>
+                    <span>Generated Title</span>
+                  </label>
+                  <label class="bumper-segment">
+                    <input type="radio" name="outro_source" value="custom" class="bumper-radio-input">
+                    <span>Custom Video</span>
+                  </label>
+                </div>
+
+                <div class="bumper-custom-wrap" id="outro-custom-wrap">
+                  <label for="custom-outro-file" class="bumper-dropzone" id="outro-dropzone" title="Click or drag &amp; drop custom outro clip">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="17 8 12 3 7 8"/>
+                      <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <div class="bumper-dropzone-text">
+                      <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
+                      <span class="bumper-file-name" id="outro-file-name">Supports MP4, WebM, MOV</span>
+                    </div>
+                  </label>
+                  <input type="file" id="custom-outro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
+                  <input type="hidden" id="custom-outro-path" value="">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Enhanced Speaker Handoff Card -->
+          <div class="rec-section-divider"></div>
+          <div class="rec-handoff-card is-active" id="rec-handoff-card">
+            <div class="rec-handoff-body">
+              <div class="rec-handoff-icon-badge" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </div>
+              <div class="rec-handoff-content">
+                <div class="rec-handoff-title-row">
+                  <span class="rec-handoff-title">Handoff to Speakers in One Go</span>
+                </div>
+                <p class="rec-handoff-description">
+                  Immediately triggers email notification with review magic links to each selected speaker.
+                </p>
+              </div>
+              <label class="bumper-toggle-label" for="chk-handoff" title="Toggle speaker handoff">
+                <input type="checkbox" id="chk-handoff" name="handoff" class="toggle-checkbox" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="rec-actions-bar">
+            <button type="submit" class="btn btn-primary btn-rec-action" id="btn-bulk-approve">
+              Approve &amp; Handoff Selected
+            </button>
+            <button type="button" class="btn btn-danger btn-rec-action" id="btn-reject-recording">
+              Reject Recording
+            </button>
+            <a href="/studio" class="btn btn-ghost btn-rec-action" id="btn-cancel-recording">
+              Back to Dashboard
+            </a>
+          </div>
+
+          <div id="rec-status-banner" class="rec-status-banner" aria-live="polite"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/recording_studio.js"></script>
+{% endblock %}

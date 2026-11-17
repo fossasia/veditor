@@ -42,7 +42,7 @@ from .ingest import (
     get_upload_staging_dir,
     validate_media_file,
 )
-from .models import Event, Job, Talk, User
+from .models import Event, Job, RoomRecording, Talk, User
 from .pipeline.concat import concat, concat_segments
 from .pipeline.cut import CutStrategy, cut
 from .pipeline.detect import (
@@ -270,6 +270,8 @@ def job_ingest_room_url(
     video_url: str,
     recording_start_iso: str | None = None,
     talk_ids: list[int] | None = None,
+    recording_id: int | None = None,
+    stage_only: bool = False,
 ) -> None:
     """Download a room recording directly from a video URL or cloud storage link,
 
@@ -283,29 +285,30 @@ def job_ingest_room_url(
     enqueued_talk_ids: set[int] = set()
     try:
         # Create ingest jobs for tracked talks so status and progress are recorded
-        with new_session() as db:
-            stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
-            if talk_ids:
-                stmt = stmt.where(Talk.id.in_(talk_ids))
-            room_talks = db.scalars(stmt.order_by(Talk.start)).all()
-            for talk in room_talks:
-                if talk.status in (
-                    TalkStatus.WAITING_FILES,
-                    TalkStatus.DETECTING,
-                    TalkStatus.BROKEN,
-                ):
-                    new_job = Job(
-                        talk_id=talk.id,
-                        kind=JobKind.INGEST,
-                        status=JobStatus.RUNNING,
-                        started_at=datetime.now(UTC),
-                        updated_at=datetime.now(UTC),
-                    )
-                    db.add(new_job)
-                    talk.status = TalkStatus.DETECTING
-                    db.flush()
-                    job_ids[talk.id] = new_job.id
-            db.commit()
+        if not stage_only:
+            with new_session() as db:
+                stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
+                if talk_ids:
+                    stmt = stmt.where(Talk.id.in_(talk_ids))
+                room_talks = db.scalars(stmt.order_by(Talk.start)).all()
+                for talk in room_talks:
+                    if talk.status in (
+                        TalkStatus.WAITING_FILES,
+                        TalkStatus.DETECTING,
+                        TalkStatus.BROKEN,
+                    ):
+                        new_job = Job(
+                            talk_id=talk.id,
+                            kind=JobKind.INGEST,
+                            status=JobStatus.RUNNING,
+                            started_at=datetime.now(UTC),
+                            updated_at=datetime.now(UTC),
+                        )
+                        db.add(new_job)
+                        talk.status = TalkStatus.DETECTING
+                        db.flush()
+                        job_ids[talk.id] = new_job.id
+                db.commit()
 
         # Download media directly from URL
         staged_path = download_media_url(video_url, staged_target)
@@ -331,6 +334,49 @@ def job_ingest_room_url(
         available_bytes = storage.free_bytes()
         if available_bytes < required_bytes:
             raise InsufficientStorageError(required_bytes, available_bytes)
+
+        if stage_only:
+            rec_start = None
+            if recording_start_iso:
+                try:
+                    rec_start = datetime.fromisoformat(recording_start_iso)
+                except (ValueError, TypeError):  # fmt: skip
+                    pass
+            if rec_start is None and c_time:
+                try:
+                    parsed_dt = datetime.fromisoformat(c_time)
+                    rec_start = (
+                        parsed_dt.replace(tzinfo=UTC)
+                        if parsed_dt.tzinfo is None
+                        else parsed_dt
+                    )
+                except (ValueError, TypeError):  # fmt: skip
+                    pass
+
+            with new_session() as db:
+                rec = None
+                if recording_id:
+                    rec = db.get(RoomRecording, recording_id)
+                if not rec:
+                    rec = (
+                        db.query(RoomRecording)
+                        .filter(
+                            RoomRecording.event_id == event_id,
+                            RoomRecording.room == room,
+                            RoomRecording.status == 'pending_analysis',
+                        )
+                        .order_by(RoomRecording.created_at.desc())
+                        .first()
+                    )
+                if rec and isinstance(rec, RoomRecording):
+                    rec.duration_seconds = duration
+                    if rec.recording_start is None and rec_start:
+                        rec.recording_start = rec_start
+                    rec.status = 'ready'
+                    rec.storage_key = f'recordings/{rec.id}/recording.mp4'
+                    storage.link_or_copy(rec.storage_key, staged_path)
+                db.commit()
+            return
 
         # Match talks with schedule window
         recording_start = None
@@ -398,6 +444,19 @@ def job_ingest_room_url(
             if rec_start.tzinfo is None:
                 rec_start = rec_start.replace(tzinfo=UTC)
 
+            if eligible_talks:
+                first_talk_start = (
+                    eligible_talks[0].start.replace(tzinfo=UTC)
+                    if eligible_talks[0].start.tzinfo is None
+                    else eligible_talks[0].start
+                )
+                if rec_start.date() != first_talk_start.date():
+                    rec_start = rec_start.replace(
+                        year=first_talk_start.year,
+                        month=first_talk_start.month,
+                        day=first_talk_start.day,
+                    )
+
             rec_end = rec_start + timedelta(seconds=duration)
             matched_talks = [
                 t
@@ -439,11 +498,12 @@ def job_ingest_room_url(
                 if offset_end > offset_start:
                     talk.cut_start = offset_start
                     talk.cut_end = offset_end
-                    talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
                 else:
-                    talk.cut_start = None
-                    talk.cut_end = None
-                    talk.cut_segments = None
+                    talk.cut_start = 0.0
+                    talk.cut_end = min(
+                        (talk_end_utc - talk_start_utc).total_seconds(), duration
+                    )
+                    talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
 
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
@@ -452,6 +512,30 @@ def job_ingest_room_url(
                         job.updated_at = datetime.now(UTC)
 
                 matched_ids.append(talk.id)
+
+            rec = None
+            if recording_id:
+                rec = db.get(RoomRecording, recording_id)
+            if not rec:
+                rec = (
+                    db.query(RoomRecording)
+                    .filter(
+                        RoomRecording.event_id == event_id,
+                        RoomRecording.room == room,
+                        RoomRecording.status == 'pending_analysis',
+                    )
+                    .order_by(RoomRecording.created_at.desc())
+                    .first()
+                )
+            if rec and isinstance(rec, RoomRecording):
+                rec.duration_seconds = duration
+                if rec.recording_start is None and rec_start:
+                    rec.recording_start = rec_start
+                rec.status = 'ready'
+                if matched_talks:
+                    rec.storage_key = f'{matched_talks[0].id}/raw/raw.mp4'
+                for talk in matched_talks:
+                    talk.room_recording_id = rec.id
 
             db.commit()
 
@@ -481,6 +565,10 @@ def job_ingest_room_url(
                 db_talk = db.get(Talk, tid)
                 if db_talk and db_talk.status == TalkStatus.DETECTING:
                     db_talk.status = TalkStatus.BROKEN
+            if recording_id:
+                rec = db.get(RoomRecording, recording_id)
+                if rec and rec.status == 'pending_analysis':
+                    rec.status = 'broken'
             db.commit()
         raise
     finally:
