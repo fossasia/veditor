@@ -243,6 +243,7 @@ def send_organizer_approved_email(
     recipient: str,
     dashboard_url: str | None = None,
     name: str | None = None,
+    is_active: bool = True,
 ) -> bool:
     """Notify a user that their organizer role request was approved."""
     clean_email = recipient.strip().lower()
@@ -282,6 +283,23 @@ def send_organizer_approved_email(
         return True
 
     greeting = f'Hello {html.escape(name)},' if name else 'Hello,'
+    if is_active:
+        action_text = 'You can now log in and start creating and managing events.'
+        action_html = (
+            '<p style="color:#475569;">You can now log in to <strong>VEditor</strong>'
+            ' and start creating and managing events.</p>'
+        )
+    else:
+        action_text = (
+            'Please note that your account is currently inactive. Contact an'
+            ' administrator to activate your account before logging in.'
+        )
+        action_html = (
+            '<p style="color:#475569;">Please note that your account is currently'
+            ' inactive. Contact an administrator to activate your account before'
+            ' logging in.</p>'
+        )
+
     msg = EmailMessage()
     msg['Subject'] = 'Your organizer request has been approved — VEditor'
     msg['From'] = settings.smtp_from
@@ -289,7 +307,7 @@ def send_organizer_approved_email(
     msg.set_content(
         f'{"Hello " + name + "," if name else "Hello,"}\n\n'
         'Your request for organizer access on VEditor has been approved.\n'
-        'You can now log in and start creating and managing events.\n\n'
+        f'{action_text}\n\n'
         f'Events Dashboard:\n{dashboard_url}\n'
     )
     escaped_url = html.escape(dashboard_url, quote=True)
@@ -300,7 +318,7 @@ def send_organizer_approved_email(
   <div style="max-width:540px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;padding:36px 32px;background:#ffffff;box-shadow:0 4px 12px rgba(0,0,0,0.04);">
     <p>{greeting}</p>
     <h2 style="margin-top:0;color:#0f172a;">Your organizer request was approved!</h2>
-    <p style="color:#475569;">You can now log in to <strong>VEditor</strong> and start creating and managing events.</p>
+    {action_html}
     <div style="text-align: center; margin: 32px 0;">
       <a href="{escaped_url}" style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 8px; font-size: 15px; font-weight: 600; display: inline-block;">Go to Events Dashboard</a>
     </div>

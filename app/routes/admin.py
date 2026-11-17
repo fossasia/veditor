@@ -351,11 +351,7 @@ def promote_user(
         target.organizer_request_note = None
     db.commit()
     db.refresh(target)
-    if (
-        payload.role == AuthRole.ORGANIZER
-        and old_role != AuthRole.ORGANIZER
-        and target.is_active
-    ):
+    if payload.role == AuthRole.ORGANIZER and old_role != AuthRole.ORGANIZER:
         base = settings.base_url.rstrip('/') if settings.base_url else None
         if not base and not settings.is_production and not settings.smtp_host:
             base = 'http://localhost:8000'
@@ -368,7 +364,9 @@ def promote_user(
         else:
             dashboard_url = f'{base}/studio/events'
             success = send_organizer_approved_email(
-                target.email, dashboard_url=dashboard_url
+                target.email,
+                dashboard_url=dashboard_url,
+                is_active=target.is_active,
             )
             if not success:
                 logger.warning(

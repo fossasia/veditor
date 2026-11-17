@@ -302,6 +302,35 @@ def test_promote_user_to_organizer_sends_email_with_dashboard_url(
         mock_send_email.assert_not_called()
 
 
+def test_promote_inactive_user_to_organizer_sends_email(
+    client: TestClient, db_session: Session, setup_database: None
+) -> None:
+    admin_user = _create_test_user(
+        db_session, 'admin_inact@admin-test.com', role=AuthRole.ADMIN
+    )
+    target_user = _create_test_user(
+        db_session, 'target_inact@admin-test.com', role=AuthRole.USER, is_active=False
+    )
+
+    token = create_session_token(admin_user.id, admin_user.role)
+    client.cookies.set('veditor_session', token)
+
+    with patch('app.routes.admin.send_organizer_approved_email') as mock_send_email:
+        mock_send_email.return_value = True
+
+        res = client.post(
+            f'/admin/users/{target_user.id}/promote', json={'role': 'organizer'}
+        )
+        assert res.status_code == 200
+        mock_send_email.assert_called_once()
+        assert mock_send_email.call_args[0][0] == target_user.email
+        assert mock_send_email.call_args[1]['is_active'] is False
+
+    db_session.refresh(target_user)
+    assert target_user.role == AuthRole.ORGANIZER
+    assert target_user.is_active is False
+
+
 def test_promote_user_email_failure_warns_and_succeeds(
     client: TestClient, db_session: Session, setup_database: None
 ) -> None:

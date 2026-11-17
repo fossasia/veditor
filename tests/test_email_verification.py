@@ -194,6 +194,33 @@ def test_send_organizer_approved_email_smtp_success() -> None:
         assert 'http://localhost:8000/studio/events' in html_content
 
 
+def test_send_organizer_approved_email_inactive_user() -> None:
+    with (
+        patch.object(settings, 'smtp_host', 'smtp.example.com'),
+        patch.object(settings, 'smtp_port', 587),
+        patch.object(settings, 'smtp_ssl', False),
+        patch.object(settings, 'smtp_tls', True),
+        patch.object(settings, 'smtp_user', 'smtp_user'),
+        patch.object(settings, 'smtp_password', 'smtp_pass'),
+        patch('smtplib.SMTP') as mock_smtp,
+    ):
+        mock_server = MagicMock()
+        mock_smtp.return_value.__enter__.return_value = mock_server
+
+        result = send_organizer_approved_email(
+            recipient='inactive@example.com',
+            dashboard_url='http://localhost:8000/studio/events',
+            is_active=False,
+        )
+        assert result is True
+        mock_server.send_message.assert_called_once()
+        msg = mock_server.send_message.call_args[0][0]
+        text_content = msg.get_body(preferencelist=('plain',)).get_content()
+        assert 'account is currently inactive' in text_content
+        html_content = msg.get_body(preferencelist=('html',)).get_content()
+        assert 'account is currently inactive' in html_content
+
+
 def test_send_organizer_approved_email_production_refuses_localhost() -> None:
     with (
         patch.object(settings, 'environment', 'production'),
