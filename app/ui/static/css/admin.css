@@ -398,6 +398,7 @@ html[data-sidebar="hidden"] .settings-bottom-dock {
   align-items: center;
   text-align: center;
   gap: 0.85rem;
+  padding: 1.5rem;
 }
 
 .modal-icon-box.danger {
