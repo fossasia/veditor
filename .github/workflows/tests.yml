@@ -66,6 +66,8 @@ jobs:
           python-version: "3.14"
       - name: Install dependencies
         run: uv sync --frozen --group test --group dev
+      - name: Install Playwright browsers
+        run: uv run playwright install --with-deps chromium
       - name: Run migrations
         run: uv run alembic upgrade head
       - name: Run tests

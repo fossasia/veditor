@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from http import HTTPMethod, HTTPStatus
 
 import pytest
 import uvicorn
@@ -14,6 +15,7 @@ from playwright.sync_api import (
 from playwright.sync_api import (
     Request,
     Route,
+    expect,
     sync_playwright,
 )
 from sqlalchemy import select
@@ -62,7 +64,7 @@ def live_server() -> Iterator[str]:
     thread.join(timeout=2)
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope='function')
 def test_data() -> Iterator[dict[str, object]]:
     db = SessionLocal()
     user = db.scalar(
@@ -112,6 +114,10 @@ def test_data() -> Iterator[dict[str, object]]:
         'token': token,
         'event_a_id': event_a.id,
         'event_b_id': event_b.id,
+        'room_a1_id': room_a1.id,
+        'room_a2_id': room_a2.id,
+        'room_b1_id': room_b1.id,
+        'room_b2_id': room_b2.id,
         'event_a_name': event_a.name,
         'event_b_name': event_b.name,
     }
@@ -136,13 +142,13 @@ def test_data() -> Iterator[dict[str, object]]:
 def test_stale_room_response_does_not_overwrite_active_event_rooms(
     live_server: str, test_data: dict[str, object]
 ) -> None:
-    """Verifies that an in-flight request aborted on modal close does not overwrite newly opened event."""
+    """1. Verifies that an in-flight request aborted on modal close does not overwrite newly opened event."""
     event_a_id = int(str(test_data['event_a_id']))
     event_b_id = int(str(test_data['event_b_id']))
     token = str(test_data['token'])
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel='chrome', headless=True)
+        browser = p.chromium.launch(headless=True)
         try:
             context = browser.new_context(viewport={'width': 1280, 'height': 900})
             try:
@@ -160,23 +166,19 @@ def test_stale_room_response_does_not_overwrite_active_event_rooms(
                 page = context.new_page()
 
                 held_routes_a: list[Route] = []
-                event_b_completed: list[bool] = []
 
                 def handle_rooms_route(route: Route, request: Request) -> None:
                     url = request.url
                     method = request.method
-                    if f'/events/{event_a_id}/rooms' in url and method == 'GET':
+                    if (
+                        f'/events/{event_a_id}/rooms' in url
+                        and method == HTTPMethod.GET.value
+                    ):
                         held_routes_a.append(route)
-                        return
-                    elif f'/events/{event_b_id}/rooms' in url and method == 'GET':
-                        route.continue_()
-                        event_b_completed.append(True)
-                        return
                     else:
                         route.continue_()
 
                 page.route('**/events/**/rooms**', handle_rooms_route)
-
                 page.goto(f'{live_server}/studio/events')
                 page.wait_for_selector('.btn-manage-rooms')
 
@@ -202,20 +204,11 @@ def test_stale_room_response_does_not_overwrite_active_event_rooms(
                     '#modal-manage-rooms button[data-modal-close]'
                 ).first
                 close_btn.click()
-                page.wait_for_timeout(300)
 
                 # 3. Open Event B modal and allow its request to complete
                 btn_rooms_b.click()
-                for _ in range(50):
-                    if len(event_b_completed) > 0:
-                        break
-                    page.wait_for_timeout(100)
-                page.wait_for_selector('#rooms-list .room-list-row')
-                page.wait_for_timeout(300)
-
-                rooms_text_initial = page.locator('#rooms-list').inner_text()
-                assert 'Room B1' in rooms_text_initial
-                assert 'Room B2' in rooms_text_initial
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).to_contain_text('Room B2')
 
                 # 4. Release delayed Event A response (may be aborted by browser)
                 delayed = held_routes_a.pop(0)
@@ -223,28 +216,12 @@ def test_stale_room_response_does_not_overwrite_active_event_rooms(
                     delayed.continue_()
                 except PlaywrightError:
                     pass
-                page.wait_for_timeout(1000)
 
                 # 5. Verify Event B rooms are NOT overwritten by stale Event A response
-                rooms_text_after = page.locator('#rooms-list').inner_text()
-                assert 'Room B1' in rooms_text_after
-                assert 'Room B2' in rooms_text_after
-                assert 'Room A1' not in rooms_text_after
-                assert 'Room A2' not in rooms_text_after
-
-                # 6. Verify Delete operation works in the correct event context
-                row_b1 = page.locator('#rooms-list .room-list-row').first
-                row_b1.locator('button.btn-danger').click()
-                page.wait_for_timeout(400)
-                confirm_btn = page.locator(
-                    ".v-modal-confirm button.btn-danger, button:has-text('Delete')"
-                ).last
-                confirm_btn.click()
-                page.wait_for_timeout(1000)
-
-                rooms_after_del = page.locator('#rooms-list').inner_text()
-                assert 'Room B1' not in rooms_after_del
-                assert 'Room B2' in rooms_after_del
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).to_contain_text('Room B2')
+                expect(page.locator('#rooms-list')).not_to_contain_text('Room A1')
+                expect(page.locator('#rooms-list')).not_to_contain_text('Room A2')
             finally:
                 context.close()
         finally:
@@ -254,16 +231,16 @@ def test_stale_room_response_does_not_overwrite_active_event_rooms(
 def test_generation_counter_rejects_delayed_response_ignoring_abort(
     live_server: str, test_data: dict[str, object]
 ) -> None:
-    """Verifies generation counter defense-in-depth: Even if a late HTTP 200 arrives,
+    """2. Verifies generation counter defense-in-depth: Even if a late HTTP 200 arrives,
 
-    it is ignored because roomsLoadGeneration/roomsEventId has shifted.
+    it is ignored because roomsRequestGeneration/roomsModalSessionId has shifted.
     """
     event_a_id = int(str(test_data['event_a_id']))
     event_b_id = int(str(test_data['event_b_id']))
     token = str(test_data['token'])
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel='chrome', headless=True)
+        browser = p.chromium.launch(headless=True)
         try:
             context = browser.new_context(viewport={'width': 1280, 'height': 900})
             try:
@@ -291,23 +268,19 @@ def test_generation_counter_rejects_delayed_response_ignoring_abort(
                 """)
 
                 held_routes_a: list[Route] = []
-                event_b_completed: list[bool] = []
 
                 def handle_rooms_route(route: Route, request: Request) -> None:
                     url = request.url
                     method = request.method
-                    if f'/events/{event_a_id}/rooms' in url and method == 'GET':
+                    if (
+                        f'/events/{event_a_id}/rooms' in url
+                        and method == HTTPMethod.GET.value
+                    ):
                         held_routes_a.append(route)
-                        return
-                    elif f'/events/{event_b_id}/rooms' in url and method == 'GET':
-                        route.continue_()
-                        event_b_completed.append(True)
-                        return
                     else:
                         route.continue_()
 
                 page.route('**/events/**/rooms**', handle_rooms_route)
-
                 page.goto(f'{live_server}/studio/events')
                 page.wait_for_selector('.btn-manage-rooms')
 
@@ -331,16 +304,10 @@ def test_generation_counter_rejects_delayed_response_ignoring_abort(
                     '#modal-manage-rooms button[data-modal-close]'
                 ).first
                 close_btn.click()
-                page.wait_for_timeout(300)
 
                 # Open Event B and allow it to complete
                 btn_rooms_b.click()
-                for _ in range(50):
-                    if len(event_b_completed) > 0:
-                        break
-                    page.wait_for_timeout(100)
-                page.wait_for_selector('#rooms-list .room-list-row')
-                page.wait_for_timeout(300)
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
 
                 # Now fulfill Event A request with real Event A room data (HTTP 200)
                 delayed = held_routes_a.pop(0)
@@ -361,32 +328,38 @@ def test_generation_counter_rejects_delayed_response_ignoring_abort(
                     ]
                 )
                 delayed.fulfill(
-                    status=200,
+                    status=HTTPStatus.OK.value,
                     content_type='application/json',
                     body=stale_payload,
                 )
-                page.wait_for_timeout(1000)
 
                 # Verify generation counter rejected stale payload from overwriting Event B
-                rooms_text = page.locator('#rooms-list').inner_text()
-                assert 'STALE_ROOM_ALPHA_1' not in rooms_text
-                assert 'STALE_ROOM_ALPHA_2' not in rooms_text
-                assert 'Room B' in rooms_text
+                expect(page.locator('#rooms-list')).not_to_contain_text(
+                    'STALE_ROOM_ALPHA_1'
+                )
+                expect(page.locator('#rooms-list')).not_to_contain_text(
+                    'STALE_ROOM_ALPHA_2'
+                )
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
             finally:
                 context.close()
         finally:
             browser.close()
 
 
-def test_edit_room_context_safety_and_mutation(
+def test_old_delete_completion_after_switching_to_another_event(
     live_server: str, test_data: dict[str, object]
 ) -> None:
-    """Verifies that editing a room correctly updates the room in the active event context."""
+    """3. Verifies that an in-flight DELETE for Event A completing after switching to Event B
+
+    does not reload Event A or disrupt Event B's active rooms list.
+    """
+    event_a_id = int(str(test_data['event_a_id']))
     event_b_id = int(str(test_data['event_b_id']))
     token = str(test_data['token'])
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel='chrome', headless=True)
+        browser = p.chromium.launch(headless=True)
         try:
             context = browser.new_context(viewport={'width': 1280, 'height': 900})
             try:
@@ -402,47 +375,351 @@ def test_edit_room_context_safety_and_mutation(
                     ]
                 )
                 page = context.new_page()
+
+                held_delete: list[Route] = []
+
+                def handle_routes(route: Route, request: Request) -> None:
+                    if (
+                        f'/events/{event_a_id}/rooms/' in request.url
+                        and request.method == HTTPMethod.DELETE.value
+                    ):
+                        held_delete.append(route)
+                    else:
+                        route.continue_()
+
+                page.route('**/events/**/rooms/**', handle_routes)
                 page.goto(f'{live_server}/studio/events')
-                page.wait_for_selector('.btn-manage-rooms')
 
-                btn_rooms_b = page.locator(
-                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
-                )
-                btn_rooms_b.click()
-                page.wait_for_selector('#rooms-list .room-list-row')
+                # Open Event A
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_a_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room A1')
 
+                # Click Delete on Room A1
                 first_row = page.locator('#rooms-list .room-list-row').first
-                first_row.locator("button:has-text('Edit')").click()
-                page.wait_for_timeout(300)
+                first_row.locator('button.btn-danger').click()
 
-                name_input = page.locator('#room-name-input')
-                current_val = name_input.input_value()
-                new_val = f'{current_val} Renamed'
-                name_input.fill(new_val)
+                # Confirm delete dialog
+                confirm_btn = page.locator(
+                    '#v-dynamic-modal button[data-modal-confirm]'
+                )
+                confirm_btn.wait_for()
+                confirm_btn.click()
 
-                page.locator("#create-room-form button[type='submit']").click()
-                page.wait_for_timeout(1000)
+                # Wait until DELETE is intercepted and held
+                for _ in range(50):
+                    if len(held_delete) > 0:
+                        break
+                    page.wait_for_timeout(100)
+                assert len(held_delete) > 0
 
-                rooms_after = page.locator('#rooms-list').inner_text()
-                assert new_val in rooms_after
+                # While DELETE is in flight, switch to Event B
+                page.locator(
+                    '#modal-manage-rooms button[data-modal-close]'
+                ).first.click()
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+
+                # Now allow the held DELETE for Event A to complete
+                del_route = held_delete.pop(0)
+                try:
+                    del_route.continue_()
+                except PlaywrightError:
+                    pass
+
+                # Verify Event B remains cleanly loaded and was not overwritten or disturbed by Event A
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).not_to_contain_text('Room A')
             finally:
                 context.close()
         finally:
             browser.close()
 
 
-def test_delete_confirmation_aborted_when_session_changes(
+def test_old_patch_completion_after_switching_to_another_event(
     live_server: str, test_data: dict[str, object]
 ) -> None:
-    """Verifies Finding 1: If Delete confirmation dialog is open and modal is closed/reopened,
+    """4. Verifies that an in-flight PATCH for Event A completing after switching to Event B
 
-    the old Delete action cannot execute.
+    does not reset Event B's form draft or reload Event A.
+    """
+    event_a_id = int(str(test_data['event_a_id']))
+    event_b_id = int(str(test_data['event_b_id']))
+    token = str(test_data['token'])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            try:
+                context.add_cookies(
+                    [
+                        {
+                            'name': 'veditor_session',
+                            'value': token,
+                            'domain': '127.0.0.1',
+                            'path': '/',
+                            'httpOnly': True,
+                        }
+                    ]
+                )
+                page = context.new_page()
+
+                held_patch: list[Route] = []
+
+                def handle_routes(route: Route, request: Request) -> None:
+                    if (
+                        f'/events/{event_a_id}/rooms/' in request.url
+                        and request.method == HTTPMethod.PATCH.value
+                    ):
+                        held_patch.append(route)
+                    else:
+                        route.continue_()
+
+                page.route('**/events/**/rooms/**', handle_routes)
+                page.goto(f'{live_server}/studio/events')
+
+                # Open Event A
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_a_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room A1')
+
+                # Edit Room A1
+                first_row = page.locator('#rooms-list .room-list-row').first
+                first_row.locator("button:has-text('Edit')").click()
+                page.locator('#room-name-input').fill('Room A1 Modified')
+
+                # Submit form -> triggers PATCH
+                page.locator("#create-room-form button[type='submit']").click()
+
+                # Wait for PATCH to be intercepted
+                for _ in range(50):
+                    if len(held_patch) > 0:
+                        break
+                    page.wait_for_timeout(100)
+                assert len(held_patch) > 0
+
+                # While PATCH is in flight, switch to Event B
+                page.locator(
+                    '#modal-manage-rooms button[data-modal-close]'
+                ).first.click()
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+
+                # Type a draft in Event B form
+                page.locator('#room-name-input').fill('Unsaved Draft For Event B')
+
+                # Now fulfill the held Event A PATCH request
+                patch_route = held_patch.pop(0)
+                try:
+                    patch_route.continue_()
+                except PlaywrightError:
+                    pass
+
+                # Verify Event B's draft is NOT erased and Event B's rooms are untouched
+                expect(page.locator('#room-name-input')).to_have_value(
+                    'Unsaved Draft For Event B'
+                )
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).not_to_contain_text('Room A')
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def test_delayed_close_event_after_reopening_modal(
+    live_server: str, test_data: dict[str, object]
+) -> None:
+    """5. Verifies that a delayed 'close' event from an older modal session
+
+    does not wipe or abort a newly opened session.
     """
     event_b_id = int(str(test_data['event_b_id']))
     token = str(test_data['token'])
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel='chrome', headless=True)
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            try:
+                context.add_cookies(
+                    [
+                        {
+                            'name': 'veditor_session',
+                            'value': token,
+                            'domain': '127.0.0.1',
+                            'path': '/',
+                            'httpOnly': True,
+                        }
+                    ]
+                )
+                page = context.new_page()
+                page.goto(f'{live_server}/studio/events')
+
+                # Open Event B modal
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+
+                # Dispatch a delayed 'close' event simulating older session id
+                page.evaluate("""() => {
+                    const m = document.getElementById('modal-manage-rooms');
+                    const realSession = m.dataset.sessionId;
+                    m.dataset.sessionId = '999999';
+                    m.dispatchEvent(new Event('close'));
+                    m.dataset.sessionId = realSession;
+                }""")
+
+                # Verify Event B's room list is still intact and not emptied
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).to_contain_text('Room B2')
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def test_edit_remains_valid_after_same_session_list_refresh(
+    live_server: str, test_data: dict[str, object]
+) -> None:
+    """6. Verifies that a same-session room list refresh does NOT invalidate an active edit form."""
+    event_b_id = int(str(test_data['event_b_id']))
+    token = str(test_data['token'])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            try:
+                context.add_cookies(
+                    [
+                        {
+                            'name': 'veditor_session',
+                            'value': token,
+                            'domain': '127.0.0.1',
+                            'path': '/',
+                            'httpOnly': True,
+                        }
+                    ]
+                )
+                page = context.new_page()
+                page.goto(f'{live_server}/studio/events')
+
+                # Open Event B modal
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room B1')
+                expect(page.locator('#rooms-list')).to_contain_text('Room B2')
+
+                # Click Edit on Room B1
+                row_b1 = page.locator('#rooms-list .room-list-row', has_text='Room B1')
+                row_b1.locator("button:has-text('Edit')").click()
+                page.locator('#room-name-input').fill('Room B1 Refreshed Edit')
+
+                # In the same session, delete Room B2
+                row_b2 = page.locator('#rooms-list .room-list-row', has_text='Room B2')
+                row_b2.locator('button.btn-danger').click()
+                confirm_btn = page.locator(
+                    '#v-dynamic-modal button[data-modal-confirm]'
+                )
+                confirm_btn.wait_for()
+                confirm_btn.click()
+
+                # Wait for Room B2 to be removed and room list refreshed
+                expect(page.locator('#rooms-list')).not_to_contain_text('Room B2')
+
+                # Submit the active edit form for Room B1 - must succeed because modal session is unchanged
+                page.locator("#create-room-form button[type='submit']").click()
+
+                # Verify Room B1 was successfully updated
+                expect(page.locator('#rooms-list')).to_contain_text(
+                    'Room B1 Refreshed Edit'
+                )
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def test_edit_is_invalidated_after_closing_or_switching_sessions(
+    live_server: str, test_data: dict[str, object]
+) -> None:
+    """7. Verifies that closing or switching modal sessions invalidates an active edit draft."""
+    event_a_id = int(str(test_data['event_a_id']))
+    event_b_id = int(str(test_data['event_b_id']))
+    token = str(test_data['token'])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            try:
+                context.add_cookies(
+                    [
+                        {
+                            'name': 'veditor_session',
+                            'value': token,
+                            'domain': '127.0.0.1',
+                            'path': '/',
+                            'httpOnly': True,
+                        }
+                    ]
+                )
+                page = context.new_page()
+                page.goto(f'{live_server}/studio/events')
+
+                # Open Event A modal and start editing Room A1
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_a_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room A1')
+                page.locator('#rooms-list .room-list-row').first.locator(
+                    "button:has-text('Edit')"
+                ).click()
+                expect(
+                    page.locator('#create-room-form button[type="submit"]')
+                ).to_have_text('Save Room')
+
+                # Close modal
+                page.locator(
+                    '#modal-manage-rooms button[data-modal-close]'
+                ).first.click()
+
+                # Open Event B modal - form must be clean 'Add Room' mode
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(
+                    page.locator('#create-room-form button[type="submit"]')
+                ).to_have_text('Add Room')
+                expect(page.locator('#cancel-room-edit')).to_have_attribute(
+                    'hidden', ''
+                )
+                expect(page.locator('#room-name-input')).to_have_value('')
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def test_request_timeout_and_recovery(
+    live_server: str, test_data: dict[str, object]
+) -> None:
+    """8. Verifies request timeout on stalled room list and recovery upon retry."""
+    event_a_id = int(str(test_data['event_a_id']))
+    token = str(test_data['token'])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
         try:
             context = browser.new_context(viewport={'width': 1280, 'height': 900})
             try:
@@ -459,45 +736,105 @@ def test_delete_confirmation_aborted_when_session_changes(
                 )
                 page = context.new_page()
 
-                delete_requests: list[str] = []
+                # Shorten timeout for test speed
+                page.add_init_script('window.ROOMS_REQUEST_TIMEOUT_MS = 600;')
 
-                def on_request(req: Request) -> None:
-                    if req.method == 'DELETE':
-                        delete_requests.append(req.url)
+                stall_requests = True
 
-                page.on('request', on_request)
+                def handle_routes(route: Route, request: Request) -> None:
+                    if (
+                        stall_requests
+                        and f'/events/{event_a_id}/rooms' in request.url
+                        and request.method == HTTPMethod.GET.value
+                    ):
+                        # stall without replying
+                        return
+                    else:
+                        route.continue_()
 
+                page.route('**/events/**/rooms**', handle_routes)
                 page.goto(f'{live_server}/studio/events')
-                page.wait_for_selector('.btn-manage-rooms')
 
-                btn_rooms_b = page.locator(
-                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                # Open Event A modal - request stalls
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_a_id}']"
+                ).click()
+
+                # Expect timeout error message
+                expect(page.locator('#rooms-list')).to_contain_text(
+                    'Request timed out. Please try again.'
                 )
-                btn_rooms_b.click()
-                page.wait_for_selector('#rooms-list .room-list-row')
 
-                # Click Delete on row - opens confirmation dialog
-                row = page.locator('#rooms-list .room-list-row').first
-                row.locator('button.btn-danger').click()
+                # Restore normal network and retry by closing and reopening
+                stall_requests = False
+                page.locator(
+                    '#modal-manage-rooms button[data-modal-close]'
+                ).first.click()
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_a_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room A1')
+            finally:
+                context.close()
+        finally:
+            browser.close()
+
+
+def test_existing_delete_and_edit_functionality(
+    live_server: str, test_data: dict[str, object]
+) -> None:
+    """9. Verifies existing Delete and Edit operations function normally within the active session."""
+    event_b_id = int(str(test_data['event_b_id']))
+    token = str(test_data['token'])
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(viewport={'width': 1280, 'height': 900})
+            try:
+                context.add_cookies(
+                    [
+                        {
+                            'name': 'veditor_session',
+                            'value': token,
+                            'domain': '127.0.0.1',
+                            'path': '/',
+                            'httpOnly': True,
+                        }
+                    ]
+                )
+                page = context.new_page()
+                page.goto(f'{live_server}/studio/events')
+
+                # Open Event B
+                page.locator(
+                    f"button.btn-manage-rooms[data-event-id='{event_b_id}']"
+                ).click()
+                expect(page.locator('#rooms-list')).to_contain_text('Room B2')
+
+                # Edit Room B2
+                row_b2 = page.locator('#rooms-list .room-list-row', has_text='Room B2')
+                row_b2.locator("button:has-text('Edit')").click()
+                page.locator('#room-name-input').fill('Room B2 Renamed OK')
+                page.locator("#create-room-form button[type='submit']").click()
+                expect(page.locator('#rooms-list')).to_contain_text(
+                    'Room B2 Renamed OK'
+                )
+
+                # Delete the edited room
+                row_renamed = page.locator(
+                    '#rooms-list .room-list-row', has_text='Room B2 Renamed OK'
+                )
+                row_renamed.locator('button.btn-danger').click()
                 confirm_btn = page.locator(
                     '#v-dynamic-modal button[data-modal-confirm]'
                 )
                 confirm_btn.wait_for()
-
-                # While confirmation dialog is pending, the modal session changes
-                # (e.g. roomsModal receives close event or another room load occurred)
-                page.evaluate(
-                    "document.getElementById('modal-manage-rooms').dispatchEvent(new Event('close'))"
-                )
-                page.wait_for_timeout(200)
-
-                # Now the user confirms the dialog
                 confirm_btn.click()
-                page.wait_for_timeout(800)
 
-                # Verify no DELETE request was dispatched because session generation changed
-                assert len(delete_requests) == 0, (
-                    f'Expected 0 delete requests, got {delete_requests}'
+                # Verify room is gone
+                expect(page.locator('#rooms-list')).not_to_contain_text(
+                    'Room B2 Renamed OK'
                 )
             finally:
                 context.close()

@@ -8,25 +8,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const roomSubmit = roomForm?.querySelector('button[type="submit"]');
   const roomCancel = document.getElementById('cancel-room-edit');
   let roomsEventId = null;
-  let roomsLoadGeneration = 0;
+  let roomsModalSessionId = 0;
+  let roomsRequestGeneration = 0;
   let roomsAbortController = null;
+  let roomsTimeoutId = null;
 
   function resetRoomForm() {
     roomForm?.reset();
     if (roomForm) {
       delete roomForm.dataset.editingRoomId;
       delete roomForm.dataset.editingEventId;
-      delete roomForm.dataset.editingGen;
+      delete roomForm.dataset.editingSessionId;
     }
     if (roomSubmit) roomSubmit.textContent = 'Add Room';
     if (roomCancel) roomCancel.hidden = true;
   }
 
-  function cleanupRoomsModal() {
-    roomsLoadGeneration++;
+  function cleanupRoomsModal(sessionToClose) {
+    if (sessionToClose !== undefined && sessionToClose !== roomsModalSessionId) {
+      return;
+    }
+    roomsModalSessionId++;
     if (roomsAbortController) {
       roomsAbortController.abort();
       roomsAbortController = null;
+    }
+    if (roomsTimeoutId) {
+      clearTimeout(roomsTimeoutId);
+      roomsTimeoutId = null;
     }
     roomsEventId = null;
     resetRoomForm();
@@ -34,29 +43,49 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function closeRoomsModal() {
+    const activeSession = roomsModalSessionId;
     if (roomsModal) Modal.close(roomsModal);
-    cleanupRoomsModal();
+    cleanupRoomsModal(activeSession);
   }
 
-  async function loadRooms(targetEventId = roomsEventId) {
+  async function loadRooms(targetEventId = roomsEventId, initiatingSession = roomsModalSessionId) {
     if (!targetEventId) return;
+    if (initiatingSession !== roomsModalSessionId) return;
 
-    const currentGen = ++roomsLoadGeneration;
+    const currentGen = ++roomsRequestGeneration;
+    const currentSession = initiatingSession;
+
     if (roomsAbortController) {
       roomsAbortController.abort();
     }
+    if (roomsTimeoutId) {
+      clearTimeout(roomsTimeoutId);
+      roomsTimeoutId = null;
+    }
     const abortController = new AbortController();
     roomsAbortController = abortController;
+
+    let isTimedOut = false;
+    const timeoutDuration = Number(window.ROOMS_REQUEST_TIMEOUT_MS) || 8000;
+    roomsTimeoutId = setTimeout(() => {
+      if (currentGen === roomsRequestGeneration && currentSession === roomsModalSessionId) {
+        isTimedOut = true;
+        abortController.abort();
+        if (roomsList) {
+          roomsList.textContent = 'Request timed out. Please try again.';
+        }
+      }
+    }, timeoutDuration);
 
     roomsList.textContent = 'Loading rooms...';
     try {
       const response = await (window.authFetch || fetch)(`/events/${targetEventId}/rooms`, {
         signal: abortController.signal,
       });
-      if (roomsEventId !== targetEventId || currentGen !== roomsLoadGeneration) return;
+      if (roomsEventId !== targetEventId || currentGen !== roomsRequestGeneration || currentSession !== roomsModalSessionId) return;
       if (!response.ok) throw new Error(`Failed to load rooms (${response.status})`);
       const rooms = await response.json();
-      if (roomsEventId !== targetEventId || currentGen !== roomsLoadGeneration) return;
+      if (roomsEventId !== targetEventId || currentGen !== roomsRequestGeneration || currentSession !== roomsModalSessionId) return;
       roomsList.replaceChildren();
       if (!rooms.length) {
         roomsList.textContent = 'No rooms configured.';
@@ -82,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
           document.getElementById('room-description-input').value = room.description || '';
           roomForm.dataset.editingRoomId = room.id;
           roomForm.dataset.editingEventId = rowEventId;
-          roomForm.dataset.editingGen = String(roomsLoadGeneration);
+          roomForm.dataset.editingSessionId = String(roomsModalSessionId);
           roomSubmit.textContent = 'Save Room';
           roomCancel.hidden = false;
         });
@@ -91,8 +120,8 @@ document.addEventListener('DOMContentLoaded', () => {
         remove.className = 'btn btn-danger btn-sm';
         remove.textContent = 'Delete';
         remove.addEventListener('click', async () => {
-          const actionGen = roomsLoadGeneration;
-          if (roomsEventId !== rowEventId || actionGen !== roomsLoadGeneration) {
+          const actionSession = roomsModalSessionId;
+          if (roomsEventId !== rowEventId || actionSession !== roomsModalSessionId) {
             Modal.alert({ title: 'Delete room', message: 'Event context has changed. Please reopen rooms.', variant: 'danger' });
             return;
           }
@@ -103,7 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
             variant: 'danger',
           });
           if (!confirmed) return;
-          if (roomsEventId !== rowEventId || actionGen !== roomsLoadGeneration) {
+          if (roomsEventId !== rowEventId || actionSession !== roomsModalSessionId) {
             Modal.alert({ title: 'Delete room', message: 'Event context has changed. Please reopen rooms.', variant: 'danger' });
             return;
           }
@@ -111,10 +140,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await (window.authFetch || fetch)(`/events/${rowEventId}/rooms/${room.id}`, {
               method: 'DELETE',
             });
+            if (roomsEventId !== rowEventId || actionSession !== roomsModalSessionId) {
+              return;
+            }
             if (!result.ok) throw new Error('Unable to delete room.');
-            await loadRooms(rowEventId);
+            await loadRooms(rowEventId, actionSession);
           } catch (error) {
             if (error.name === 'AbortError') return;
+            if (roomsEventId !== rowEventId || actionSession !== roomsModalSessionId) return;
             Modal.alert({ title: 'Delete room', message: error.message, variant: 'danger' });
           }
         });
@@ -125,21 +158,29 @@ document.addEventListener('DOMContentLoaded', () => {
         roomsList.append(row);
       });
     } catch (error) {
-      if (error.name === 'AbortError' || roomsEventId !== targetEventId || currentGen !== roomsLoadGeneration) {
+      if (isTimedOut) return;
+      if (error.name === 'AbortError' || roomsEventId !== targetEventId || currentGen !== roomsRequestGeneration || currentSession !== roomsModalSessionId) {
         return;
       }
       roomsList.textContent = error.message;
+    } finally {
+      if (currentGen === roomsRequestGeneration && roomsTimeoutId) {
+        clearTimeout(roomsTimeoutId);
+        roomsTimeoutId = null;
+      }
     }
   }
 
   document.querySelectorAll('.btn-manage-rooms').forEach(button => {
     button.addEventListener('click', async () => {
       const targetEventId = button.dataset.eventId;
+      const newSessionId = ++roomsModalSessionId;
+      if (roomsModal) roomsModal.dataset.sessionId = String(newSessionId);
       roomsEventId = targetEventId;
       roomsEventName.textContent = button.dataset.eventName || '';
       resetRoomForm();
       Modal.open(roomsModal);
-      await loadRooms(targetEventId);
+      await loadRooms(targetEventId, newSessionId);
     });
   });
 
@@ -148,10 +189,12 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const editingRoomId = roomForm.dataset.editingRoomId;
       const editingEventId = roomForm.dataset.editingEventId;
-      const editingGen = roomForm.dataset.editingGen;
+      const editingSessionId = roomForm.dataset.editingSessionId;
       const targetEventId = editingEventId || roomsEventId;
+      const initiatingSession = roomsModalSessionId;
+      const initiatingEventId = roomsEventId;
 
-      if (!targetEventId || (editingEventId && editingEventId !== roomsEventId) || (editingGen && editingGen !== String(roomsLoadGeneration))) {
+      if (!targetEventId || (editingEventId && editingEventId !== roomsEventId) || (editingSessionId && editingSessionId !== String(roomsModalSessionId))) {
         return Modal.alert({ title: 'Save room', message: 'Event context has changed. Please reopen rooms.', variant: 'danger' });
       }
 
@@ -166,6 +209,11 @@ document.addEventListener('DOMContentLoaded', () => {
           }),
         },
       );
+
+      if (roomsModalSessionId !== initiatingSession || roomsEventId !== initiatingEventId) {
+        return;
+      }
+
       if (!response.ok) {
         let body = {};
         try {
@@ -174,9 +222,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const detail = Array.isArray(body.detail) ? body.detail.map(item => item.msg || item).join(', ') : body.detail;
         return Modal.alert({ title: editingRoomId ? 'Save room' : 'Add room', message: detail || `Unable to ${editingRoomId ? 'save' : 'add'} room.`, variant: 'danger' });
       }
-      resetRoomForm();
-      await loadRooms(roomsEventId);
+
+      if (roomsModalSessionId === initiatingSession) {
+        resetRoomForm();
+        if (roomsEventId === initiatingEventId) {
+          await loadRooms(initiatingEventId, initiatingSession);
+        }
+      }
     } catch (error) {
+      if (roomsModalSessionId !== initiatingSession || roomsEventId !== initiatingEventId) return;
       Modal.alert({ title: 'Add room', message: error.message || 'Unable to add room.', variant: 'danger' });
     }
   });
@@ -189,7 +243,10 @@ document.addEventListener('DOMContentLoaded', () => {
   roomsModal?.querySelectorAll('[data-modal-close]').forEach(button => {
     button.addEventListener('click', closeRoomsModal);
   });
-  roomsModal?.addEventListener('close', cleanupRoomsModal);
+  roomsModal?.addEventListener('close', () => {
+    const sessionOnDialog = Number(roomsModal.dataset.sessionId || 0);
+    cleanupRoomsModal(sessionOnDialog);
+  });
 
   const editModal = document.getElementById('modal-edit-event');
   const editForm = document.getElementById('edit-event-form');
