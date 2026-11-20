@@ -216,6 +216,7 @@ def test_stale_room_response_does_not_overwrite_active_event_rooms(
                     delayed.continue_()
                 except PlaywrightError:
                     pass
+                page.evaluate('() => new Promise(resolve => setTimeout(resolve, 0))')
 
                 # 5. Verify Event B rooms are NOT overwritten by stale Event A response
                 expect(page.locator('#rooms-list')).to_contain_text('Room B1')
@@ -332,6 +333,7 @@ def test_generation_counter_rejects_delayed_response_ignoring_abort(
                     content_type='application/json',
                     body=stale_payload,
                 )
+                page.evaluate('() => new Promise(resolve => setTimeout(resolve, 0))')
 
                 # Verify generation counter rejected stale payload from overwriting Event B
                 expect(page.locator('#rooms-list')).not_to_contain_text(
@@ -425,10 +427,14 @@ def test_old_delete_completion_after_switching_to_another_event(
 
                 # Now allow the held DELETE for Event A to complete
                 del_route = held_delete.pop(0)
-                try:
+                with page.expect_response(
+                    lambda r: (
+                        f'/events/{event_a_id}/rooms/' in r.url
+                        and r.request.method == HTTPMethod.DELETE.value
+                    )
+                ):
                     del_route.continue_()
-                except PlaywrightError:
-                    pass
+                page.evaluate('() => new Promise(resolve => setTimeout(resolve, 0))')
 
                 # Verify Event B remains cleanly loaded and was not overwritten or disturbed by Event A
                 expect(page.locator('#rooms-list')).to_contain_text('Room B1')
@@ -517,10 +523,14 @@ def test_old_patch_completion_after_switching_to_another_event(
 
                 # Now fulfill the held Event A PATCH request
                 patch_route = held_patch.pop(0)
-                try:
+                with page.expect_response(
+                    lambda r: (
+                        f'/events/{event_a_id}/rooms/' in r.url
+                        and r.request.method == HTTPMethod.PATCH.value
+                    )
+                ):
                     patch_route.continue_()
-                except PlaywrightError:
-                    pass
+                page.evaluate('() => new Promise(resolve => setTimeout(resolve, 0))')
 
                 # Verify Event B's draft is NOT erased and Event B's rooms are untouched
                 expect(page.locator('#room-name-input')).to_have_value(

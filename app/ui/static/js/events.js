@@ -186,13 +186,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   roomForm?.addEventListener('submit', async event => {
     event.preventDefault();
+    const initiatingSession = roomsModalSessionId;
+    const initiatingEventId = roomsEventId;
     try {
       const editingRoomId = roomForm.dataset.editingRoomId;
       const editingEventId = roomForm.dataset.editingEventId;
       const editingSessionId = roomForm.dataset.editingSessionId;
       const targetEventId = editingEventId || roomsEventId;
-      const initiatingSession = roomsModalSessionId;
-      const initiatingEventId = roomsEventId;
 
       if (!targetEventId || (editingEventId && editingEventId !== roomsEventId) || (editingSessionId && editingSessionId !== String(roomsModalSessionId))) {
         return Modal.alert({ title: 'Save room', message: 'Event context has changed. Please reopen rooms.', variant: 'danger' });
