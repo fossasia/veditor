@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 from collections import Counter
 from datetime import UTC, datetime
@@ -36,12 +37,15 @@ from ..config import (
 )
 from ..consts import AuthRole, TalkStatus
 from ..db import get_db
+from ..email import send_organizer_approved_email
 from ..models import User
 from ..queue import redis_conn
 from ..schemas import SystemSettingRead, UserRead
 from ..storage import StorageBackend, get_storage_backend
 from ..ui.templating import templates
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix='/admin',
@@ -340,12 +344,34 @@ def promote_user(
                 detail='Cannot demote user; operation would leave zero active administrators',
             )
 
+    old_role = target.role
     target.role = payload.role
     if payload.role == AuthRole.ORGANIZER and target.organizer_requested:
         target.organizer_requested = False
         target.organizer_request_note = None
     db.commit()
     db.refresh(target)
+    if payload.role == AuthRole.ORGANIZER and old_role != AuthRole.ORGANIZER:
+        base = settings.base_url.rstrip('/') if settings.base_url else None
+        if not base and not settings.is_production and not settings.smtp_host:
+            base = 'http://localhost:8000'
+
+        if not base:
+            logger.warning(
+                'Failed to send organizer approval email to user_id=%s: public base_url is unconfigured',
+                target.id,
+            )
+        else:
+            dashboard_url = f'{base}/studio/events'
+            success = send_organizer_approved_email(
+                target.email,
+                dashboard_url=dashboard_url,
+                is_active=target.is_active,
+            )
+            if not success:
+                logger.warning(
+                    'Failed to send organizer approval email to user_id=%s', target.id
+                )
     return target
 
 

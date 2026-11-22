@@ -92,6 +92,37 @@ def _annexb_to_avcc(data: bytes) -> bytes:
     return bytes(out)
 
 
+def _normalize_encoder_profile(
+    profile_str: str | None, encoder: str = 'libx264'
+) -> str | None:
+    """Map ffprobe/PyAV profile string to a valid encoder profile option."""
+    if not profile_str:
+        return None
+    p = profile_str.lower().replace(':', '').replace(' ', '').strip()
+    if 'libx265' in encoder or 'hevc' in encoder:
+        if '10' in p:
+            return 'main10'
+        if 'main' in p:
+            return 'main'
+        return None
+    if '444' in p:
+        return 'high444'
+    if '422' in p:
+        return 'high422'
+    if '10' in p:
+        return 'high10'
+    if 'baseline' in p:
+        return 'baseline'
+    if 'main' in p:
+        return 'main'
+    if 'high' in p:
+        return 'high'
+    return None
+
+
+_normalize_x264_profile = _normalize_encoder_profile
+
+
 class CutStrategy(str, Enum):
     STREAM_COPY = 'stream_copy'
     SMART_CUT = 'smart_cut'
@@ -462,12 +493,28 @@ def _cut_smart(
 
         # Collect keyframe timestamps
         keyframes: list[float] = []
+        if start_seconds > 30.0:
+            seek_target = int((start_seconds - 30.0) * av.time_base)
+            in_container.seek(seek_target, backward=True, any_frame=False)
         for packet in in_container.demux(in_v):
             if packet.is_keyframe and packet.pts is not None:
                 ts = float(packet.pts * in_v.time_base)
                 keyframes.append(ts)
                 if ts > end_seconds + 5.0:
                     break
+
+        if start_seconds > 30.0 and not any(
+            k <= start_seconds + epsilon for k in keyframes
+        ):
+            # Fallback in case GOP was > 30s: scan from beginning
+            keyframes.clear()
+            in_container.seek(0, backward=True, any_frame=False)
+            for packet in in_container.demux(in_v):
+                if packet.is_keyframe and packet.pts is not None:
+                    ts = float(packet.pts * in_v.time_base)
+                    keyframes.append(ts)
+                    if ts > end_seconds + 5.0:
+                        break
 
         if not keyframes:
             keyframes = [0.0]
@@ -643,9 +690,13 @@ def _cut_smart(
             head_options = {'preset': 'ultrafast'}
             if threads is not None:
                 head_options['threads'] = str(threads)
-            if in_v.profile:
-                head_options['profile'] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
+            if in_v.profile:
+                norm_profile = _normalize_encoder_profile(
+                    in_v.profile, encoder=encoder_name
+                )
+                if norm_profile:
+                    head_options['profile'] = norm_profile
             head_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )
@@ -742,9 +793,13 @@ def _cut_smart(
             tail_options = {'preset': 'ultrafast'}
             if threads is not None:
                 tail_options['threads'] = str(threads)
-            if in_v.profile:
-                tail_options['profile'] = in_v.profile.lower().split()[0]
             encoder_name = _resolve_video_encoder(in_v.codec_context.name)
+            if in_v.profile:
+                norm_profile = _normalize_encoder_profile(
+                    in_v.profile, encoder=encoder_name
+                )
+                if norm_profile:
+                    tail_options['profile'] = norm_profile
             tail_ctx = cast(
                 VideoCodecContext, av.CodecContext.create(av.Codec(encoder_name, 'w'))
             )

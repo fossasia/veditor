@@ -40,7 +40,7 @@ TRANSITIONS: dict[TalkStatus, list[TalkStatus]] = {
     TalkStatus.TRANSCODING: [TalkStatus.UPLOADING, TalkStatus.BROKEN],
     TalkStatus.UPLOADING: [TalkStatus.DONE, TalkStatus.BROKEN],
     TalkStatus.NEEDS_WORK: [TalkStatus.CUTTING, TalkStatus.BROKEN],
-    TalkStatus.DONE: [],
+    TalkStatus.DONE: [TalkStatus.PENDING_BOUNDS],
     TalkStatus.REJECTED: [],
     TalkStatus.BROKEN: [],
 }

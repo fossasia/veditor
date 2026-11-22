@@ -1090,3 +1090,151 @@ def test_handle_approve_dispatch_failure_advances_to_broken(
         b'RQ queue failure'
         in fake_storage.get(f'{preview_talk.id}/logs/assembly.log').read_bytes()
     )
+
+
+def test_admin_can_reopen_completed_talk_for_editing(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Admin or organizer can review a completed ('done') talk with 'needs_work' to reopen editing."""
+    admin = _create_user(db_session, 'admin_reopen@example.com', role=AuthRole.ADMIN)
+    preview_talk.status = TalkStatus.DONE
+    preview_talk.cut_start = 15.0
+    preview_talk.cut_end = 90.0
+    db_session.commit()
+
+    admin_user = CurrentUser(
+        user_id=admin.id,
+        email=admin.email,
+        role=admin.role,
+        source='cookie',
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = client.post(
+        f'/talks/{preview_talk.id}/review',
+        json={'decision': 'needs_work', 'note': 'Removing inappropriate content'},
+    )
+    assert response.status_code == 200
+    db_session.refresh(preview_talk)
+    assert preview_talk.status == TalkStatus.PENDING_BOUNDS
+    assert preview_talk.cut_start == 15.0
+    assert preview_talk.cut_end == 90.0
+
+
+def test_speaker_cannot_reopen_completed_talk(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Speaker role receives 403 when trying to reopen a completed talk."""
+    speaker = _create_user(
+        db_session, 'speaker_reopen@example.com', role=AuthRole.SPEAKER
+    )
+    preview_talk.status = TalkStatus.DONE
+    preview_talk.speaker_email = speaker.email
+    db_session.commit()
+
+    speaker_user = CurrentUser(
+        user_id=speaker.id,
+        email=speaker.email,
+        role=speaker.role,
+        source='cookie',
+        event_ids=[],
+    )
+    app.dependency_overrides[get_current_user] = lambda: speaker_user
+
+    response = client.post(
+        f'/talks/{preview_talk.id}/review',
+        json={'decision': 'needs_work'},
+    )
+    assert response.status_code == 403
+    assert "Operation requires minimum role 'organizer'" in response.json()['detail']
+
+
+def test_machine_client_without_organizer_role_cannot_reopen_completed_talk(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Machine client without organizer or admin role cannot reopen a completed talk."""
+    preview_talk.status = TalkStatus.DONE
+    db_session.commit()
+
+    machine_user = CurrentUser(
+        user_id=None,
+        client_id=1,
+        role=AuthRole.USER,
+        source='api_key',
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: machine_user
+
+    response = client.post(
+        f'/talks/{preview_talk.id}/review',
+        json={'decision': 'needs_work'},
+    )
+    assert response.status_code == 403
+    assert "Operation requires minimum role 'organizer'" in response.json()['detail']
+
+
+def test_reopening_completed_talk_clears_stale_assembly_jobs(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Reopening a completed talk removes stale downstream jobs so bumpers and assembly can regenerate."""
+    admin = _create_user(db_session, 'admin_jobs@example.com', role=AuthRole.ADMIN)
+    preview_talk.status = TalkStatus.DONE
+    db_session.add_all(
+        [
+            models.Job(talk_id=preview_talk.id, kind='intro', status='done'),
+            models.Job(talk_id=preview_talk.id, kind='outro', status='done'),
+            models.Job(talk_id=preview_talk.id, kind='concat', status='done'),
+            models.Job(talk_id=preview_talk.id, kind='publish', status='done'),
+        ]
+    )
+    db_session.commit()
+
+    admin_user = CurrentUser(
+        user_id=admin.id,
+        email=admin.email,
+        role=admin.role,
+        source='cookie',
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = client.post(
+        f'/talks/{preview_talk.id}/review',
+        json={'decision': 'needs_work'},
+    )
+    assert response.status_code == 200
+
+    remaining_jobs = db_session.scalars(
+        select(models.Job.kind).where(models.Job.talk_id == preview_talk.id)
+    ).all()
+    assert not any(k in remaining_jobs for k in ['intro', 'outro', 'concat', 'publish'])
+
+
+def test_reopening_completed_talk_resets_final_cleaned_at(
+    db_session: Session, preview_talk: models.Talk
+) -> None:
+    """Reopening a completed talk clears final_cleaned_at so the retention sweep processes the new video."""
+    admin = _create_user(db_session, 'admin_clean@example.com', role=AuthRole.ADMIN)
+    preview_talk.status = TalkStatus.DONE
+    preview_talk.final_cleaned_at = datetime.now(UTC)
+    db_session.commit()
+
+    admin_user = CurrentUser(
+        user_id=admin.id,
+        email=admin.email,
+        role=admin.role,
+        source='cookie',
+        event_ids=[preview_talk.event_id],
+    )
+    app.dependency_overrides[get_current_user] = lambda: admin_user
+
+    response = client.post(
+        f'/talks/{preview_talk.id}/review',
+        json={'decision': 'needs_work'},
+    )
+    assert response.status_code == 200
+
+    db_session.refresh(preview_talk)
+    assert preview_talk.status == TalkStatus.PENDING_BOUNDS
+    assert preview_talk.final_cleaned_at is None
