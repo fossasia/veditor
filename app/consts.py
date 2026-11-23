@@ -67,6 +67,14 @@ class JobKind(StrEnum):
     PUBLISH = 'publish'
 
 
+class RecordingStatus(StrEnum):
+    PENDING_ANALYSIS = 'pending_analysis'
+    READY = 'ready'
+    ATTACHED = 'attached'
+    REJECTED = 'rejected'
+    BROKEN = 'broken'
+
+
 class JobStatus(StrEnum):
     QUEUED = 'queued'
     RUNNING = 'running'

@@ -21,7 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from email.message import Message
 from pathlib import Path
@@ -34,7 +34,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from . import email as app_email
 from .config import PREVIEW_PRESETS, get_setting, settings
-from .consts import JobKind, JobStatus, TalkStatus
+from .consts import JobKind, JobStatus, RecordingStatus, TalkStatus
 from .db import new_session
 from .ingest import (
     InsufficientStorageError,
@@ -104,7 +104,7 @@ class StageConfig(TypedDict):
 
 
 STAGE_CONFIG: dict[JobKind, StageConfig] = {
-    JobKind.INGEST: {'queue': 'light', 'job_timeout': 600},
+    JobKind.INGEST: {'queue': 'light', 'job_timeout': 14400},
     JobKind.DETECT: {'queue': 'light', 'job_timeout': 300},
     JobKind.CUT: {'queue': 'light', 'job_timeout': 900},
     JobKind.INTRO: {'queue': 'light', 'job_timeout': 300},
@@ -272,6 +272,7 @@ def job_ingest_room_url(
     talk_ids: list[int] | None = None,
     recording_id: int | None = None,
     stage_only: bool = False,
+    target_date: date | str | None = None,
 ) -> None:
     """Download a room recording directly from a video URL or cloud storage link,
 
@@ -363,7 +364,7 @@ def job_ingest_room_url(
                         .filter(
                             RoomRecording.event_id == event_id,
                             RoomRecording.room == room,
-                            RoomRecording.status == 'pending_analysis',
+                            RoomRecording.status == RecordingStatus.PENDING_ANALYSIS,
                         )
                         .order_by(RoomRecording.created_at.desc())
                         .first()
@@ -372,7 +373,18 @@ def job_ingest_room_url(
                     rec.duration_seconds = duration
                     if rec.recording_start is None and rec_start:
                         rec.recording_start = rec_start
-                    rec.status = 'ready'
+                    # A reviewer may have rejected or attached the recording while
+                    # the download was running. Never overwrite that decision.
+                    if rec.status != RecordingStatus.PENDING_ANALYSIS:
+                        db.commit()
+                        return
+                    rec.status = RecordingStatus.READY
+                    if target_date:
+                        rec.target_date = (
+                            date.fromisoformat(target_date)
+                            if isinstance(target_date, str)
+                            else target_date
+                        )
                     rec.storage_key = f'recordings/{rec.id}/recording.mp4'
                     storage.link_or_copy(rec.storage_key, staged_path)
                 db.commit()
@@ -436,6 +448,24 @@ def job_ingest_room_url(
                     pass
 
             if rec_start is None:
+                if target_date:
+                    requested_date = (
+                        date.fromisoformat(target_date)
+                        if isinstance(target_date, str)
+                        else target_date
+                    )
+                    dated_talks = [
+                        t
+                        for t in eligible_talks
+                        if (
+                            t.start.replace(tzinfo=UTC)
+                            if t.start.tzinfo is None
+                            else t.start
+                        ).date()
+                        == requested_date
+                    ]
+                    if dated_talks:
+                        eligible_talks = dated_talks
                 rec_start = min(
                     t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start
                     for t in eligible_talks
@@ -443,19 +473,6 @@ def job_ingest_room_url(
 
             if rec_start.tzinfo is None:
                 rec_start = rec_start.replace(tzinfo=UTC)
-
-            if eligible_talks:
-                first_talk_start = (
-                    eligible_talks[0].start.replace(tzinfo=UTC)
-                    if eligible_talks[0].start.tzinfo is None
-                    else eligible_talks[0].start
-                )
-                if rec_start.date() != first_talk_start.date():
-                    rec_start = rec_start.replace(
-                        year=first_talk_start.year,
-                        month=first_talk_start.month,
-                        day=first_talk_start.day,
-                    )
 
             rec_end = rec_start + timedelta(seconds=duration)
             matched_talks = [
@@ -522,7 +539,7 @@ def job_ingest_room_url(
                     .filter(
                         RoomRecording.event_id == event_id,
                         RoomRecording.room == room,
-                        RoomRecording.status == 'pending_analysis',
+                        RoomRecording.status == RecordingStatus.PENDING_ANALYSIS,
                     )
                     .order_by(RoomRecording.created_at.desc())
                     .first()
@@ -531,9 +548,16 @@ def job_ingest_room_url(
                 rec.duration_seconds = duration
                 if rec.recording_start is None and rec_start:
                     rec.recording_start = rec_start
-                rec.status = 'ready'
-                if matched_talks:
-                    rec.storage_key = f'{matched_talks[0].id}/raw/raw.mp4'
+                if target_date:
+                    rec.target_date = (
+                        date.fromisoformat(target_date)
+                        if isinstance(target_date, str)
+                        else target_date
+                    )
+                if rec.status == RecordingStatus.PENDING_ANALYSIS:
+                    rec.status = RecordingStatus.READY
+                rec.storage_key = f'recordings/{rec.id}/recording.mp4'
+                storage.link_or_copy(rec.storage_key, staged_path)
                 for talk in matched_talks:
                     talk.room_recording_id = rec.id
 
@@ -567,8 +591,8 @@ def job_ingest_room_url(
                     db_talk.status = TalkStatus.BROKEN
             if recording_id:
                 rec = db.get(RoomRecording, recording_id)
-                if rec and rec.status == 'pending_analysis':
-                    rec.status = 'broken'
+                if rec and rec.status == RecordingStatus.PENDING_ANALYSIS:
+                    rec.status = RecordingStatus.BROKEN
             db.commit()
         raise
     finally:

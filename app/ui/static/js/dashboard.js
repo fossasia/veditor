@@ -650,6 +650,14 @@ window.submitAttachRoomRecording = async function() {
     return;
   }
 
+  const startTimeInput = document.getElementById('attach-room-start-time');
+  const startTimeVal = startTimeInput && startTimeInput.value ? startTimeInput.value.trim() : '';
+  if (startTimeVal && !targetDate) {
+    await Modal.alert({ title: 'Validation Error', message: 'Select a recording date before setting a start time.' });
+    setBtnBusy(btn, false);
+    return;
+  }
+
   setBtnBusy(btn, true, 'Attaching Recording...');
 
   try {
@@ -659,11 +667,8 @@ window.submitAttachRoomRecording = async function() {
     if (targetDate) {
       fd.append('target_date', targetDate);
     }
-    const startTimeInput = document.getElementById('attach-room-start-time');
-    const startTimeVal = startTimeInput && startTimeInput.value ? startTimeInput.value.trim() : '';
     if (startTimeVal) {
-      const baseDate = targetDate || new Date().toISOString().split('T')[0];
-      fd.append('recording_start', `${baseDate}T${startTimeVal}`);
+      fd.append('recording_start', `${targetDate}T${startTimeVal}:00`);
     }
     if (isFileMode) {
       fd.append('file', fileInput.files[0]);

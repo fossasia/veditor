@@ -41,7 +41,14 @@ from ..auth import (
     require_role,
 )
 from ..config import get_setting, settings
-from ..consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
+from ..consts import (
+    AuthRole,
+    JobKind,
+    JobStatus,
+    RecordingStatus,
+    SSOScopeType,
+    TalkStatus,
+)
 from ..db import get_db
 from ..ingest import (
     IngestPathRejectedError,
@@ -1993,7 +2000,7 @@ async def attach_room_recording(
     request: Request,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    room: Annotated[str, Form()],
+    room: Annotated[str | None, Form()] = None,
     event_id: Annotated[int | None, Form()] = None,
     file: Annotated[UploadFile | None, File()] = None,
     video_url: Annotated[str | None, Form()] = None,
@@ -2089,6 +2096,12 @@ async def attach_room_recording(
             detail=f'Event {event_id} not found',
         )
     tz = event.event_tz
+    if recording_start is not None:
+        recording_start = (
+            recording_start.replace(tzinfo=tz)
+            if recording_start.tzinfo is None
+            else recording_start.astimezone(tz)
+        ).astimezone(UTC)
 
     all_room_talks = list(
         db.scalars(
@@ -2189,7 +2202,8 @@ async def attach_room_recording(
             room=room,
             source_url=clean_url,
             recording_start=recording_start,
-            status='pending_analysis',
+            target_date=target_date,
+            status=RecordingStatus.PENDING_ANALYSIS,
             created_by_user_id=creator_id,
         )
         db.add(room_rec)
@@ -2209,11 +2223,12 @@ async def attach_room_recording(
                     talk_ids=[],
                     recording_id=room_rec.id,
                     stage_only=True,
-                    job_timeout=3600,
+                    target_date=target_date,
+                    job_timeout=STAGE_CONFIG[JobKind.INGEST]['job_timeout'],
                 )
             except (OSError, RedisError, RuntimeError) as exc:
                 logger.error('Failed to enqueue room URL ingest job: %s', exc)
-                room_rec.status = 'broken'
+                room_rec.status = RecordingStatus.BROKEN
                 db.commit()
                 raise HTTPException(
                     status_code=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -2257,7 +2272,7 @@ async def attach_room_recording(
             logger.error('Failed to enqueue room URL ingest job: %s', exc)
             for talk in eligible_talks:
                 talk.status = prev_statuses.get(talk.id, TalkStatus.WAITING_FILES)
-            room_rec.status = 'broken'
+            room_rec.status = RecordingStatus.BROKEN
             db.commit()
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -2448,19 +2463,6 @@ async def attach_room_recording(
     if rec_start.tzinfo is None:
         rec_start = rec_start.replace(tzinfo=UTC)
 
-    if eligible_talks:
-        first_talk_start = (
-            eligible_talks[0].start.replace(tzinfo=UTC)
-            if eligible_talks[0].start.tzinfo is None
-            else eligible_talks[0].start
-        )
-        if rec_start.date() != first_talk_start.date():
-            rec_start = rec_start.replace(
-                year=first_talk_start.year,
-                month=first_talk_start.month,
-                day=first_talk_start.day,
-            )
-
     rec_end = rec_start + timedelta(seconds=duration)
     matched_talks = [
         t
@@ -2470,18 +2472,15 @@ async def attach_room_recording(
         and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end) > rec_start
     ]
     if not matched_talks:
-        matched_talks = eligible_talks
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording does not overlap any eligible talks',
+        )
 
     # Zero-copy stage into each talk's storage & advance state
     talk_ids = []
     staged_keys = []
     replaced_backups: dict[str, str] = {}
-    talks_to_cancel = [t.id for t in matched_talks if t.status == TalkStatus.DETECTING]
-
-    # Cancel previous detection jobs before modifying or overwriting storage assets
-    for tid in talks_to_cancel:
-        _cancel_talk_jobs(tid)
-
     creator_id = None
     if (
         user
@@ -2494,8 +2493,9 @@ async def attach_room_recording(
         event_id=event_id,
         room=room,
         recording_start=rec_start,
+        target_date=target_date,
         duration_seconds=duration,
-        status='ready',
+        status=RecordingStatus.READY,
         created_by_user_id=creator_id,
     )
     db.add(room_rec)
@@ -2519,6 +2519,10 @@ async def attach_room_recording(
             target_date=target_date,
             recording_id=room_rec.id,
         )
+
+    talks_to_cancel = [t.id for t in matched_talks if t.status == TalkStatus.DETECTING]
+    for tid in talks_to_cancel:
+        _cancel_talk_jobs(tid)
 
     try:
         for talk in matched_talks:

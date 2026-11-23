@@ -15,6 +15,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var recordingId = form.dataset.recordingId;
   var videoPlayer = document.getElementById('rec-video-player');
+  var bumperUploadsInProgress = 0;
+
+  function updateUploadButtonState() {
+    if (btnApprove) {
+      btnApprove.disabled = bumperUploadsInProgress > 0;
+    }
+  }
 
   function seekVideoToPointer(seconds) {
     if (!videoPlayer || isNaN(seconds)) return;
@@ -89,6 +96,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async function handleBumperUpload(file) {
       if (!file) return;
+      if (pathInput) pathInput.value = '';
+      bumperUploadsInProgress += 1;
+      updateUploadButtonState();
       if (fileName) {
         fileName.textContent = file.name + ' (Uploading...)';
       }
@@ -109,7 +119,11 @@ document.addEventListener('DOMContentLoaded', function () {
         if (pathInput) pathInput.value = data.path;
         if (fileName) fileName.textContent = file.name + ' ✓';
       } catch (err) {
+        if (pathInput) pathInput.value = '';
         if (fileName) fileName.textContent = 'Upload failed: ' + err.message;
+      } finally {
+        bumperUploadsInProgress = Math.max(0, bumperUploadsInProgress - 1);
+        updateUploadButtonState();
       }
     }
 
@@ -200,6 +214,19 @@ document.addEventListener('DOMContentLoaded', function () {
     var customOutroPath = document.getElementById('custom-outro-path')?.value || null;
     var handoff = !!document.getElementById('chk-handoff')?.checked;
 
+    if (bumperUploadsInProgress > 0) {
+      setStatus('Please wait for custom bumper uploads to finish.', true);
+      return;
+    }
+    if (includeIntro && introSource === 'custom' && !customIntroPath) {
+      setStatus('Please upload a custom intro before approving.', true);
+      return;
+    }
+    if (includeOutro && outroSource === 'custom' && !customOutroPath) {
+      setStatus('Please upload a custom outro before approving.', true);
+      return;
+    }
+
     var payload = {
       talk_ids: talkIds,
       include_intro: includeIntro,
@@ -231,7 +258,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
 
       var msg = 'Successfully approved and attached video to ' +
-        (data.approved_count || talkIds.length) + ' talk(s)!';
+        data.approved_count + ' talk(s)!';
       if (handoff) {
         msg += ' Speaker handoff review emails dispatched.';
       }
@@ -251,7 +278,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   if (btnReject) {
     btnReject.addEventListener('click', async function () {
-      if (!confirm('Are you sure you want to reject this recording?')) {
+      var confirmed = await Modal.confirm({
+        title: 'Reject Recording',
+        message: 'Are you sure you want to reject this recording?',
+        confirmLabel: 'Reject',
+        variant: 'danger'
+      });
+      if (!confirmed) {
         return;
       }
       clearStatus();

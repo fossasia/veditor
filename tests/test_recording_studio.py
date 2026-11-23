@@ -8,10 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import models
+from app.consts import AuthRole, RecordingStatus, TalkStatus
 from app.db import Base, engine
 from app.main import app
 from app.pipeline.detect import match_talks_to_recording
 from app.security import create_session_token
+from app.storage import LocalDiskBackend, get_storage_backend
+from tests.conftest import generate_clip
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -27,8 +30,6 @@ def client() -> TestClient:
 
 @pytest.fixture
 def temp_storage(tmp_path: Path) -> Generator[Any]:
-    from app.storage import LocalDiskBackend, get_storage_backend
-
     storage = LocalDiskBackend(tmp_path / 'test_storage')
     app.dependency_overrides[get_storage_backend] = lambda: storage
     try:
@@ -113,13 +114,18 @@ def test_match_talks_to_recording_partial_overlap() -> None:
     assert m.cut_end_offset == 7200.0  # 2.0h (end of recording)
 
 
-def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> None:
+def test_recording_studio_routes_flow(
+    client: TestClient,
+    db_session: Any,
+    temp_storage: Any,
+    tmp_path: Path,
+) -> None:
     """Test full flow: view studio page, stream video, bulk approve with handoff, reject."""
     # 1. Create organizer user and event
     user = models.User(
         email='rec_organizer@example.com',
         hashed_password='fake',
-        role='organizer',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(user)
     db_session.flush()
@@ -139,7 +145,7 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         start=datetime(2026, 10, 30, 9, 0, tzinfo=UTC),
         end=datetime(2026, 10, 30, 10, 0, tzinfo=UTC),
         speaker_email='speaker1@example.com',
-        status='waiting_for_files',
+        status=TalkStatus.WAITING_FILES,
     )
     t2 = models.Talk(
         event_id=event.id,
@@ -148,7 +154,7 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         start=datetime(2026, 10, 30, 10, 15, tzinfo=UTC),
         end=datetime(2026, 10, 30, 11, 15, tzinfo=UTC),
         speaker_email='speaker2@example.com',
-        status='waiting_for_files',
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([t1, t2])
     db_session.flush()
@@ -159,10 +165,14 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         room='Main Hall',
         recording_start=datetime(2026, 10, 30, 8, 30, tzinfo=UTC),
         duration_seconds=3.0 * 3600,  # 8:30 to 11:30
-        status='ready',
+        status=RecordingStatus.READY,
         created_by_user_id=user.id,
     )
     db_session.add(rec)
+    db_session.flush()
+    rec.storage_key = f'recordings/{rec.id}/recording.mp4'
+    clip = generate_clip(1, output_dir=tmp_path)
+    temp_storage.link_or_copy(rec.storage_key, clip)
     db_session.commit()
 
     # 4. Unauthenticated access redirects to login
@@ -204,7 +214,7 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         db_session.refresh(t2)
         db_session.refresh(rec)
 
-        assert rec.status == 'attached'
+        assert rec.status == RecordingStatus.ATTACHED
         assert t1.room_recording_id == rec.id
         assert t2.room_recording_id == rec.id
 
@@ -215,7 +225,7 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         assert t1.cut_end == 5400.0
         assert t1.include_intro is True
         assert t1.include_outro is True
-        assert t1.status == 'pending_bounds'
+        assert t1.status == TalkStatus.PENDING_BOUNDS
         assert t1.handed_off_at is not None
 
         # Talk 2 (10:15 - 11:15) with 08:30 start:
@@ -223,7 +233,7 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
         # cut_end: (11:15 - 08:30) = 9900s
         assert t2.cut_start == 6300.0
         assert t2.cut_end == 9900.0
-        assert t2.status == 'pending_bounds'
+        assert t2.status == TalkStatus.PENDING_BOUNDS
         assert t2.handed_off_at is not None
 
         # Both speakers should have had handoff email queued
@@ -231,9 +241,9 @@ def test_recording_studio_routes_flow(client: TestClient, db_session: Any) -> No
 
     # 7. Reject endpoint
     reject_resp = client.post(f'/studio/recordings/{rec.id}/reject')
-    assert reject_resp.status_code == 200
+    assert reject_resp.status_code == 409
     db_session.refresh(rec)
-    assert rec.status == 'rejected'
+    assert rec.status == RecordingStatus.ATTACHED
 
 
 def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
@@ -246,7 +256,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
     user = models.User(
         email='stage_org@example.com',
         hashed_password='fake',
-        role='organizer',
+        role=AuthRole.ORGANIZER,
     )
     db_session.add(user)
     db_session.flush()
@@ -266,7 +276,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
         start=datetime(2026, 10, 30, 9, 0, tzinfo=UTC),
         end=datetime(2026, 10, 30, 9, 30, tzinfo=UTC),
         speaker_email='s1@example.com',
-        status='waiting_for_files',
+        status=TalkStatus.WAITING_FILES,
     )
     t2 = models.Talk(
         event_id=event.id,
@@ -275,7 +285,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
         start=datetime(2026, 10, 30, 10, 0, tzinfo=UTC),
         end=datetime(2026, 10, 30, 10, 30, tzinfo=UTC),
         speaker_email='s2@example.com',
-        status='waiting_for_files',
+        status=TalkStatus.WAITING_FILES,
     )
     t3 = models.Talk(
         event_id=event.id,
@@ -284,7 +294,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
         start=datetime(2026, 10, 30, 14, 0, tzinfo=UTC),
         end=datetime(2026, 10, 30, 15, 0, tzinfo=UTC),
         speaker_email='s3@example.com',
-        status='waiting_for_files',
+        status=TalkStatus.WAITING_FILES,
     )
     db_session.add_all([t1, t2, t3])
     db_session.commit()
@@ -293,9 +303,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
     client.cookies.set('veditor_session', token)
 
     # 1. Attach room recording with stage_only=True
-    from tests.conftest import generate_clip
-
-    clip = generate_clip(0.5, output_dir=tmp_path)
+    clip = generate_clip(3600, output_dir=tmp_path)
     try:
         with open(clip, 'rb') as f_vid:
             attach_res = client.post(
@@ -313,14 +321,18 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
             assert data['attached_count'] == 0
             rec_id = data['recording_id']
             assert rec_id is not None
+            staged_rec = db_session.get(models.RoomRecording, rec_id)
+            assert staged_rec is not None
+            staged_rec.duration_seconds = 10800
+            db_session.commit()
 
         # Verify talks were NOT touched
         db_session.refresh(t1)
         db_session.refresh(t2)
         db_session.refresh(t3)
-        assert t1.status == 'waiting_for_files'
-        assert t2.status == 'waiting_for_files'
-        assert t3.status == 'waiting_for_files'
+        assert t1.status == TalkStatus.WAITING_FILES
+        assert t2.status == TalkStatus.WAITING_FILES
+        assert t3.status == TalkStatus.WAITING_FILES
         assert not temp_storage.exists(f'{t1.id}/raw/raw.mp4')
 
         # 2. Upload custom bumper for the recording
@@ -356,15 +368,15 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
         db_session.refresh(t3)
 
         # t1 and t2 are now attached and advanced
-        assert t1.status == 'pending_bounds'
-        assert t1.custom_intro_path == custom_intro_path
+        assert t1.status == TalkStatus.PENDING_BOUNDS
+        assert t1.custom_intro_path == f'{t1.id}/intro/intro.mp4'
         assert t1.include_intro is True
-        assert t2.status == 'pending_bounds'
+        assert t2.status == TalkStatus.PENDING_BOUNDS
         assert temp_storage.exists(f'{t1.id}/raw/raw.mp4')
         assert temp_storage.exists(f'{t2.id}/raw/raw.mp4')
 
         # t3 was NOT selected and remains waiting_for_files (ready for afternoon recording)
-        assert t3.status == 'waiting_for_files'
+        assert t3.status == TalkStatus.WAITING_FILES
         assert not temp_storage.exists(f'{t3.id}/raw/raw.mp4')
         assert t3.room_recording_id is None
     finally:

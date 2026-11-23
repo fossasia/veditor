@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from .consts import AuthRole, JobKind, JobStatus, TalkStatus
+from .consts import AuthRole, JobKind, JobStatus, RecordingStatus, TalkStatus
 from .db import Base
 from .retention import validate_retention_overrides
 
@@ -242,11 +242,12 @@ class RoomRecording(Base):
     recording_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(50),
+    status: Mapped[RecordingStatus] = mapped_column(
+        SAEnum(RecordingStatus, native_enum=False, validate_strings=True),
         nullable=False,
-        default='ready',
+        default=RecordingStatus.READY,
         server_default=text("'ready'"),
     )
     created_at: Mapped[datetime] = mapped_column(
