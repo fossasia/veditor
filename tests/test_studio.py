@@ -5703,3 +5703,83 @@ def test_import_schedule_advanced_formats_and_lookups(
         == '2026-08-10T14:30:00'
     )
     assert (talk_frab.end - talk_frab.start).total_seconds() == 2700.0
+
+
+def test_import_schedule_coderabbit_edge_cases(
+    client: TestClient, db_session: Session
+) -> None:
+    api_key = f'import_edge_key_{uuid.uuid4().hex}'
+    client_model = models.Client(hashed_key=hash_api_key(api_key), event_ids=[])
+    db_session.add(client_model)
+    db_session.commit()
+
+    # 1. Frab format with explicit duration_minutes preserved over duration string
+    # 2. Title fallback when title has empty localized dict -> falls back to name
+    # 3. Speakers resolved by pk and slug
+    payload = {
+        'version': '1.0',
+        'conference': {
+            'title': 'Edge Cases Summit',
+            'days': [
+                {
+                    'rooms': {
+                        'Main Hall': [
+                            {
+                                'code': 'EDGE-1',
+                                'title': {'en': ''},  # empty string in localized dict
+                                'name': 'Fallback Name from Empty Title',
+                                'start': '2026-09-01T10:00:00Z',
+                                'duration': '00:30',
+                                'duration_minutes': 75,  # explicit duration_minutes must be preserved
+                                'persons': [{'pk': 99}],  # resolved by pk
+                            },
+                            {
+                                'code': 'EDGE-2',
+                                'session_title': 'Session Title Fallback',
+                                'start': '2026-09-01T12:00:00Z',
+                                'duration': '01:15',
+                                'speakers': [
+                                    {'slug': 'charlie-slug'}
+                                ],  # resolved by slug
+                            },
+                        ]
+                    }
+                }
+            ],
+        },
+        'speakers': [
+            {'pk': 99, 'name': 'Speaker PK', 'email': 'pk@example.com'},
+            {
+                'slug': 'charlie-slug',
+                'name': 'Charlie Slug',
+                'email': 'charlie@example.com',
+            },
+        ],
+    }
+
+    res = client.post(
+        '/talks/schedule/import',
+        json=payload,
+        headers={'X-API-Key': api_key},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data['imported_count'] == 2
+
+    talk1 = db_session.scalar(
+        select(models.Talk).where(models.Talk.external_id == 'EDGE-1')
+    )
+    assert talk1 is not None
+    assert talk1.title == 'Fallback Name from Empty Title'
+    assert talk1.speaker_email == 'pk@example.com'
+    # 75 minutes = 4500 seconds preserved
+    assert (talk1.end - talk1.start).total_seconds() == 4500.0
+
+    talk2 = db_session.scalar(
+        select(models.Talk).where(models.Talk.external_id == 'EDGE-2')
+    )
+    assert talk2 is not None
+    assert talk2.title == 'Session Title Fallback'
+    assert talk2.speaker_email == 'charlie@example.com'
+    # 01:15 = 75 minutes = 4500 seconds
+    assert (talk2.end - talk2.start).total_seconds() == 4500.0

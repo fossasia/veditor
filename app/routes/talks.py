@@ -1598,16 +1598,20 @@ async def import_schedule(
                                     t['_derived_room'] = resolved_room
                                     if day_date:
                                         t['_day_date'] = day_date
-                                    dur_str = t.get('duration')
-                                    if isinstance(dur_str, str) and ':' in dur_str:
-                                        dur_parts = dur_str.strip().split(':')
-                                        if len(dur_parts) == 2:
-                                            try:
-                                                t['duration_minutes'] = int(
-                                                    dur_parts[0]
-                                                ) * 60 + float(dur_parts[1])
-                                            except ValueError, TypeError:
-                                                pass
+                                    if (
+                                        'duration_minutes' not in t
+                                        and 'duration_seconds' not in t
+                                    ):
+                                        dur_str = t.get('duration')
+                                        if isinstance(dur_str, str) and ':' in dur_str:
+                                            dur_parts = dur_str.strip().split(':')
+                                            if len(dur_parts) == 2:
+                                                try:
+                                                    t['duration_minutes'] = int(
+                                                        dur_parts[0]
+                                                    ) * 60 + float(dur_parts[1])
+                                                except ValueError, TypeError:
+                                                    pass
                                     talks_to_create.append(t)
                 elif isinstance(rooms_data, list):
                     for r_item in rooms_data:
@@ -1620,16 +1624,20 @@ async def import_schedule(
                                     t['_derived_room'] = r_name
                                     if day_date:
                                         t['_day_date'] = day_date
-                                    dur_str = t.get('duration')
-                                    if isinstance(dur_str, str) and ':' in dur_str:
-                                        dur_parts = dur_str.strip().split(':')
-                                        if len(dur_parts) == 2:
-                                            try:
-                                                t['duration_minutes'] = int(
-                                                    dur_parts[0]
-                                                ) * 60 + float(dur_parts[1])
-                                            except ValueError, TypeError:
-                                                pass
+                                    if (
+                                        'duration_minutes' not in t
+                                        and 'duration_seconds' not in t
+                                    ):
+                                        dur_str = t.get('duration')
+                                        if isinstance(dur_str, str) and ':' in dur_str:
+                                            dur_parts = dur_str.strip().split(':')
+                                            if len(dur_parts) == 2:
+                                                try:
+                                                    t['duration_minutes'] = int(
+                                                        dur_parts[0]
+                                                    ) * 60 + float(dur_parts[1])
+                                                except ValueError, TypeError:
+                                                    pass
                                     talks_to_create.append(t)
         elif 'talks' in data and isinstance(data['talks'], list):
             talks_to_create = data['talks']
@@ -1677,10 +1685,12 @@ async def import_schedule(
     for t_info in talks_to_create:
         if not isinstance(t_info, dict):
             continue
-        raw_title = (
-            t_info.get('title') or t_info.get('name') or t_info.get('session_title')
+        title = (
+            _extract_string_value(t_info.get('title'))
+            or _extract_string_value(t_info.get('name'))
+            or _extract_string_value(t_info.get('session_title'))
+            or 'Untitled Talk'
         )
-        title = _extract_string_value(raw_title) or 'Untitled Talk'
 
         raw_room = (
             t_info.get('room') or t_info.get('room_name') or t_info.get('_derived_room')
@@ -1702,13 +1712,18 @@ async def import_schedule(
                     if p.get('email'):
                         speaker_email = _extract_string_value(p['email'])
                         break
-                    p_code = p.get('code') or p.get('guid') or p.get('id')
-                    if (
-                        p_code
-                        and p_code in speakers_lookup
-                        and speakers_lookup[p_code].get('email')
-                    ):
-                        speaker_email = speakers_lookup[p_code]['email']
+                    p_code = (
+                        p.get('code')
+                        or p.get('id')
+                        or p.get('guid')
+                        or p.get('pk')
+                        or p.get('slug')
+                    )
+                    lookup_entry = speakers_lookup.get(p_code) or (
+                        speakers_lookup.get(str(p_code)) if p_code is not None else None
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
                         break
         elif isinstance(t_info.get('speakers'), list):
             for sp in t_info['speakers']:
@@ -1716,17 +1731,27 @@ async def import_schedule(
                     if sp.get('email'):
                         speaker_email = _extract_string_value(sp['email'])
                         break
-                    sp_code = sp.get('code') or sp.get('id') or sp.get('guid')
-                    if (
-                        sp_code
-                        and sp_code in speakers_lookup
-                        and speakers_lookup[sp_code].get('email')
-                    ):
-                        speaker_email = speakers_lookup[sp_code]['email']
+                    sp_code = (
+                        sp.get('code')
+                        or sp.get('id')
+                        or sp.get('guid')
+                        or sp.get('pk')
+                        or sp.get('slug')
+                    )
+                    lookup_entry = speakers_lookup.get(sp_code) or (
+                        speakers_lookup.get(str(sp_code))
+                        if sp_code is not None
+                        else None
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
                         break
                 elif isinstance(sp, (str, int)):
-                    if sp in speakers_lookup and speakers_lookup[sp].get('email'):
-                        speaker_email = speakers_lookup[sp]['email']
+                    lookup_entry = speakers_lookup.get(sp) or speakers_lookup.get(
+                        str(sp)
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
                         break
                     if isinstance(sp, str) and '@' in sp:
                         speaker_email = sp.strip()
