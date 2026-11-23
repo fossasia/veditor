@@ -11,7 +11,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let roomsModalSessionId = 0;
   let roomsRequestGeneration = 0;
   let roomsAbortController = null;
-  let roomsTimeoutId = null;
 
   function resetRoomForm() {
     roomForm?.reset();
@@ -32,10 +31,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (roomsAbortController) {
       roomsAbortController.abort();
       roomsAbortController = null;
-    }
-    if (roomsTimeoutId) {
-      clearTimeout(roomsTimeoutId);
-      roomsTimeoutId = null;
     }
     roomsEventId = null;
     resetRoomForm();
@@ -58,24 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (roomsAbortController) {
       roomsAbortController.abort();
     }
-    if (roomsTimeoutId) {
-      clearTimeout(roomsTimeoutId);
-      roomsTimeoutId = null;
-    }
     const abortController = new AbortController();
     roomsAbortController = abortController;
-
-    let isTimedOut = false;
-    const timeoutDuration = Number(window.ROOMS_REQUEST_TIMEOUT_MS) || 8000;
-    roomsTimeoutId = setTimeout(() => {
-      if (currentGen === roomsRequestGeneration && currentSession === roomsModalSessionId) {
-        isTimedOut = true;
-        abortController.abort();
-        if (roomsList) {
-          roomsList.textContent = 'Request timed out. Please try again.';
-        }
-      }
-    }, timeoutDuration);
 
     roomsList.textContent = 'Loading rooms...';
     try {
@@ -158,16 +137,10 @@ document.addEventListener('DOMContentLoaded', () => {
         roomsList.append(row);
       });
     } catch (error) {
-      if (isTimedOut) return;
       if (error.name === 'AbortError' || roomsEventId !== targetEventId || currentGen !== roomsRequestGeneration || currentSession !== roomsModalSessionId) {
         return;
       }
       roomsList.textContent = error.message;
-    } finally {
-      if (currentGen === roomsRequestGeneration && roomsTimeoutId) {
-        clearTimeout(roomsTimeoutId);
-        roomsTimeoutId = null;
-      }
     }
   }
 
