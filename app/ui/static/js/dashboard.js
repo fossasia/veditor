@@ -222,6 +222,7 @@ function _setDropzoneFileName(file) {
 }
 
 let _loadRoomDaysSeq = 0;
+let _activeRoomDaysReq = null;
 let _loadAttachRoomsSeq = 0;
 
 function _getResolvedEventId() {
@@ -296,52 +297,170 @@ async function _loadAttachRooms(eventId, selectedRoom = '') {
   }
 }
 
-async function _loadRoomDays(room) {
-  const currentSeq = ++_loadRoomDaysSeq;
+function _hasMultipleDays(dateSel) {
+  if (!dateSel) return false;
+  if (dateSel.dataset && dateSel.dataset.hasMultipleDays === 'true') return true;
+  if (dateSel.dataset && dateSel.dataset.hasMultipleDays === 'false') return false;
+  const validDayOptions = Array.from(dateSel.options || []).filter(opt => opt.value && opt.value.trim() !== '');
+  return validDayOptions.length > 1;
+}
+
+async function _loadRoomDays(room, preserveDate = null, eventId = null) {
   const dateSel = document.getElementById('attach-room-date');
-  if (!dateSel) return;
-  dateSel.textContent = '';
+  if (!dateSel) return null;
   const initialOpt = document.createElement('option');
   initialOpt.value = '';
   initialOpt.textContent = 'All Days / Select Day';
-  dateSel.appendChild(initialOpt);
-  if (!room || !room.trim()) return;
 
-  const eventId = _getResolvedEventId();
-  let url = `/talks/room/days?room=${encodeURIComponent(room.trim())}`;
-  if (eventId) {
-    url += `&event_id=${encodeURIComponent(eventId)}`;
+  const trimmedRoom = (room || '').trim();
+  if (!trimmedRoom) {
+    dateSel.textContent = '';
+    dateSel.appendChild(initialOpt);
+    dateSel.dataset.roomDaysStatus = 'loaded';
+    dateSel.dataset.hasMultipleDays = 'false';
+    delete dateSel.dataset.loadedRoom;
+    _updateAttachSubmitLabel();
+    const res = Object.assign([], { ok: true, days: [], targetRemoved: false });
+    return res;
+  }
+
+  const currentSeq = ++_loadRoomDaysSeq;
+  const resolvedEventId = (eventId !== null && eventId !== undefined) ? eventId : _getResolvedEventId();
+
+  if (preserveDate === null) {
+    dateSel.textContent = '';
+    delete dateSel.dataset.hasMultipleDays;
+    delete dateSel.dataset.targetRemoved;
+    dateSel.appendChild(initialOpt);
+  }
+  dateSel.dataset.roomDaysStatus = 'loading';
+  dateSel.dataset.loadedRoom = trimmedRoom;
+
+  let url = `/talks/room/days?room=${encodeURIComponent(trimmedRoom)}`;
+  if (resolvedEventId) {
+    url += `&event_id=${encodeURIComponent(resolvedEventId)}`;
   }
 
   try {
-    const res = await (window.authFetch || fetch)(url);
-    if (currentSeq !== _loadRoomDaysSeq) return;
-    if (!res.ok) return;
-    const days = await res.json();
-    if (currentSeq !== _loadRoomDaysSeq) return;
+    let promise;
+    if (_activeRoomDaysReq && _activeRoomDaysReq.room === trimmedRoom && _activeRoomDaysReq.eventId === resolvedEventId) {
+      promise = _activeRoomDaysReq.promise;
+    } else {
+      const fetchPromise = (async () => {
+        const res = await (window.authFetch || fetch)(url);
+        if (!res.ok) throw new Error('Failed to load room days');
+        return await res.json();
+      })();
+      _activeRoomDaysReq = { room: trimmedRoom, eventId: resolvedEventId, promise: fetchPromise };
+      promise = fetchPromise;
+    }
+
+    const days = await promise;
+    if (currentSeq !== _loadRoomDaysSeq) return null;
+
+    // Room must match trimmedRoom (an empty room selector must not bypass this validation)
+    const roomSel = document.getElementById('attach-room-select') || document.getElementById('attach-room-input');
+    const currentSelectedRoom = (roomSel && roomSel.value) ? roomSel.value.trim() : '';
+    if (currentSelectedRoom !== trimmedRoom) return null;
+
+    // Event must match resolvedEventId if event ID was specified
+    const currentEventId = _getResolvedEventId();
+    if (resolvedEventId !== null && resolvedEventId !== undefined && currentEventId !== resolvedEventId) {
+      return null;
+    }
+
+    const liveSelectedDate = (dateSel.value || '').trim();
+    const hasPreviousTarget = Boolean(preserveDate && preserveDate.trim());
+    const trimmedTarget = hasPreviousTarget ? preserveDate.trim() : '';
+
+    // Detect if selection changed while the schedule request was pending
+    const selectionChanged = hasPreviousTarget && liveSelectedDate !== trimmedTarget;
+    const targetToPreserve = selectionChanged ? liveSelectedDate : trimmedTarget;
+    const hasTargetToPreserve = Boolean(targetToPreserve);
+
+    dateSel.textContent = '';
+    let targetRemoved = false;
+
     if (Array.isArray(days) && days.length > 0) {
-      dateSel.textContent = '';
       if (days.length > 1) {
+        dateSel.dataset.hasMultipleDays = 'true';
         const defaultOpt = document.createElement('option');
         defaultOpt.value = '';
         defaultOpt.textContent = `Select Day (${days.length} days found)`;
         dateSel.appendChild(defaultOpt);
+        let preservedIndex = -1;
+        days.forEach((d, idx) => {
+          const opt = document.createElement('option');
+          opt.value = d.date;
+          opt.textContent = d.label;
+          dateSel.appendChild(opt);
+          if (hasTargetToPreserve && d.date === targetToPreserve) {
+            preservedIndex = idx + 1;
+          }
+        });
+        if (preservedIndex > 0) {
+          dateSel.selectedIndex = preservedIndex;
+          delete dateSel.dataset.targetRemoved;
+        } else {
+          dateSel.selectedIndex = 0;
+          dateSel.value = '';
+          if (hasTargetToPreserve || dateSel.dataset.targetRemoved === 'true') {
+            targetRemoved = true;
+            dateSel.dataset.targetRemoved = 'true';
+          }
+        }
+      } else {
+        dateSel.dataset.hasMultipleDays = 'false';
+        const hasRemovedTarget = dateSel.dataset.targetRemoved === 'true';
+        if ((hasTargetToPreserve && days[0].date !== targetToPreserve) || (hasRemovedTarget && !hasTargetToPreserve)) {
+          // The previous target date was removed from schedule! Do not auto-select the remaining date.
+          targetRemoved = true;
+          dateSel.dataset.targetRemoved = 'true';
+          const defaultOpt = document.createElement('option');
+          defaultOpt.value = '';
+          defaultOpt.textContent = 'Select Day';
+          dateSel.appendChild(defaultOpt);
+          const opt = document.createElement('option');
+          opt.value = days[0].date;
+          opt.textContent = days[0].label;
+          dateSel.appendChild(opt);
+          dateSel.selectedIndex = 0;
+          dateSel.value = '';
+        } else {
+          delete dateSel.dataset.targetRemoved;
+          const opt = document.createElement('option');
+          opt.value = days[0].date;
+          opt.textContent = days[0].label;
+          dateSel.appendChild(opt);
+          dateSel.selectedIndex = 0;
+          dateSel.value = days[0].date;
+        }
       }
-      days.forEach(d => {
-        const opt = document.createElement('option');
-        opt.value = d.date;
-        opt.textContent = d.label;
-        dateSel.appendChild(opt);
-      });
-      if (days.length === 1) {
-        dateSel.selectedIndex = 0;
+    } else {
+      dateSel.dataset.hasMultipleDays = 'false';
+      dateSel.appendChild(initialOpt);
+      dateSel.selectedIndex = 0;
+      dateSel.value = '';
+      if (hasTargetToPreserve || dateSel.dataset.targetRemoved === 'true') {
+        targetRemoved = true;
+        dateSel.dataset.targetRemoved = 'true';
       }
     }
+    dateSel.dataset.roomDaysStatus = 'loaded';
+    dateSel.dataset.loadedRoom = trimmedRoom;
+    const result = Object.assign(days, { ok: true, days, targetRemoved, selectionChanged });
+    return result;
   } catch (e) {
     if (currentSeq === _loadRoomDaysSeq) {
       console.warn('Failed to load room days:', e);
+      dateSel.dataset.roomDaysStatus = 'error';
+      dateSel.dataset.hasMultipleDays = 'false';
     }
+    return null;
   } finally {
+    if (_activeRoomDaysReq && _activeRoomDaysReq.room === trimmedRoom && _activeRoomDaysReq.eventId === resolvedEventId) {
+      _activeRoomDaysReq = null;
+    }
     if (currentSeq === _loadRoomDaysSeq) {
       _updateAttachSubmitLabel();
     }
@@ -359,10 +478,15 @@ function _updateAttachSubmitLabel() {
   const selectedDate = (dateSel && dateSel.value) ? dateSel.value : '';
 
   if (room && selectedDate && selectedDateOpt) {
+    if (dateSel && dateSel.dataset) {
+      delete dateSel.dataset.targetRemoved;
+    }
     const text = selectedDateOpt.textContent;
     const dayMatch = text.match(/^(Day \d+)/);
     const dayPrefix = dayMatch ? dayMatch[1] : selectedDate;
     btn.textContent = `Attach to ${dayPrefix} Sessions (${room})`;
+  } else if (room && (_hasMultipleDays(dateSel) || (dateSel && dateSel.dataset && dateSel.dataset.targetRemoved === 'true'))) {
+    btn.textContent = 'Select Day to Attach Recording';
   } else if (room) {
     btn.textContent = `Attach to All Sessions in ${room}`;
   } else {
@@ -370,7 +494,15 @@ function _updateAttachSubmitLabel() {
   }
 }
 
+window._hasMultipleDays = _hasMultipleDays;
+window._loadRoomDays = _loadRoomDays;
+window._updateAttachSubmitLabel = _updateAttachSubmitLabel;
+
 function _initAttachRoomModal() {
+  const dateSel = document.getElementById('attach-room-date');
+  if (dateSel && dateSel.dataset) {
+    delete dateSel.dataset.targetRemoved;
+  }
   const eventId = _getResolvedEventId();
   const roomSel = document.getElementById('attach-room-select') || document.getElementById('attach-room-input');
   const currentRoom = (roomSel && roomSel.value) ? roomSel.value : '';
@@ -402,19 +534,110 @@ window.submitAttachRoomRecording = async function() {
   const roomSelect = document.getElementById('attach-room-select') || document.getElementById('attach-room-input');
   const roomInput = roomSelect ? roomSelect.value : '';
   const dateSelect = document.getElementById('attach-room-date');
-  const targetDate = dateSelect ? dateSelect.value : '';
   const urlInput = (document.getElementById('attach-room-url') || {}).value || '';
   const fileInput = document.getElementById('attach-room-file');
   const btn = document.getElementById('btn-submit-attach-room');
 
-  const btnFile = document.getElementById('btn-source-file');
-  const isFileMode = btnFile && btnFile.classList.contains('attach-source-active');
+  if (btn && btn.disabled) return;
 
-  if (!roomInput.trim()) {
+  const capturedRoom = roomInput.trim();
+  if (!capturedRoom) {
     await Modal.alert({ title: 'Validation Error', message: 'Please enter or select a room name.' });
     return;
   }
+  const capturedEventId = _getResolvedEventId();
 
+  if (dateSelect) {
+    const status = dateSelect.dataset ? dateSelect.dataset.roomDaysStatus : '';
+    const loadedRoom = dateSelect.dataset ? dateSelect.dataset.loadedRoom : '';
+    if (status === 'loading' || (loadedRoom && loadedRoom !== capturedRoom)) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'Loading schedule for this room. Please wait a moment.',
+      });
+      return;
+    }
+    if (status === 'error') {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'Failed to load schedule for this room. Please re-select the room.',
+      });
+      return;
+    }
+
+    // Inspect already-loaded room-day metadata before issuing any network requests
+    const currentSelectedDate = (dateSelect.value || '').trim();
+
+    // If a previously selected target date was removed from schedule and user hasn't selected a day yet
+    if (dateSelect.dataset && dateSelect.dataset.targetRemoved === 'true' && !currentSelectedDate) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The previously selected target date was removed from the schedule. Please select and confirm a new target date.',
+      });
+      return;
+    }
+
+    if (status === 'loaded' && _hasMultipleDays(dateSelect) && !currentSelectedDate) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'Please select a target day for this multi-day room recording.',
+      });
+      return;
+    }
+
+    // Refresh and reconcile room-day schedule with server before validating to avoid stale cached state
+    const reconciliation = await _loadRoomDays(capturedRoom, currentSelectedDate, capturedEventId);
+
+    // Verify event identity and room selection consistency immediately after the await
+    const latestEventId = _getResolvedEventId();
+    const latestRoom = (roomSelect && roomSelect.value ? roomSelect.value : '').trim();
+    if (latestEventId !== capturedEventId || latestRoom !== capturedRoom) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The selected event or room was changed during validation. Please review your selection and submit again.',
+      });
+      return;
+    }
+
+    if (reconciliation === null || dateSelect.dataset.roomDaysStatus === 'error') {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'Failed to load schedule for this room. Please re-select the room.',
+      });
+      return;
+    }
+
+    // If the previously selected target date was removed from schedule, abort and require user confirmation
+    if (reconciliation.targetRemoved) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The previously selected target date was removed from the schedule. Please select and confirm a new target date.',
+      });
+      return;
+    }
+
+    // Verify target date selection was not changed while schedule refresh was pending
+    if (reconciliation.selectionChanged) {
+      await Modal.alert({
+        title: 'Validation Error',
+        message: 'The target date was changed during validation. Please review your selection and submit again.',
+      });
+      return;
+    }
+  }
+
+  const targetDate = dateSelect ? dateSelect.value : '';
+
+  if (_hasMultipleDays(dateSelect) && !targetDate) {
+    await Modal.alert({
+      title: 'Validation Error',
+      message: 'Please select a target day for this multi-day room recording.',
+    });
+    return;
+  }
+
+  const btnFile = document.getElementById('btn-source-file');
+  const isFileMode = btnFile && btnFile.classList.contains('attach-source-active');
   const hasFile = fileInput && fileInput.files && fileInput.files[0];
   const hasUrl = urlInput.trim().length > 0;
 
@@ -431,7 +654,7 @@ window.submitAttachRoomRecording = async function() {
 
   try {
     const fd = new FormData();
-    fd.append('room', roomInput.trim());
+    fd.append('room', capturedRoom);
     fd.append('stage_only', 'true');
     if (targetDate) {
       fd.append('target_date', targetDate);
@@ -448,9 +671,8 @@ window.submitAttachRoomRecording = async function() {
       fd.append('video_url', urlInput.trim());
     }
 
-    const resolvedEventId = _getResolvedEventId();
-    if (resolvedEventId) {
-      fd.append('event_id', resolvedEventId);
+    if (capturedEventId) {
+      fd.append('event_id', capturedEventId);
     }
 
     const res = await (window.authFetch || fetch)('/talks/room/attach-recording', {
@@ -988,6 +1210,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const roomSelect = document.getElementById('attach-room-select');
   if (roomSelect) {
     roomSelect.addEventListener('change', () => {
+      const dateSel = document.getElementById('attach-room-date');
+      if (dateSel && dateSel.dataset) {
+        delete dateSel.dataset.targetRemoved;
+      }
       _loadRoomDays(roomSelect.value);
     });
   }
@@ -995,6 +1221,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const dateSelect = document.getElementById('attach-room-date');
   if (dateSelect) {
     dateSelect.addEventListener('change', () => {
+      if (dateSelect.value && dateSelect.value.trim()) {
+        delete dateSelect.dataset.targetRemoved;
+      }
       _updateAttachSubmitLabel();
     });
   }
