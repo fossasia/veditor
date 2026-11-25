@@ -24,6 +24,8 @@ a.breadcrumb-event:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 340px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .breadcrumb-edit-btn {
@@ -43,6 +45,26 @@ a.breadcrumb-event:hover {
   font-size: 0.74rem;
   font-weight: 500;
   white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+  .topbar-time-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar-brand .logo-text {
+    display: none;
+  }
+  .breadcrumb-event,
+  .breadcrumb-room,
+  .breadcrumb .sep:nth-of-type(n+2) {
+    display: none;
+  }
+  .badge-role {
+    display: none;
+  }
 }
 
 .player-panel {

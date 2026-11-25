@@ -56,6 +56,8 @@ a:hover { color: var(--v-primary-hover); }
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .sidebar-toggle-btn {
@@ -226,6 +228,10 @@ html[data-sidebar="collapsed"] .main-content {
   gap: 6px;
   font-size: 0.85rem;
   color: var(--v-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .breadcrumb .current { color: var(--v-text-primary); font-weight: 600; }
@@ -256,7 +262,7 @@ html[data-sidebar="collapsed"] .main-content {
   text-decoration: underline solid currentColor;
 }
 
-.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 /* ── Topbar Controls ─────────────────────────────────────────── */
 .topbar-control-group {
