@@ -13,10 +13,26 @@ a.breadcrumb-event:hover {
   color: var(--v-primary);
 }
 
-.breadcrumb-event,
+.breadcrumb-event {
+  color: var(--v-text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
+  flex-shrink: 1;
+}
+
 .breadcrumb-room {
   color: var(--v-text-secondary);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
+  flex-shrink: 1;
 }
 
 .breadcrumb .current {
@@ -31,6 +47,7 @@ a.breadcrumb-event:hover {
 .breadcrumb-edit-btn {
   padding: 2px 6px;
   color: var(--v-text-muted);
+  flex-shrink: 0;
 }
 
 .topbar-time-meta {
@@ -62,8 +79,26 @@ a.breadcrumb-event:hover {
   .breadcrumb .sep:nth-of-type(n+2) {
     display: none;
   }
-  .badge-role {
+  .topbar-control-group > .badge-role {
     display: none;
+  }
+  .topbar-actions .badge {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+  }
+}
+
+@media (max-width: 360px) {
+  .topbar-actions .badge {
+    max-width: 75px;
+    padding: 2px 5px;
+    font-size: 0.7rem;
+  }
+  .breadcrumb-back {
+    font-size: 0.78rem;
   }
 }
 
