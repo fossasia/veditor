@@ -42,7 +42,6 @@ jobs:
             type=ref,event=branch
             type=raw,value=main,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6

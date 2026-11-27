@@ -4,19 +4,40 @@ This directory contains the production stack. It runs the API and both RQ
 workers from the published `fossasia/veditor` image, while PostgreSQL and Redis
 keep their data in named Docker volumes.
 
+## GitHub Actions & Docker Hub setup
+
+Before automated image builds can publish to Docker Hub, configure repository
+secrets in GitHub under **Settings → Secrets and variables → Actions →
+Repository secrets**:
+
+- `DOCKER_USERNAME`: Docker Hub username with push access to `fossasia/veditor`.
+- `DOCKER_PASSWORD`: Docker Hub password or access token (with Read & Write
+  scope for `fossasia/veditor`).
+
+Once configured:
+
+- Pull requests targeting `dev` or `main` run
+  `.github/workflows/docker-pr.yml` to verify `Dockerfile` builds cleanly
+  without pushing.
+- Pushes (or manual `workflow_dispatch` runs) on `dev` publish
+  `fossasia/veditor:dev`.
+- Pushes (or manual `workflow_dispatch` runs) on `main` publish
+  `fossasia/veditor:main`.
+
 ## Provision a host
 
 1. Install Docker Engine and the Compose plugin.
 2. Create a deployment directory and copy `docker-compose.yml` and `env.sample`
    into it as `docker-compose.yml` and `.env`.
-3. Set a strong database password and generate a secure `SESSION_SECRET` (at least 32 bytes):
+3. Set `VEDITOR_IMAGE_TAG` in `.env` (`main` by default for production, or `dev` for a staging host).
+4. Set a strong database password and generate a secure `SESSION_SECRET` (at least 32 bytes):
 
    ```bash
    openssl rand -hex 32
    ```
 
-4. If pulling from a private repository, set `REPO_USER` and `REPO_PASS` in `.env` so Watchtower can authenticate to pull image updates.
-5. Start the stack:
+5. If pulling from a private repository, set `REPO_USER` and `REPO_PASS` in `.env` so Watchtower can authenticate to pull image updates.
+6. Start the stack:
 
    ```bash
    docker compose pull
@@ -27,9 +48,10 @@ keep their data in named Docker volumes.
 The API waits for PostgreSQL and Redis, runs `alembic upgrade head` once, and
 then starts Uvicorn. Workers wait for a healthy API, so they cannot consume
 queued jobs until migrations have completed. Nickfedor Watchtower checks the
-production `latest` image every five minutes and only updates containers
-carrying its enable label. Worker updates use a one-hour graceful shutdown
-deadline so active RQ jobs can drain before replacement.
+configured `fossasia/veditor:${VEDITOR_IMAGE_TAG:-main}` image every five
+minutes and only updates containers carrying its enable label. Worker updates use
+a one-hour graceful shutdown deadline so active RQ jobs can drain before
+replacement.
 
 Watchtower talks to Docker through a restricted socket-proxy service rather
 than mounting the Docker socket directly. The proxy permits only the container,
@@ -58,10 +80,10 @@ Check service logs with `docker compose logs -f api` or
 changes, and do not remove the named volumes: they contain the database,
 Redis queue data, uploaded recordings, and generated video files.
 
-Production releases from `main` publish both the `main` and `latest` images.
-Pushes to `dev` publish only the `dev` image and cannot update this production
-stack. To apply a new production image immediately instead of waiting for
-Watchtower's five-minute poll:
+Releases from `main` publish `fossasia/veditor:main` and pushes to `dev` publish
+`fossasia/veditor:dev`, so Watchtower updates each server according to its
+`VEDITOR_IMAGE_TAG` setting in `.env`. To apply a new image immediately instead
+of waiting for Watchtower's five-minute poll:
 
 ```bash
 docker compose pull
