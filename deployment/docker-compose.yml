@@ -2,7 +2,7 @@ services:
   api:
     image: fossasia/veditor:latest
     entrypoint: ["/app/deployment/entrypoint.sh"]
-    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - .env
     environment:
@@ -37,7 +37,7 @@ services:
   worker-light:
     image: fossasia/veditor:latest
     entrypoint: ["/app/deployment/entrypoint.sh"]
-    command: ["uv", "run", "python", "scripts/run_worker.py", "light", "--concurrency", "1", "--with-scheduler", "--nice", "10"]
+    command: ["python", "scripts/run_worker.py", "light", "--concurrency", "1", "--with-scheduler", "--nice", "10"]
     env_file:
       - .env
     environment:
@@ -68,7 +68,7 @@ services:
   worker-heavy:
     image: fossasia/veditor:latest
     entrypoint: ["/app/deployment/entrypoint.sh"]
-    command: ["uv", "run", "python", "scripts/run_worker.py", "heavy", "--concurrency", "1", "--nice", "15"]
+    command: ["python", "scripts/run_worker.py", "heavy", "--concurrency", "1", "--nice", "15"]
     env_file:
       - .env
     environment:
