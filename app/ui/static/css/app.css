@@ -289,7 +289,7 @@ html[data-sidebar="collapsed"] .main-content {
 }
 
 @media (max-width: 480px) {
-  .topbar-control-group #theme-toggle-btn {
+  .topbar-control-group > #theme-toggle-btn {
     display: none;
   }
 }
@@ -300,13 +300,20 @@ html[data-sidebar="collapsed"] .main-content {
     gap: 4px;
   }
   .topbar-left {
-    gap: 6px;
+    gap: 4px;
+  }
+  .topbar-actions {
+    gap: 4px;
   }
   .topbar-brand {
-    padding-right: 6px;
+    padding-right: 4px;
   }
   .sidebar-toggle-btn {
     padding: 4px;
+  }
+  .topbar-control-group #login-link {
+    padding: 3px 6px;
+    font-size: 0.75rem;
   }
 }
 
