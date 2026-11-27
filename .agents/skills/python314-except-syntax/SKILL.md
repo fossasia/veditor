@@ -13,7 +13,7 @@ PEP 758 (Python 3.14) allows multiple exception types in an `except` clause
 try:
     graph.pull()
 except av.FFmpegError, EOFError:  # valid on Python 3.14+
-    break
+    pass
 ```
 
 Do NOT:
