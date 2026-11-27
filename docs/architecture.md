@@ -21,7 +21,7 @@ An AST-based architecture test in `tests/test_storage_boundary.py` automatically
 When working with media and external files across `app/pipeline/` and `app/ingest.py`:
 
 1. **Managed Storage Assets**:
-   - Always route reads through `StorageBackend.get(key)`. This returns a local readable `Path` that can be passed directly to subprocesses (`ffmpeg`, `ffprobe`) or libraries (`PyAV`).
+   - Always route reads through `StorageBackend.get(key)`. This returns a local readable `Path` that can be passed directly to libraries (`PyAV`).
    - Persist generated outputs by calling `StorageBackend.put(key, temp_path)`.
 
 2. **Intentional External / Raw File Reads**:
