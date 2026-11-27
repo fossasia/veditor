@@ -52,11 +52,7 @@ from .pipeline.detect import (
     detect,
 )
 from .pipeline.intro import generate_intro_clip
-from .pipeline.loudness import (
-    DEFAULT_TARGET_LUFS,
-    normalize,
-    synthesize_silent_audio,
-)
+from .pipeline.loudness import DEFAULT_TARGET_LUFS, normalize
 from .pipeline.outro import generate_outro_clip
 from .pipeline.preview import generate_preview
 from .pipeline.publish import publish
@@ -1371,20 +1367,11 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             except ValueError as val_err:
                 if 'No audio stream found' in str(val_err):
                     logger.warning(
-                        'Talk %s has no audio stream; synthesizing silent audio track',
+                        'Talk %s has no audio stream; bypassing loudness normalization',
                         talk_id,
                     )
-                    try:
-                        synthesize_silent_audio(cut_path, tmp_out)
-                    except (av.FFmpegError, OSError, ValueError) as synth_err:
-                        logger.warning(
-                            'Silent audio synthesis failed (%s: %s); '
-                            'falling back to direct copy',
-                            type(synth_err).__name__,
-                            synth_err,
-                        )
-                        # storage-boundary-exempt: fallback copy on silent audio synthesis failure
-                        shutil.copy2(cut_path, tmp_out)
+                    # storage-boundary-exempt: passthrough copy for audio-less input
+                    shutil.copy2(cut_path, tmp_out)
                 else:
                     raise
             storage.put(loud_key, tmp_out)
