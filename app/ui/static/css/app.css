@@ -56,6 +56,8 @@ a:hover { color: var(--v-primary-hover); }
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .sidebar-toggle-btn {
@@ -226,6 +228,10 @@ html[data-sidebar="collapsed"] .main-content {
   gap: 6px;
   font-size: 0.85rem;
   color: var(--v-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .breadcrumb .current { color: var(--v-text-primary); font-weight: 600; }
@@ -256,7 +262,60 @@ html[data-sidebar="collapsed"] .main-content {
   text-decoration: underline solid currentColor;
 }
 
-.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .topbar-left {
+    gap: 8px;
+    min-width: 0;
+  }
+  .topbar-actions {
+    gap: 6px;
+    min-width: 0;
+  }
+  .topbar-control-group {
+    gap: 6px;
+  }
+  .topbar-control-group #signup-link {
+    display: none;
+  }
+  .topbar-control-group > .badge-role {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar-control-group > #theme-toggle-btn {
+    display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .topbar {
+    padding: 0 6px;
+    gap: 4px;
+  }
+  .topbar-left {
+    gap: 4px;
+  }
+  .topbar-actions {
+    gap: 4px;
+  }
+  .topbar-brand {
+    padding-right: 4px;
+  }
+  .sidebar-toggle-btn {
+    padding: 4px;
+  }
+  .topbar-control-group #login-link {
+    padding: 3px 6px;
+    font-size: 0.75rem;
+  }
+}
 
 /* ── Topbar Controls ─────────────────────────────────────────── */
 .topbar-control-group {
@@ -1303,6 +1362,12 @@ details[open] > summary.user-bubble-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.user-dropdown .badge-role {
+  display: inline-flex;
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 

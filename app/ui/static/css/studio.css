@@ -13,10 +13,26 @@ a.breadcrumb-event:hover {
   color: var(--v-primary);
 }
 
-.breadcrumb-event,
+.breadcrumb-event {
+  color: var(--v-text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
+  flex-shrink: 1;
+}
+
 .breadcrumb-room {
   color: var(--v-text-secondary);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 160px;
+  flex-shrink: 1;
 }
 
 .breadcrumb .current {
@@ -24,11 +40,14 @@ a.breadcrumb-event:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 340px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .breadcrumb-edit-btn {
   padding: 2px 6px;
   color: var(--v-text-muted);
+  flex-shrink: 0;
 }
 
 .topbar-time-meta {
@@ -43,6 +62,43 @@ a.breadcrumb-event:hover {
   font-size: 0.74rem;
   font-weight: 500;
   white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+  .topbar-time-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar-brand .logo-text {
+    display: none;
+  }
+  .breadcrumb-event,
+  .breadcrumb-room,
+  .breadcrumb .sep:nth-of-type(n+2) {
+    display: none;
+  }
+  .topbar-control-group > .badge-role {
+    display: none;
+  }
+  .topbar-actions .badge {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
+
+@media (max-width: 360px) {
+  .topbar-actions .badge {
+    padding: 2px 6px;
+    font-size: 0.7rem;
+  }
+  .breadcrumb {
+    gap: 4px;
+  }
+  .breadcrumb-back {
+    font-size: 0.75rem;
+  }
 }
 
 .player-panel {
