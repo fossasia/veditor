@@ -76,3 +76,6 @@ tmp/
 !.agents/REVIEW.md
 
 /data
+
+# Developer local scripts
+local-tools

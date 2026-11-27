@@ -69,6 +69,7 @@ from ..tasks import (
     STAGE_CONFIG,
     dispatch_assembly,
     job_cut,
+    job_cut_multi,
     job_detect,
     job_ingest,
     job_ingest_room_url,
@@ -619,6 +620,7 @@ def submit_cut_bounds(
             detail=f"Cannot submit cut bounds for talk in status '{talk.status}'",
         )
 
+    parsed_segs = payload.parsed_segments()
     cut_start_s, cut_end_s = payload.parsed_seconds()
 
     if talk.raw_duration_seconds is None:
@@ -647,9 +649,24 @@ def submit_cut_bounds(
         )
     raw_key = raw_keys[0]
 
-    talk.cut_start = cut_start_s
-    talk.cut_end = cut_end_s
+    prior_status = talk.status
+    prior_cut_start = talk.cut_start
+    prior_cut_end = talk.cut_end
+    prior_cut_segments = talk.cut_segments
+
+    if len(parsed_segs) == 1:
+        talk.cut_start = cut_start_s
+        talk.cut_end = cut_end_s
+        talk.cut_segments = [{'start': cut_start_s, 'end': cut_end_s}]
+        cut_fn = job_cut
+    else:
+        talk.cut_start = None
+        talk.cut_end = None
+        talk.cut_segments = [{'start': s[0], 'end': s[1]} for s in parsed_segs]
+        cut_fn = job_cut_multi
+
     advance(talk, TalkStatus.CUTTING)
+    review = None
     if payload.note:
         user_id = user.user_id if (not user.is_machine and not user.is_sso) else None
         review = models.Review(
@@ -662,12 +679,27 @@ def submit_cut_bounds(
     db.commit()
     db.refresh(talk)
 
-    light_queue.enqueue(
-        job_cut,
-        talk.id,
-        raw_key,
-        job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
-    )
+    try:
+        light_queue.enqueue(
+            cut_fn,
+            talk.id,
+            raw_key,
+            job_timeout=STAGE_CONFIG[JobKind.CUT]['job_timeout'],
+        )
+    except (OSError, RedisError, RuntimeError) as exc:
+        logger.error('Failed to enqueue cut job for talk %s: %s', talk.id, exc)
+        talk.status = prior_status
+        talk.cut_start = prior_cut_start
+        talk.cut_end = prior_cut_end
+        talk.cut_segments = prior_cut_segments
+        talk.updated_at = datetime.now(UTC)
+        if review is not None:
+            db.delete(review)
+        db.commit()
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail='Cut processing queue is temporarily unavailable; cut bounds were not queued. Please try again.',
+        ) from exc
 
     return schemas.TalkRead.model_validate(talk)
 
@@ -1057,7 +1089,9 @@ def abort_talk(
     clears DB jobs and reviews, and resets talk status back to 'waiting_for_files'.
     Returns 404 if talk is not found or not authorized for caller's events.
     """
-    talk = db.scalar(select(models.Talk).where(models.Talk.id == talk_id))
+    talk = db.scalar(
+        select(models.Talk).where(models.Talk.id == talk_id).with_for_update()
+    )
     if not talk or (user.is_machine and not user.has_event_access(talk.event_id)):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail='Talk not found')
     check_event_access(talk.event_id, user, db)
@@ -1073,6 +1107,7 @@ def abort_talk(
     talk.raw_duration_seconds = None
     talk.cut_start = None
     talk.cut_end = None
+    talk.cut_segments = None
     talk.include_intro = False
     talk.include_outro = False
     talk.intro_source = None
@@ -1324,12 +1359,36 @@ def _parse_iso_datetime(val: str | None) -> datetime | None:
         return None
 
 
+def _extract_string_value(val: Any) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        return s if s else None
+    if isinstance(val, dict):
+        for lang in ('en', 'en-us', 'en-gb', 'en_US', 'en_GB'):
+            if val.get(lang):
+                extracted = _extract_string_value(val[lang])
+                if extracted:
+                    return extracted
+        for v in val.values():
+            if v:
+                extracted = _extract_string_value(v)
+                if extracted:
+                    return extracted
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
 def _parse_duration_seconds(val: str | float | None) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
         sec = float(val)
-        return sec if math.isfinite(sec) and sec > 0 else None
+        if not math.isfinite(sec) or sec <= 0:
+            return None
+        return sec
     if isinstance(val, str):
         val = val.strip()
         if not val:
@@ -1367,7 +1426,9 @@ def _parse_duration_seconds(val: str | float | None) -> float | None:
                 return None
         try:
             parsed = float(val)
-            return parsed if math.isfinite(parsed) and parsed > 0 else None
+            if math.isfinite(parsed) and parsed > 0:
+                return parsed
+            return None
         except ValueError, TypeError:
             return None
 
@@ -1457,44 +1518,157 @@ async def import_schedule(
     event_name = 'Conference Event'
     talks_to_create = []
 
+    rooms_lookup: dict[Any, str] = {}
+    speakers_lookup: dict[Any, dict[str, str]] = {}
+
     if isinstance(data, dict):
-        event_name = data.get('event_name') or event_name
+        event_name = _extract_string_value(data.get('event_name')) or event_name
+
+        # 1. Build lookup tables if top-level "rooms" or "speakers" exist (e.g. Eventyay / Pretalx relational format)
+        if isinstance(data.get('rooms'), list):
+            for r in data['rooms']:
+                if isinstance(r, dict):
+                    r_name = _extract_string_value(r.get('name') or r.get('title'))
+                    if r_name:
+                        for lookup_key in ('id', 'guid', 'slug', 'pk', 'code'):
+                            val = r.get(lookup_key)
+                            if val is not None:
+                                rooms_lookup[str(val)] = r_name
+                                rooms_lookup[val] = r_name
+
+        if isinstance(data.get('speakers'), list):
+            for sp in data['speakers']:
+                if isinstance(sp, dict):
+                    sp_name = _extract_string_value(
+                        sp.get('name') or sp.get('public_name')
+                    )
+                    sp_email = sp.get('email')
+                    entry = {'name': sp_name or '', 'email': sp_email or ''}
+                    for lookup_key in ('code', 'id', 'guid', 'pk', 'slug'):
+                        val = sp.get(lookup_key)
+                        if val is not None:
+                            speakers_lookup[str(val)] = entry
+                            speakers_lookup[val] = entry
+
+        # 2. Check for Frab conference structure (under "schedule" -> "conference" or directly under "conference")
+        conf = None
         if (
             'schedule' in data
             and isinstance(data['schedule'], dict)
             and 'conference' in data['schedule']
         ):
             conf = data['schedule']['conference']
-            event_name = conf.get('title') or event_name
+        elif 'conference' in data and isinstance(data['conference'], dict):
+            conf = data['conference']
+
+        event_external_id = _extract_string_value(
+            data.get('event_id') or data.get('external_id')
+        )
+        if conf and isinstance(conf, dict):
+            event_name = (
+                _extract_string_value(conf.get('title') or conf.get('name'))
+                or event_name
+            )
+            if not event_external_id:
+                event_external_id = _extract_string_value(conf.get('acronym'))
+            if isinstance(conf.get('rooms'), list):
+                for r in conf['rooms']:
+                    if isinstance(r, dict):
+                        r_name = _extract_string_value(r.get('name') or r.get('title'))
+                        if r_name:
+                            for lookup_key in ('id', 'guid', 'slug', 'pk', 'code'):
+                                val = r.get(lookup_key)
+                                if val is not None:
+                                    rooms_lookup[str(val)] = r_name
+                                    rooms_lookup[val] = r_name
+
             for day in conf.get('days', []):
-                for room_name, room_talks in day.get('rooms', {}).items():
-                    for t in room_talks:
-                        speaker_email = t.get('speaker_email')
-                        if not speaker_email and isinstance(t.get('persons'), list):
-                            for p in t['persons']:
-                                if isinstance(p, dict) and p.get('email'):
-                                    speaker_email = p['email']
-                                    break
-                        talks_to_create.append(
-                            {
-                                'title': t.get('title', 'Untitled Session'),
-                                'room': room_name,
-                                'start': t.get('date') or t.get('start'),
-                                'end': t.get('end'),
-                                'duration': t.get('duration'),
-                                'speaker_email': speaker_email,
-                                'external_id': str(
-                                    t.get('code')
-                                    or t.get('id')
-                                    or t.get('guid')
-                                    or t.get('external_id')
-                                    or ''
-                                )
-                                or None,
-                            }
-                        )
-        elif 'talks' in data:
+                if not isinstance(day, dict):
+                    continue
+                day_date = day.get('date')
+                rooms_data = day.get('rooms', {})
+                if isinstance(rooms_data, dict):
+                    for room_name, room_talks in rooms_data.items():
+                        resolved_room = rooms_lookup.get(
+                            room_name
+                        ) or _extract_string_value(room_name)
+                        if isinstance(room_talks, list):
+                            for t in room_talks:
+                                if isinstance(t, dict):
+                                    t['_derived_room'] = resolved_room
+                                    if day_date:
+                                        t['_day_date'] = day_date
+                                    if (
+                                        'duration_minutes' not in t
+                                        and 'duration_seconds' not in t
+                                    ):
+                                        dur_str = t.get('duration')
+                                        if isinstance(dur_str, str) and ':' in dur_str:
+                                            dur_parts = dur_str.strip().split(':')
+                                            if len(dur_parts) == 2:
+                                                try:
+                                                    t['duration_minutes'] = int(
+                                                        dur_parts[0]
+                                                    ) * 60 + float(dur_parts[1])
+                                                except ValueError, TypeError:
+                                                    pass
+                                    talks_to_create.append(t)
+                elif isinstance(rooms_data, list):
+                    for r_item in rooms_data:
+                        if isinstance(r_item, dict):
+                            r_name = _extract_string_value(
+                                r_item.get('name') or r_item.get('room')
+                            )
+                            for t in r_item.get('talks', []):
+                                if isinstance(t, dict):
+                                    t['_derived_room'] = r_name
+                                    if day_date:
+                                        t['_day_date'] = day_date
+                                    if (
+                                        'duration_minutes' not in t
+                                        and 'duration_seconds' not in t
+                                    ):
+                                        dur_str = t.get('duration')
+                                        if isinstance(dur_str, str) and ':' in dur_str:
+                                            dur_parts = dur_str.strip().split(':')
+                                            if len(dur_parts) == 2:
+                                                try:
+                                                    t['duration_minutes'] = int(
+                                                        dur_parts[0]
+                                                    ) * 60 + float(dur_parts[1])
+                                                except ValueError, TypeError:
+                                                    pass
+                                    talks_to_create.append(t)
+        elif 'talks' in data and isinstance(data['talks'], list):
             talks_to_create = data['talks']
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get('duration'), (int, float))
+                    and 'duration_minutes' not in t
+                    and 'duration_seconds' not in t
+                ):
+                    t['duration_minutes'] = t['duration']
+        elif 'sessions' in data and isinstance(data['sessions'], list):
+            talks_to_create = data['sessions']
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get('duration'), (int, float))
+                    and 'duration_minutes' not in t
+                    and 'duration_seconds' not in t
+                ):
+                    t['duration_minutes'] = t['duration']
+        elif 'submissions' in data and isinstance(data['submissions'], list):
+            talks_to_create = data['submissions']
+            for t in talks_to_create:
+                if (
+                    isinstance(t, dict)
+                    and isinstance(t.get('duration'), (int, float))
+                    and 'duration_minutes' not in t
+                    and 'duration_seconds' not in t
+                ):
+                    t['duration_minutes'] = t['duration']
         elif 'title' in data:
             talks_to_create = [data]
     elif isinstance(data, list):
@@ -1511,13 +1685,89 @@ async def import_schedule(
     for t_info in talks_to_create:
         if not isinstance(t_info, dict):
             continue
-        title = t_info.get('title') or 'Untitled Talk'
-        room = t_info.get('room')
+        title = (
+            _extract_string_value(t_info.get('title'))
+            or _extract_string_value(t_info.get('name'))
+            or _extract_string_value(t_info.get('session_title'))
+            or 'Untitled Talk'
+        )
+
+        raw_room = (
+            t_info.get('room') or t_info.get('room_name') or t_info.get('_derived_room')
+        )
+        room = None
+        if isinstance(raw_room, dict):
+            room = _extract_string_value(raw_room.get('name') or raw_room.get('title'))
+        elif raw_room is not None:
+            room = rooms_lookup.get(raw_room) or rooms_lookup.get(str(raw_room))
+            if not room:
+                room = _extract_string_value(raw_room)
+
+        speaker_email = None
+        if t_info.get('speaker_email'):
+            speaker_email = _extract_string_value(t_info['speaker_email'])
+        elif isinstance(t_info.get('persons'), list):
+            for p in t_info['persons']:
+                if isinstance(p, dict):
+                    if p.get('email'):
+                        speaker_email = _extract_string_value(p['email'])
+                        break
+                    p_code = (
+                        p.get('code')
+                        or p.get('id')
+                        or p.get('guid')
+                        or p.get('pk')
+                        or p.get('slug')
+                    )
+                    lookup_entry = speakers_lookup.get(p_code) or (
+                        speakers_lookup.get(str(p_code)) if p_code is not None else None
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
+                        break
+        elif isinstance(t_info.get('speakers'), list):
+            for sp in t_info['speakers']:
+                if isinstance(sp, dict):
+                    if sp.get('email'):
+                        speaker_email = _extract_string_value(sp['email'])
+                        break
+                    sp_code = (
+                        sp.get('code')
+                        or sp.get('id')
+                        or sp.get('guid')
+                        or sp.get('pk')
+                        or sp.get('slug')
+                    )
+                    lookup_entry = speakers_lookup.get(sp_code) or (
+                        speakers_lookup.get(str(sp_code))
+                        if sp_code is not None
+                        else None
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
+                        break
+                elif isinstance(sp, (str, int)):
+                    lookup_entry = speakers_lookup.get(sp) or speakers_lookup.get(
+                        str(sp)
+                    )
+                    if lookup_entry and lookup_entry.get('email'):
+                        speaker_email = lookup_entry['email']
+                        break
+                    if isinstance(sp, str) and '@' in sp:
+                        speaker_email = sp.strip()
+                        break
+        elif isinstance(t_info.get('speaker'), dict):
+            if t_info['speaker'].get('email'):
+                speaker_email = _extract_string_value(t_info['speaker']['email'])
+        elif isinstance(t_info.get('speaker'), str) and '@' in t_info['speaker']:
+            speaker_email = t_info['speaker'].strip()
+
         raw_ext_id = (
             t_info.get('external_id')
             or t_info.get('code')
             or t_info.get('id')
             or t_info.get('guid')
+            or t_info.get('slug')
         )
         talk_external_id = (
             str(raw_ext_id).strip()
@@ -1525,7 +1775,34 @@ async def import_schedule(
             else None
         )
 
-        t_start = _parse_iso_datetime(t_info.get('start') or t_info.get('date'))
+        raw_start_str = t_info.get('start')
+        raw_date_str = t_info.get('date')
+
+        t_start = None
+        if raw_start_str:
+            t_start = _parse_iso_datetime(raw_start_str)
+
+        # If start is wall-clock time (HH:MM or HH:MM:SS), combine with day date or date prefix
+        if t_start is None and raw_start_str:
+            clean_time = str(raw_start_str).strip()
+            if ':' in clean_time:
+                target_date = t_info.get('_day_date')
+                if not target_date and raw_date_str:
+                    date_cand = str(raw_date_str).strip()
+                    if len(date_cand) >= 10:
+                        target_date = date_cand[:10]
+                if target_date:
+                    time_parts = clean_time.split(':')
+                    if len(time_parts) == 2:
+                        combined = f'{target_date}T{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}:00'
+                        t_start = _parse_iso_datetime(combined)
+                    elif len(time_parts) == 3:
+                        combined = f'{target_date}T{time_parts[0].zfill(2)}:{time_parts[1].zfill(2)}:{time_parts[2].zfill(2)}'
+                        t_start = _parse_iso_datetime(combined)
+
+        if t_start is None and raw_date_str:
+            t_start = _parse_iso_datetime(raw_date_str)
+
         t_end = _parse_iso_datetime(t_info.get('end'))
 
         # Explicit duration_seconds / duration_minutes vs generic duration
@@ -1597,7 +1874,7 @@ async def import_schedule(
                 'room': room,
                 'start': start_dt,
                 'end': end_dt,
-                'speaker_email': t_info.get('speaker_email'),
+                'speaker_email': speaker_email,
                 'external_id': talk_external_id,
             }
         )
@@ -1634,6 +1911,9 @@ async def import_schedule(
             is_explicit_external = True
         elif data.get('event_id'):
             target_identifier = data.get('event_id')
+        elif event_external_id:
+            target_identifier = event_external_id
+            is_explicit_external = True
         target_source = data.get('source')
 
     if (
@@ -1712,6 +1992,34 @@ async def import_schedule(
                     db.flush()
                     is_new_event = True
 
+    if not event and event_external_id:
+        if getattr(user, 'is_platform', False):
+            event = db.scalar(
+                select(models.Event).where(
+                    models.Event.external_id == event_external_id
+                )
+            )
+        elif user.is_machine:
+            event = db.scalar(
+                select(models.Event).where(
+                    models.Event.external_id == event_external_id,
+                    models.Event.id.in_(user.event_ids),
+                )
+            )
+        elif user.role == AuthRole.ADMIN:
+            event = db.scalar(
+                select(models.Event).where(
+                    models.Event.external_id == event_external_id
+                )
+            )
+        else:
+            event = db.scalar(
+                select(models.Event).where(
+                    models.Event.external_id == event_external_id,
+                    models.Event.created_by_user_id == user.user_id,
+                )
+            )
+
     if not event:
         # Check if caller already has an event with matching name
         if user.is_platform:
@@ -1750,7 +2058,11 @@ async def import_schedule(
 
     if not event:
         created_by = user.user_id if not user.is_machine else None
-        event = models.Event(name=event_name, created_by_user_id=created_by)
+        event = models.Event(
+            name=event_name,
+            external_id=event_external_id,
+            created_by_user_id=created_by,
+        )
         db.add(event)
         db.flush()
         is_new_event = True
@@ -2375,6 +2687,11 @@ async def attach_room_recording(
             if offset_end > offset_start:
                 talk.cut_start = offset_start
                 talk.cut_end = offset_end
+                talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
+            else:
+                talk.cut_start = None
+                talk.cut_end = None
+                talk.cut_segments = None
 
             talk_ids.append(talk.id)
 

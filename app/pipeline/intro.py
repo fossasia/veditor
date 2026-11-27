@@ -269,7 +269,7 @@ def _render_video_and_audio(
         str(out_path), mode='w', format='mp4', options={'movflags': 'faststart'}
     ) as out_container:
         # Configure video stream
-        video_options: dict[str, str] = {'crf': '20', 'preset': 'veryfast'}
+        video_options: dict[str, str] = {'crf': '22', 'preset': 'veryfast'}
         if threads is not None:
             video_options['threads'] = str(threads)
         out_v = out_container.add_stream(
@@ -283,14 +283,15 @@ def _render_video_and_audio(
 
         # Configure audio stream
         out_a = out_container.add_stream('aac', rate=sample_rate)
+        out_a.bit_rate = 96_000
         out_a.layout = 'stereo'
 
         # Encode video frames
+        base_frame = av.VideoFrame.from_ndarray(slate_ndarray, format='rgb24')
+        base_frame.time_base = Fraction(1, fps)
         for frame_idx in range(total_video_frames):
-            v_frame = av.VideoFrame.from_ndarray(slate_ndarray, format='rgb24')
-            v_frame.pts = frame_idx
-            v_frame.time_base = Fraction(1, fps)
-            for packet in out_v.encode(v_frame):
+            base_frame.pts = frame_idx
+            for packet in out_v.encode(base_frame):
                 out_container.mux(packet)
 
         for packet in out_v.encode():

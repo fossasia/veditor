@@ -121,17 +121,22 @@ def normalize(
         else:
             layout_name = 'mono'
 
-        # Construct audio filter graph: abuffer -> loudnorm -> abuffersink
+        # Construct audio filter graph: abuffer -> loudnorm -> aformat -> abuffersink
         graph = av.filter.Graph()
         buf_node = graph.add_abuffer(template=in_a)
         loudnorm_node = graph.add(
             'loudnorm',
             f'I={target_lufs}:TP={DEFAULT_TRUE_PEAK}:LRA={DEFAULT_LRA}',
         )
+        aformat_node = graph.add(
+            'aformat',
+            f'sample_rates={sample_rate}:channel_layouts={layout_name}',
+        )
         sink_node = graph.add('abuffersink')
 
         buf_node.link_to(loudnorm_node)
-        loudnorm_node.link_to(sink_node)
+        loudnorm_node.link_to(aformat_node)
+        aformat_node.link_to(sink_node)
         graph.configure()
 
         with av.open(str(out_path), mode='w') as out_container:
@@ -142,6 +147,7 @@ def normalize(
 
             # 2. Configure normalized audio stream
             out_audio = out_container.add_stream('aac', rate=sample_rate)
+            out_audio.bit_rate = 96_000
             out_audio.layout = layout_name
 
             # Streams to demux in a single interleaved pass

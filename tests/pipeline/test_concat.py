@@ -1,6 +1,7 @@
 """Unit and integration tests for talk concatenation pipeline module."""
 
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 from unittest import mock
 
@@ -10,6 +11,7 @@ import pytest
 from app.pipeline.concat import (
     _can_stream_copy,
     concat,
+    concat_segments,
 )
 from app.pipeline.intro import generate_intro_clip
 from app.storage import LocalDiskBackend
@@ -273,6 +275,45 @@ def test_can_stream_copy_validation(tmp_path: Path) -> None:
     assert _can_stream_copy([]) is False
 
 
+def test_can_stream_copy_rejects_divergent_average_framerate(tmp_path: Path) -> None:
+    """Verify _can_stream_copy rejects clips with matching base_rate but divergent average framerates."""
+    c1 = generate_clip(
+        1.0,
+        has_video=True,
+        has_audio=False,
+        resolution=(320, 240),
+        fps=24,
+        output_dir=tmp_path,
+    )
+    # Generate clip with same base_rate (24) but variable/lower average framerate (15 fps) without audio
+    p_vfr = tmp_path / 'vfr.mp4'
+    with av.open(str(p_vfr), mode='w') as c:
+        v = c.add_stream('libx264', rate=24)
+        v.width = 320
+        v.height = 240
+        v.pix_fmt = 'yuv420p'
+        for i in range(15):
+            frame = av.VideoFrame(320, 240, 'yuv420p')
+            frame.pts = int(i * (24 / 15))
+            for pkt in v.encode(frame):
+                c.mux(pkt)
+        for pkt in v.encode():
+            c.mux(pkt)
+
+    with av.open(str(c1)) as c1_in, av.open(str(p_vfr)) as vfr_in:
+        v1 = c1_in.streams.video[0]
+        v2 = vfr_in.streams.video[0]
+        assert v1.codec_context.name == v2.codec_context.name
+        assert v1.width == v2.width
+        assert v1.height == v2.height
+        assert v1.pix_fmt == v2.pix_fmt
+        rate1 = float(v1.average_rate or 24)
+        rate2 = float(v2.average_rate or 15)
+        assert abs(rate1 - rate2) > 0.5
+
+    assert _can_stream_copy([c1, p_vfr]) is False
+
+
 def test_concat_audio_only_intro_pads_video_black_frames(tmp_path: Path) -> None:
     """Verify that concatenating an audio-only intro with a video/audio cut pads black frames so timelines align."""
     intro_path = generate_clip(
@@ -410,3 +451,55 @@ def test_concat_mismatched_extradata_reencodes_successfully(tmp_path: Path) -> N
             for _ in packet.decode():
                 decoded_frames += 1
         assert decoded_frames > 0
+
+
+def test_concat_segments_rejects_output_matching_input(tmp_path: Path) -> None:
+    seg1 = tmp_path / 'seg1.mp4'
+    seg2 = tmp_path / 'seg2.mp4'
+    seg1.touch()
+    seg2.touch()
+    with pytest.raises(ValueError, match='Output path matches input segment'):
+        concat_segments([seg1, seg2], seg1)
+
+
+def test_concat_compatible_segments_different_time_bases(tmp_path: Path) -> None:
+    """Verify stream copy concat handles compatible segments with different time bases."""
+    from app.pipeline.concat import _concat_stream_copy
+
+    clip1 = generate_clip(1.0, fps=24, output_dir=tmp_path)
+    clip2_orig = generate_clip(1.0, fps=24, output_dir=tmp_path)
+
+    clip2 = tmp_path / 'clip2_tb.mp4'
+    with av.open(str(clip2_orig)) as inc, av.open(str(clip2), 'w') as outc:
+        for s in inc.streams:
+            outs = outc.add_stream_from_template(s)
+            if s.type == 'video':
+                outs.time_base = Fraction(1, 24000)
+        for p in inc.demux():
+            if p.dts is None or p.pts is None:
+                continue
+            out_s = (
+                outc.streams.video[0]
+                if p.stream.type == 'video'
+                else outc.streams.audio[0]
+            )
+            if p.stream.type == 'video':
+                factor = (
+                    Fraction(24000, p.time_base.denominator)
+                    if p.time_base
+                    else Fraction(24000, 12288)
+                )
+                p.pts = int(p.pts * factor)
+                p.dts = int(p.dts * factor)
+                if p.duration:
+                    p.duration = int(p.duration * factor)
+            p.stream = out_s
+            outc.mux(p)
+
+    out_dest = tmp_path / 'concat_diff_tb.mp4'
+    _concat_stream_copy([clip1, clip2], out_dest)
+    assert out_dest.is_file()
+
+    with av.open(str(out_dest)) as container:
+        frames = sum(1 for _ in container.decode(video=0))
+        assert frames == 48

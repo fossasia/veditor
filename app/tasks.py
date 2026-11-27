@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 import traceback
@@ -43,10 +42,12 @@ from .ingest import (
     validate_media_file,
 )
 from .models import Event, Job, Talk, User
-from .pipeline.concat import concat
+from .pipeline.concat import concat, concat_segments
 from .pipeline.cut import CutStrategy, cut
 from .pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
+    MAX_UNSCHEDULED_DURATION_SECONDS,
+    compute_max_allowed_duration,
     container_duration_seconds,
     detect,
 )
@@ -70,6 +71,7 @@ from .retention import (
     register_periodic_retention_sweep,  # noqa: F401
     run_retention_sweep,  # noqa: F401
 )
+from .schemas import MAX_CUT_SEGMENTS
 from .security import create_password_reset_token
 from .states import advance
 from .storage import (
@@ -436,6 +438,11 @@ def job_ingest_room_url(
                 if offset_end > offset_start:
                     talk.cut_start = offset_start
                     talk.cut_end = offset_end
+                    talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
+                else:
+                    talk.cut_start = None
+                    talk.cut_end = None
+                    talk.cut_segments = None
 
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
@@ -537,7 +544,47 @@ def job_detect(
             **detect_kwargs,
         )
         if not result.passed:
-            raise ValueError(f'Detection failed: {result.reason}')
+            is_duration_mismatch = (
+                result.has_video
+                and result.actual_duration_seconds > 0
+                and 'duration' in (result.reason or '')
+            )
+            if is_duration_mismatch:
+                if (
+                    not is_room_recording
+                    and scheduled_start is not None
+                    and scheduled_end is not None
+                ):
+                    sched_dur = max(
+                        0.0,
+                        (scheduled_end - scheduled_start).total_seconds(),
+                    )
+                    max_allowed = compute_max_allowed_duration(sched_dur)
+                    if result.actual_duration_seconds > max_allowed:
+                        raise ValueError(
+                            f'Recording duration ({result.actual_duration_seconds:.1f}s) significantly exceeds '
+                            f'the scheduled session duration ({sched_dur:.1f}s, maximum allowed: {max_allowed:.1f}s). '
+                            'If this is a multi-talk room recording, attach it as a Room Recording instead.'
+                        )
+                elif not is_room_recording and (
+                    scheduled_start is None or scheduled_end is None
+                ):
+                    if (
+                        result.actual_duration_seconds
+                        > MAX_UNSCHEDULED_DURATION_SECONDS
+                    ):
+                        raise ValueError(
+                            f'Recording duration ({result.actual_duration_seconds:.1f}s) exceeds the maximum allowed '
+                            f'limit of 4 hours ({MAX_UNSCHEDULED_DURATION_SECONDS:.1f}s) for unscheduled talks.'
+                        )
+
+                logger.warning(
+                    'Talk %s recording duration differs from schedule (%s); accepting valid media file',
+                    talk_id,
+                    result.reason,
+                )
+            else:
+                raise ValueError(f'Detection failed: {result.reason}')
 
         with new_session() as db:
             talk = db.get(Talk, talk_id)
@@ -555,6 +602,27 @@ def job_detect(
                 return
             talk.raw_duration_seconds = result.actual_duration_seconds
 
+            # Clear stale cut bounds or segments if they exceed newly detected duration
+            if result.actual_duration_seconds is not None and (
+                (
+                    talk.cut_end is not None
+                    and talk.cut_end > result.actual_duration_seconds + 0.001
+                )
+                or (
+                    talk.cut_start is not None
+                    and talk.cut_start >= result.actual_duration_seconds
+                )
+                or (
+                    talk.cut_segments
+                    and any(
+                        s.get('end', 0) > result.actual_duration_seconds + 0.001
+                        for s in talk.cut_segments
+                    )
+                )
+            ):
+                talk.cut_start = None
+                talk.cut_end = None
+                talk.cut_segments = None
             # Seed cut bounds from schedule offsets when not already set by user.
             # ponytail: only seeds when both are None; user edits are always preserved.
             if (
@@ -590,6 +658,11 @@ def job_detect(
                 if offset_e > offset_s:
                     talk.cut_start = offset_s
                     talk.cut_end = offset_e
+                    talk.cut_segments = [{'start': offset_s, 'end': offset_e}]
+                else:
+                    talk.cut_start = None
+                    talk.cut_end = None
+                    talk.cut_segments = None
 
             advance(talk, TalkStatus.PENDING_APPROVAL)
             job.status = JobStatus.DONE
@@ -609,8 +682,36 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             talk = db.get(Talk, talk_id)
             if not talk:
                 raise ValueError(f'Talk {talk_id} not found')
-            if talk.cut_start is None or talk.cut_end is None:
-                raise ValueError(f'Talk {talk_id} has no cut bounds set')
+            # Synchronize cut_segments with scalar bounds if missing, mismatched, or out of bounds
+            segments = talk.cut_segments
+            if not segments:
+                if talk.cut_start is None or talk.cut_end is None:
+                    raise ValueError(f'Talk {talk_id} has no cut bounds set')
+                segments = [{'start': talk.cut_start, 'end': talk.cut_end}]
+                talk.cut_segments = segments
+            elif talk.cut_start is not None and talk.cut_end is not None:
+                if (
+                    abs(segments[0].get('start', -1) - talk.cut_start) > 0.001
+                    or abs(segments[-1].get('end', -1) - talk.cut_end) > 0.001
+                ):
+                    segments = [{'start': talk.cut_start, 'end': talk.cut_end}]
+                    talk.cut_segments = segments
+
+            if any(
+                s.get('start', 0) >= s.get('end', 0)
+                or s.get('start', 0) < 0
+                or (
+                    talk.raw_duration_seconds is not None
+                    and s.get('end', 0) > talk.raw_duration_seconds + 0.001
+                )
+                for s in segments
+            ):
+                raise ValueError(f'Talk {talk_id} has invalid cut segments: {segments}')
+
+            if len(segments) > MAX_CUT_SEGMENTS:
+                raise ValueError(
+                    f'Talk {talk_id} has {len(segments)} cut segments, exceeding maximum allowed {MAX_CUT_SEGMENTS}'
+                )
             new_job = Job(
                 talk_id=talk_id,
                 kind=JobKind.CUT,
@@ -622,58 +723,126 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
             db.commit()
             db.refresh(new_job)
             job_id = new_job.id
-            start_seconds = talk.cut_start
-            end_seconds = talk.cut_end
 
         raw_path = storage.get(raw_key)
 
         with tempfile.TemporaryDirectory(dir=_get_scratch_dir(storage)) as tmpdir:
             tmp_out = Path(tmpdir) / 'cut.mp4'
-            cut_kwargs = (
+            cut_kwargs: dict[str, Any] = (
                 {'threads': settings.encoder_threads}
                 if settings.encoder_threads is not None
                 else {}
             )
-            cut_strategy = cut(
-                raw_path,
-                tmp_out,
-                start_seconds,
-                end_seconds,
-                **cut_kwargs,
-            )
-            strat_label = (
-                cut_strategy.value
-                if isinstance(cut_strategy, CutStrategy)
-                else str(cut_strategy)
-            )
-            logger.info(
-                "Talk %s cut complete using strategy '%s' (bounds: %.2fs - %.2fs)",
-                talk_id,
-                strat_label,
-                start_seconds,
-                end_seconds,
-            )
-            _cache_waveform(storage, cut_key, tmp_out)
-            storage.put(cut_key, tmp_out)
-
-        with new_session() as db:
-            talk = db.get(Talk, talk_id)
-            job = db.get(Job, job_id)
-            if not talk or not job or talk.status != TalkStatus.CUTTING:
-                logger.info(
-                    'Talk %s cut job %s was aborted or state changed; discarding',
-                    talk_id,
-                    job_id,
+            if len(segments) == 1:
+                cut_strategy = cut(
+                    raw_path,
+                    tmp_out,
+                    segments[0]['start'],
+                    segments[0]['end'],
+                    **cut_kwargs,
                 )
-                if job:
-                    job.status = JobStatus.CANCELLED
-                    job.updated_at = datetime.now(UTC)
-                    db.commit()
-                return
-            advance(talk, TalkStatus.GENERATING_PREVIEWS)
-            job.status = JobStatus.DONE
-            job.updated_at = datetime.now(UTC)
-            db.commit()
+                strat_label = (
+                    cut_strategy.value
+                    if isinstance(cut_strategy, CutStrategy)
+                    else str(cut_strategy)
+                )
+                logger.info(
+                    "Talk %s cut complete using strategy '%s' (bounds: %.2fs - %.2fs)",
+                    talk_id,
+                    strat_label,
+                    segments[0]['start'],
+                    segments[0]['end'],
+                )
+            else:
+                seg_paths = []
+                for idx, seg in enumerate(segments):
+                    seg_p = Path(tmpdir) / f'seg_{idx}.mp4'
+                    cut(
+                        raw_path,
+                        seg_p,
+                        seg['start'],
+                        seg['end'],
+                        frame_accurate_fallback=True,
+                        **cut_kwargs,
+                    )
+                    seg_paths.append(seg_p)
+                concat_segments(seg_paths, tmp_out, **cut_kwargs)
+                logger.info(
+                    'Talk %s multi-segment cut complete (%s segments, total duration: %.2fs)',
+                    talk_id,
+                    len(segments),
+                    sum(s['end'] - s['start'] for s in segments),
+                )
+            # Precompute waveform and stage cut file before acquiring talk lock
+            try:
+                waveform_bytes = json.dumps(
+                    {'peaks': extract_waveform_peaks(tmp_out)}
+                ).encode('utf-8')
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    'Failed to precompute waveform cache for talk %s: %s',
+                    talk_id,
+                    exc,
+                )
+                waveform_bytes = None
+
+            staging_cut_key = f'{talk_id}/cut/.staging_{uuid.uuid4().hex}.mp4'
+            storage.put(staging_cut_key, tmp_out)
+
+            with new_session() as db:
+                talk = db.scalar(
+                    select(Talk).where(Talk.id == talk_id).with_for_update()
+                )
+                job = db.get(Job, job_id) if job_id is not None else None
+                newer_cut_job = None
+                if job_id is not None:
+                    job_res = db.scalar(
+                        select(Job).where(
+                            Job.talk_id == talk_id,
+                            Job.kind.in_([JobKind.CUT, 'cut_multi']),
+                            Job.id > job_id,
+                        )
+                    )
+                    if job_res is not None and getattr(job_res, 'id', 0) > job_id:
+                        newer_cut_job = job_res
+
+                if (
+                    not talk
+                    or not job
+                    or talk.status != TalkStatus.CUTTING
+                    or getattr(job, 'status', None) == JobStatus.CANCELLED
+                    or newer_cut_job is not None
+                ):
+                    logger.info(
+                        'Talk %s cut job %s was aborted or superseded; discarding',
+                        talk_id,
+                        job_id,
+                    )
+                    storage.delete(staging_cut_key)
+                    if job and getattr(job, 'status', None) == JobStatus.RUNNING:
+                        job.status = JobStatus.CANCELLED
+                        job.updated_at = datetime.now(UTC)
+                        db.commit()
+                    return
+
+                staged_path = storage.get(staging_cut_key)
+                storage.link_or_copy(cut_key, staged_path)
+                storage.delete(staging_cut_key)
+
+                if waveform_bytes is not None:
+                    try:
+                        storage.put(f'{cut_key}.waveform.json', waveform_bytes)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            'Failed to store waveform cache for %s: %s',
+                            cut_key,
+                            exc,
+                        )
+
+                advance(talk, TalkStatus.GENERATING_PREVIEWS)
+                job.status = JobStatus.DONE
+                job.updated_at = datetime.now(UTC)
+                db.commit()
 
         preview_key = f'{talk_id}/preview/preview.mp4'
         light_queue.enqueue(
@@ -686,6 +855,15 @@ def job_cut(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
     except Exception as exc:
         _handle_failure(talk_id, job_id, exc, storage)
         raise
+
+
+def job_cut_multi(talk_id: int, raw_key: str, cut_key: str | None = None) -> None:
+    """Worker task for multi-segment cuts.
+
+    Separate job entrypoint so older workers that only process scalar bounds
+    will not pick up and execute multi-segment cut jobs.
+    """
+    job_cut(talk_id, raw_key, cut_key)
 
 
 def dispatch_assembly(talk_id: int, cut_key: str) -> None:
@@ -1189,37 +1367,11 @@ def job_loudness(talk_id: int, cut_key: str, loud_key: str | None = None) -> Non
             except ValueError as val_err:
                 if 'No audio stream found' in str(val_err):
                     logger.warning(
-                        'Talk %s has no audio stream; synthesizing silent audio track',
+                        'Talk %s has no audio stream; bypassing loudness normalization',
                         talk_id,
                     )
-                    cmd = [
-                        'ffmpeg',
-                        '-y',
-                        '-i',
-                        str(cut_path),
-                        '-f',
-                        'lavfi',
-                        '-i',
-                        'anullsrc=channel_layout=stereo:sample_rate=44100',
-                        '-c:v',
-                        'copy',
-                        '-c:a',
-                        'aac',
-                        '-shortest',
-                        str(tmp_out),
-                    ]
-                    # storage-boundary-exempt: silent audio track synthesis
-                    res = subprocess.run(
-                        cmd, capture_output=True, text=True, check=False
-                    )
-                    if res.returncode != 0:
-                        logger.warning(
-                            'ffmpeg silent audio synthesis failed (%s); falling back to direct copy: %s',
-                            res.returncode,
-                            res.stderr,
-                        )
-                        # storage-boundary-exempt: fallback copy on silent audio synthesis failure
-                        shutil.copy2(cut_path, tmp_out)
+                    # storage-boundary-exempt: passthrough copy for audio-less input
+                    shutil.copy2(cut_path, tmp_out)
                 else:
                     raise
             storage.put(loud_key, tmp_out)
@@ -1434,13 +1586,19 @@ def job_publish(talk_id: int, final_key: str) -> None:
                     db.commit()
                 return
             advance(talk, TalkStatus.DONE)
+            talk.final_cleaned_at = None
             job.status = JobStatus.DONE
             job.updated_at = datetime.now(UTC)
             db.commit()
             db.refresh(talk)
 
             if duration_seconds is None or duration_seconds <= 0:
-                if talk.cut_start is not None and talk.cut_end is not None:
+                if talk.cut_segments:
+                    duration_seconds = max(
+                        0.0,
+                        sum(s['end'] - s['start'] for s in talk.cut_segments),
+                    )
+                elif talk.cut_start is not None and talk.cut_end is not None:
                     duration_seconds = max(0.0, talk.cut_end - talk.cut_start)
                 elif talk.raw_duration_seconds is not None:
                     duration_seconds = talk.raw_duration_seconds

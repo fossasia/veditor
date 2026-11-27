@@ -18,6 +18,7 @@ import av
 import numpy as np
 
 from ..storage import LocalDiskBackend, StorageBackend
+from .loudness import rescale_pts
 
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ def _can_stream_copy(segments: list[Path]) -> bool:
 
     ref_video_props: list[tuple[Any, ...]] | None = None
     ref_audio_props: list[tuple[Any, ...]] | None = None
+    ref_avg_rates: list[Any] = []
 
     for seg_p in segments:
         try:
@@ -43,8 +45,13 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 video_props: list[tuple[Any, ...]] = []
                 for v in video_streams:
                     ctx = v.codec_context
-                    rate = v.average_rate or v.guessed_rate
-                    fps_val = round(float(rate), 2) if rate else None
+                    rate = (
+                        v.base_rate
+                        or (v.codec_context.framerate if v.codec_context else None)
+                        or v.average_rate
+                        or v.guessed_rate
+                    )
+                    fps_val = rate if rate and rate > 0 else None
                     video_props.append(
                         (
                             ctx.name,
@@ -73,9 +80,18 @@ def _can_stream_copy(segments: list[Path]) -> bool:
                 if ref_video_props is None and ref_audio_props is None:
                     ref_video_props = video_props
                     ref_audio_props = audio_props
+                    ref_avg_rates = [v.average_rate for v in video_streams]
                 else:
                     if video_props != ref_video_props or audio_props != ref_audio_props:
                         return False
+                    for ref_ar, cur_v in zip(ref_avg_rates, video_streams):
+                        cur_ar = cur_v.average_rate
+                        if (
+                            ref_ar
+                            and cur_ar
+                            and abs(float(ref_ar) - float(cur_ar)) > 0.5
+                        ):
+                            return False
         except (av.FFmpegError, ValueError, OSError) as _:
             return False
 
@@ -114,8 +130,10 @@ def _concat_stream_copy(
 
             last_dts_end: dict[int, int] = {}
             last_pts_end: dict[int, int] = {}
+            shared_end_seconds: float = 0.0
 
             for seg_idx, seg_p in enumerate(segments):
+                current_seg_max_end_s: float = shared_end_seconds
                 with av.open(str(seg_p)) as in_container:
                     stream_map: dict[int, av.stream.Stream] = {}
                     in_type_counts: dict[str, int] = {}
@@ -142,13 +160,23 @@ def _concat_stream_copy(
                         if packet.pts is None:
                             packet.pts = packet.dts
 
+                        out_tb = out_s.time_base or Fraction(1, 90000)
+                        rescale_pts(
+                            packet,
+                            packet.time_base or packet.stream.time_base,
+                            out_tb,
+                        )
+
                         if out_s.index not in seg_offset:
                             if seg_idx == 0:
                                 seg_offset[out_s.index] = -packet.dts
                             else:
+                                tb = float(out_tb)
+                                target_pts = round(shared_end_seconds / tb)
                                 prev_dts_end = last_dts_end.get(out_s.index, 0)
                                 prev_pts_end = last_pts_end.get(out_s.index, 0)
                                 seg_offset[out_s.index] = max(
+                                    target_pts - packet.dts,
                                     prev_dts_end - packet.dts,
                                     prev_pts_end - packet.pts,
                                 )
@@ -170,7 +198,18 @@ def _concat_stream_copy(
                             last_pts_end.get(out_s.index, 0), packet.pts + dur
                         )
 
+                        tb = (
+                            float(out_s.time_base) if out_s.time_base else 1.0 / 90000.0
+                        )
+                        pkt_end_s = max(
+                            float((packet.dts + dur) * tb),
+                            float((packet.pts + dur) * tb),
+                        )
+                        current_seg_max_end_s = max(current_seg_max_end_s, pkt_end_s)
+
                         out_container.mux(packet)
+
+                shared_end_seconds = max(shared_end_seconds, current_seg_max_end_s)
 
     return str(output_path)
 
@@ -292,15 +331,13 @@ def _concat_reencode(
 
                 fps_graph = None
                 if v_stream is not None and out_video is not None:
-                    in_rate = v_stream.average_rate or v_stream.guessed_rate
-                    if in_rate and abs(float(in_rate) - float(can_fps)) > 0.05:
-                        fps_graph = av.filter.Graph()
-                        buffer = fps_graph.add_buffer(template=v_stream)
-                        fps_filter = fps_graph.add('fps', f'fps={float(can_fps)}')
-                        sink = fps_graph.add('buffersink')
-                        buffer.link_to(fps_filter)
-                        fps_filter.link_to(sink)
-                        fps_graph.configure()
+                    fps_graph = av.filter.Graph()
+                    buffer = fps_graph.add_buffer(template=v_stream)
+                    fps_filter = fps_graph.add('fps', f'fps={float(can_fps)}')
+                    sink = fps_graph.add('buffersink')
+                    buffer.link_to(fps_filter)
+                    fps_filter.link_to(sink)
+                    fps_graph.configure()
 
                 streams = [s for s in (v_stream, a_stream) if s is not None]
                 for packet in in_c.demux(*streams):
@@ -467,10 +504,10 @@ def concat(
 
     def _persist(src: Path) -> str:
         if storage_backend is not None:
-            storage_backend.put(output_key, src)
+            storage_backend.link_or_copy(output_key, src)
             stored = storage_backend.get(output_key)
             return str(stored)
-        LocalDiskBackend(out_p.parent).put(out_p.name, src)
+        LocalDiskBackend(out_p.parent).link_or_copy(out_p.name, src)
         return str(out_p)
 
     if intro_p is None and outro_p is None:
@@ -499,3 +536,27 @@ def concat(
             _concat_reencode(segments, cut_p, tmp_target, threads=threads)
 
         return _persist(tmp_target)
+
+
+def concat_segments(
+    segments: list[Path],
+    output_path: Path,
+    *,
+    threads: int | None = None,
+) -> Path:
+    """Concatenate a list of media segments into output_path."""
+    if not segments:
+        raise ValueError('No segments provided for concatenation')
+    out_resolved = output_path.resolve()
+    if any(out_resolved == seg.resolve() for seg in segments):
+        raise ValueError(f'Output path matches input segment: {output_path}')
+    if _can_stream_copy(segments):
+        try:
+            _concat_stream_copy(segments, output_path, canonical_cut_path=segments[0])
+            return output_path
+        except (av.FFmpegError, ValueError, RuntimeError, OSError) as exc:
+            logger.warning(
+                'Stream-copy concat failed (%s); falling back to re-encode', exc
+            )
+    _concat_reencode(segments, segments[0], output_path, threads=threads)
+    return output_path

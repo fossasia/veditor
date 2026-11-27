@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.schemas import CutBoundsRequest, _parse_hhmmss
+from app.schemas import CutBoundsRequest, CutSegment, _parse_hhmmss
 
 
 @pytest.mark.parametrize(
@@ -122,3 +122,51 @@ def test_cut_bounds_high_precision_ordering_lost_rejected() -> None:
     # Values that are ordered as Decimal but equal as float
     with pytest.raises(ValueError, match='lose ordering after float conversion'):
         CutBoundsRequest(cut_start='00:00:59.9999999999999999', cut_end='00:01:00')
+
+
+def test_cut_bounds_multiple_segments_valid() -> None:
+    req = CutBoundsRequest(
+        segments=[
+            {'start': '00:05:00', 'end': '00:15:00'},
+            {'start': '00:20:00', 'end': '00:30:00'},
+        ]
+    )
+    segs = req.parsed_segments()
+    assert len(segs) == 2
+    assert segs[0] == (300.0, 900.0)
+    assert segs[1] == (1200.0, 1800.0)
+    start_s, end_s = req.parsed_seconds()
+    assert start_s == 300.0
+    assert end_s == 1800.0
+
+
+def test_cut_bounds_multiple_segments_overlapping_rejected() -> None:
+    with pytest.raises(ValueError, match='non-overlapping'):
+        CutBoundsRequest(
+            segments=[
+                {'start': '00:05:00', 'end': '00:25:00'},
+                {'start': '00:20:00', 'end': '00:30:00'},
+            ]
+        )
+
+
+def test_cut_bounds_segment_end_must_exceed_start() -> None:
+    with pytest.raises(ValueError, match='greater than start'):
+        CutBoundsRequest(
+            segments=[
+                {'start': '00:25:00', 'end': '00:20:00'},
+            ]
+        )
+
+
+def test_cut_bounds_empty_segments_rejected() -> None:
+    with pytest.raises(ValueError, match='cannot be empty'):
+        CutBoundsRequest(segments=[])
+
+
+@pytest.mark.parametrize('bad_val', [float('nan'), float('inf'), float('-inf')])
+def test_cut_segment_rejects_non_finite_values(bad_val: float) -> None:
+    with pytest.raises(ValueError, match='finite'):
+        CutSegment(start=bad_val, end=10.0)
+    with pytest.raises(ValueError, match='finite'):
+        CutSegment(start=0.0, end=bad_val)
