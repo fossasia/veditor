@@ -2,6 +2,8 @@ FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV UV_NO_DEV=1
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Install uv from official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -10,15 +12,20 @@ WORKDIR /app
 
 # Install dependencies using uv
 COPY pyproject.toml uv.lock README.md ./
-RUN uv venv && uv sync --no-dev --no-install-project
+RUN uv sync --frozen --no-install-project
 # Copy application files
 COPY app/ app/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
+COPY deployment/ deployment/
 COPY alembic.ini .
+RUN uv sync --frozen
 
 # Expose the API port
 EXPOSE 8000
 
+# Optionally run migrations before starting a process.
+ENTRYPOINT ["/app/deployment/entrypoint.sh"]
+
 # Default command
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
