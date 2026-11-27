@@ -438,7 +438,7 @@
             <option value="" disabled selected>No events found</option>
           {% else %}
             {% for ev in user_events %}
-              <option value="{{ ev.id }}" data-event-id="{{ ev.id }}" data-timezone="{{ ev.timezone or 'UTC' }}"{% if event_id == ev.id %} selected{% endif %}>{{ ev.name }}</option>
+              <option value="{{ ev.id }}" data-event-id="{{ ev.id }}"{% if event_id == ev.id %} selected{% endif %}>{{ ev.name }}</option>
             {% endfor %}
           {% endif %}
         </select>
@@ -531,7 +531,7 @@
         {% if user_events %}
         <select id="quick-event-name" class="input-field">
           {% for ev in user_events %}
-            <option value="{{ ev.name }}" data-event-id="{{ ev.id }}" data-timezone="{{ ev.timezone or 'UTC' }}" {% if event_id == ev.id %}selected{% endif %}>{{ ev.name }}</option>
+            <option value="{{ ev.name }}" data-event-id="{{ ev.id }}" {% if event_id == ev.id %}selected{% endif %}>{{ ev.name }}</option>
           {% endfor %}
         </select>
         {% else %}

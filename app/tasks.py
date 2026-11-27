@@ -48,6 +48,7 @@ from .pipeline.detect import (
     DETECT_DURATION_TOLERANCE_SECONDS,
     MAX_UNSCHEDULED_DURATION_SECONDS,
     compute_max_allowed_duration,
+    container_creation_time,
     container_duration_seconds,
     detect,
 )
@@ -283,6 +284,15 @@ def job_ingest_room_url(
     staged_path: Path | None = None
     job_ids: dict[int, int] = {}
     enqueued_talk_ids: set[int] = set()
+    parsed_target_date = (
+        date.fromisoformat(target_date) if isinstance(target_date, str) else target_date
+    )
+    recording_start: datetime | None = None
+    if recording_start_iso:
+        try:
+            recording_start = datetime.fromisoformat(recording_start_iso)
+        except ValueError, TypeError:
+            pass
     try:
         # Create ingest jobs for tracked talks so status and progress are recorded
         if not stage_only:
@@ -317,9 +327,7 @@ def job_ingest_room_url(
         validate_media_file(staged_path)
         with av.open(str(staged_path)) as container:
             duration = container_duration_seconds(container)
-            c_time = container.metadata.get('creation_time')
-            if not c_time and container.streams.video:
-                c_time = container.streams.video[0].metadata.get('creation_time')
+            creation_time = container_creation_time(container)
 
         if duration is None or duration <= 0:
             raise ValueError('Could not determine video duration from downloaded URL')
@@ -336,38 +344,9 @@ def job_ingest_room_url(
             raise InsufficientStorageError(required_bytes, available_bytes)
 
         if stage_only:
-            rec_start = None
-            if recording_start_iso:
-                try:
-                    rec_start = datetime.fromisoformat(recording_start_iso)
-                except (ValueError, TypeError):  # fmt: skip
-                    pass
-            if rec_start is None and c_time:
-                try:
-                    parsed_dt = datetime.fromisoformat(c_time)
-                    rec_start = (
-                        parsed_dt.replace(tzinfo=UTC)
-                        if parsed_dt.tzinfo is None
-                        else parsed_dt
-                    )
-                except (ValueError, TypeError):  # fmt: skip
-                    pass
-
+            rec_start = recording_start or creation_time
             with new_session() as db:
-                rec = None
-                if recording_id:
-                    rec = db.get(RoomRecording, recording_id)
-                if not rec:
-                    rec = (
-                        db.query(RoomRecording)
-                        .filter(
-                            RoomRecording.event_id == event_id,
-                            RoomRecording.room == room,
-                            RoomRecording.status == RecordingStatus.PENDING_ANALYSIS,
-                        )
-                        .order_by(RoomRecording.created_at.desc())
-                        .first()
-                    )
+                rec = db.get(RoomRecording, recording_id) if recording_id else None
                 if rec and isinstance(rec, RoomRecording):
                     rec.duration_seconds = duration
                     if rec.recording_start is None and rec_start:
@@ -378,25 +357,14 @@ def job_ingest_room_url(
                         db.commit()
                         return
                     rec.status = RecordingStatus.READY
-                    if target_date:
-                        rec.target_date = (
-                            date.fromisoformat(target_date)
-                            if isinstance(target_date, str)
-                            else target_date
-                        )
+                    if parsed_target_date:
+                        rec.target_date = parsed_target_date
                     rec.storage_key = f'recordings/{rec.id}/recording.mp4'
                     storage.link_or_copy(rec.storage_key, staged_path)
                 db.commit()
             return
 
         # Match talks with schedule window
-        recording_start = None
-        if recording_start_iso:
-            try:
-                recording_start = datetime.fromisoformat(recording_start_iso)
-            except ValueError, TypeError:
-                pass
-
         with new_session() as db:
             stmt = select(Talk).where(Talk.event_id == event_id, Talk.room == room)
             if talk_ids:
@@ -423,36 +391,19 @@ def job_ingest_room_url(
                 return
 
             rec_start = recording_start
-            if rec_start is None and c_time:
-                try:
-                    parsed_dt = datetime.fromisoformat(c_time)
-                    if parsed_dt.tzinfo is None:
-                        parsed_dt = parsed_dt.replace(tzinfo=UTC)
-                    cand_end = parsed_dt + timedelta(seconds=duration)
-                    if any(
-                        (
-                            t.start.replace(tzinfo=UTC)
-                            if t.start.tzinfo is None
-                            else t.start
-                        )
-                        < cand_end
-                        and (
-                            t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end
-                        )
-                        > parsed_dt
-                        for t in eligible_talks
-                    ):
-                        rec_start = parsed_dt
-                except ValueError, TypeError:
-                    pass
+            if rec_start is None and creation_time is not None:
+                cand_end = creation_time + timedelta(seconds=duration)
+                if any(
+                    (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
+                    < cand_end
+                    and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
+                    > creation_time
+                    for t in eligible_talks
+                ):
+                    rec_start = creation_time
 
             if rec_start is None:
-                if target_date:
-                    requested_date = (
-                        date.fromisoformat(target_date)
-                        if isinstance(target_date, str)
-                        else target_date
-                    )
+                if parsed_target_date:
                     dated_talks = [
                         t
                         for t in eligible_talks
@@ -461,7 +412,7 @@ def job_ingest_room_url(
                             if t.start.tzinfo is None
                             else t.start
                         ).date()
-                        == requested_date
+                        == parsed_target_date
                     ]
                     if dated_talks:
                         eligible_talks = dated_talks
@@ -519,7 +470,7 @@ def job_ingest_room_url(
                     talk.cut_end = min(
                         (talk_end_utc - talk_start_utc).total_seconds(), duration
                     )
-                    talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
+                talk.cut_segments = [{'start': talk.cut_start, 'end': talk.cut_end}]
 
                 if talk.id in job_ids:
                     job = db.get(Job, job_ids[talk.id])
@@ -529,30 +480,13 @@ def job_ingest_room_url(
 
                 matched_ids.append(talk.id)
 
-            rec = None
-            if recording_id:
-                rec = db.get(RoomRecording, recording_id)
-            if not rec:
-                rec = (
-                    db.query(RoomRecording)
-                    .filter(
-                        RoomRecording.event_id == event_id,
-                        RoomRecording.room == room,
-                        RoomRecording.status == RecordingStatus.PENDING_ANALYSIS,
-                    )
-                    .order_by(RoomRecording.created_at.desc())
-                    .first()
-                )
+            rec = db.get(RoomRecording, recording_id) if recording_id else None
             if rec and isinstance(rec, RoomRecording):
                 rec.duration_seconds = duration
                 if rec.recording_start is None and rec_start:
                     rec.recording_start = rec_start
-                if target_date:
-                    rec.target_date = (
-                        date.fromisoformat(target_date)
-                        if isinstance(target_date, str)
-                        else target_date
-                    )
+                if parsed_target_date:
+                    rec.target_date = parsed_target_date
                 if rec.status == RecordingStatus.PENDING_ANALYSIS:
                     rec.status = RecordingStatus.READY
                 rec.storage_key = f'recordings/{rec.id}/recording.mp4'

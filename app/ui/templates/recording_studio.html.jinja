@@ -122,91 +122,11 @@
             {% endfor %}
           </div>
 
-          <!-- Bumpers Configuration (Identical to Studio) -->
+          <!-- Bumpers Configuration -->
           <div class="rec-section-divider"></div>
-          <div class="bumper-studio-card" id="card-bumper-options">
-            <div class="bumper-studio-title">Event Branding &amp; Bumpers</div>
-
-            <!-- Opening Intro -->
-            <div class="bumper-group">
-              <div class="bumper-group-header">
-                <span class="bumper-group-title">Opening Intro</span>
-                <label class="bumper-toggle-label" for="check-include-intro" title="Enable Opening Intro">
-                  <input type="checkbox" id="check-include-intro" name="include_intro" class="toggle-checkbox">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-
-              <div class="bumper-nested-options is-hidden" id="intro-options-wrap">
-                <div class="bumper-segmented-control">
-                  <label class="bumper-segment is-active">
-                    <input type="radio" name="intro_source" value="generated" class="bumper-radio-input" checked>
-                    <span>Generated Title</span>
-                  </label>
-                  <label class="bumper-segment">
-                    <input type="radio" name="intro_source" value="custom" class="bumper-radio-input">
-                    <span>Custom Video</span>
-                  </label>
-                </div>
-
-                <div class="bumper-custom-wrap" id="intro-custom-wrap">
-                  <label for="custom-intro-file" class="bumper-dropzone" id="intro-dropzone" title="Click or drag &amp; drop custom intro clip">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="17 8 12 3 7 8"/>
-                      <line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                    <div class="bumper-dropzone-text">
-                      <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
-                      <span class="bumper-file-name" id="intro-file-name">Supports MP4, WebM, MOV</span>
-                    </div>
-                  </label>
-                  <input type="file" id="custom-intro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
-                  <input type="hidden" id="custom-intro-path" value="">
-                </div>
-              </div>
-            </div>
-
-            <!-- Closing Outro -->
-            <div class="bumper-group">
-              <div class="bumper-group-header">
-                <span class="bumper-group-title">Closing Outro</span>
-                <label class="bumper-toggle-label" for="check-include-outro" title="Enable Closing Outro">
-                  <input type="checkbox" id="check-include-outro" name="include_outro" class="toggle-checkbox">
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-
-              <div class="bumper-nested-options is-hidden" id="outro-options-wrap">
-                <div class="bumper-segmented-control">
-                  <label class="bumper-segment is-active">
-                    <input type="radio" name="outro_source" value="generated" class="bumper-radio-input" checked>
-                    <span>Generated Title</span>
-                  </label>
-                  <label class="bumper-segment">
-                    <input type="radio" name="outro_source" value="custom" class="bumper-radio-input">
-                    <span>Custom Video</span>
-                  </label>
-                </div>
-
-                <div class="bumper-custom-wrap" id="outro-custom-wrap">
-                  <label for="custom-outro-file" class="bumper-dropzone" id="outro-dropzone" title="Click or drag &amp; drop custom outro clip">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="17 8 12 3 7 8"/>
-                      <line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                    <div class="bumper-dropzone-text">
-                      <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
-                      <span class="bumper-file-name" id="outro-file-name">Supports MP4, WebM, MOV</span>
-                    </div>
-                  </label>
-                  <input type="file" id="custom-outro-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
-                  <input type="hidden" id="custom-outro-path" value="">
-                </div>
-              </div>
-            </div>
-          </div>
+          {% set bumper_cfg = none %}
+          {% set show_bumper_proceed = false %}
+          {% include '_bumper_options.html.jinja' %}
 
           <!-- Enhanced Speaker Handoff Card -->
           <div class="rec-section-divider"></div>
@@ -255,5 +175,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="/static/js/bumper_controls.js"></script>
 <script src="/static/js/recording_studio.js"></script>
 {% endblock %}

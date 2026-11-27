@@ -8,19 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import models
+from app.config import settings
 from app.consts import AuthRole, RecordingStatus, TalkStatus
-from app.db import Base, engine
 from app.main import app
 from app.pipeline.detect import match_talks_to_recording
 from app.security import create_session_token
 from app.storage import LocalDiskBackend, get_storage_backend
 from tests.conftest import generate_clip
-
-
-@pytest.fixture(scope='module', autouse=True)
-def setup_database() -> Generator[None]:
-    Base.metadata.create_all(bind=engine)
-    yield
 
 
 @pytest.fixture
@@ -251,8 +245,10 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
     db_session: Any,
     temp_storage: Any,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When stage_only is used, talks are not modified until bulk approval is clicked."""
+    monkeypatch.setattr(settings, 'ingest_roots', [])
     user = models.User(
         email='stage_org@example.com',
         hashed_password='fake',
@@ -303,7 +299,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
     client.cookies.set('veditor_session', token)
 
     # 1. Attach room recording with stage_only=True
-    clip = generate_clip(3600, output_dir=tmp_path)
+    clip = generate_clip(1, output_dir=tmp_path)
     try:
         with open(clip, 'rb') as f_vid:
             attach_res = client.post(
@@ -335,7 +331,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
         assert t3.status == TalkStatus.WAITING_FILES
         assert not temp_storage.exists(f'{t1.id}/raw/raw.mp4')
 
-        # 2. Upload custom bumper for the recording
+        # 2. Upload custom bumper for the recording (works even with empty ingest_roots)
         bumper_clip = generate_clip(0.2, output_dir=tmp_path)
         with open(bumper_clip, 'rb') as f_b:
             b_res = client.post(
@@ -345,7 +341,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
             )
             assert b_res.status_code == 200
             custom_intro_path = b_res.json()['path']
-            assert custom_intro_path
+            assert custom_intro_path.startswith(f'bumpers/rec_bumper_{rec_id}_intro_')
 
         # 3. Bulk approve ONLY t1 and t2 (morning sessions), leaving t3 unattached
         with patch('app.queue.light_queue.enqueue'):

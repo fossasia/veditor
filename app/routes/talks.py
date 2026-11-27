@@ -60,7 +60,7 @@ from ..ingest import (
     validate_media_file,
 )
 from ..models import Talk
-from ..pipeline.detect import container_duration_seconds
+from ..pipeline.detect import container_creation_time, container_duration_seconds
 from ..queue import heavy_queue, light_queue
 from ..schemas import (
     JobRead,
@@ -2274,10 +2274,9 @@ def create_talk_sso_token(
 )
 async def attach_room_recording(
     user: Annotated[CurrentUser, Depends(require_role(AuthRole.ORGANIZER))],
-    request: Request,
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(get_storage_backend)],
-    room: Annotated[str | None, Form()] = None,
+    room: Annotated[str, Form()],
     event_id: Annotated[int | None, Form()] = None,
     file: Annotated[UploadFile | None, File()] = None,
     video_url: Annotated[str | None, Form()] = None,
@@ -2292,48 +2291,13 @@ async def attach_room_recording(
     If target_date is specified, only sessions on that date are attached.
     For rooms spanning multiple scheduled days, target_date is required.
     """
-    # Support JSON requests as well as multipart/form-data
-    content_type = request.headers.get('content-type', '')
-    if content_type.startswith('application/json'):
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                room = body.get('room', room)
-                event_id = body.get('event_id', event_id)
-                video_url = body.get('video_url', video_url)
-                relative_key = body.get('relative_key', relative_key)
-                source_path = body.get('source_path', source_path)
-                stage_only = body.get('stage_only', stage_only)
-                rec_start_str = body.get('recording_start')
-                if rec_start_str and not recording_start:
-                    try:
-                        recording_start = datetime.fromisoformat(rec_start_str)
-                    except ValueError:
-                        pass
-                if 'target_date' in body:
-                    target_date_val = body.get('target_date')
-                    if target_date_val is not None and not target_date:
-                        if not isinstance(target_date_val, str):
-                            raise HTTPException(
-                                status_code=HTTPStatus.BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            )
-                        try:
-                            target_date = date.fromisoformat(target_date_val)
-                        except ValueError as exc:
-                            raise HTTPException(
-                                status_code=HTTPStatus.BAD_REQUEST,
-                                detail=f"Invalid target_date format: '{target_date_val}', expected YYYY-MM-DD",
-                            ) from exc
-        except (ValueError, TypeError, UnicodeDecodeError):  # fmt: skip
-            pass
-
-    if not room or not room.strip():
+    if not room.strip():
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
             detail='Room name is required',
         )
     room = room.strip()
+    creator_id = user.user_id if (not user.is_machine and not user.is_sso) else None
 
     # Resolve and authorize event
     if event_id is not None:
@@ -2465,14 +2429,6 @@ async def attach_room_recording(
                 status_code=HTTPStatus.BAD_REQUEST,
                 detail='video_url must start with http:// or https://',
             )
-
-        creator_id = None
-        if (
-            user
-            and user.user_id
-            and db.query(models.User.id).filter(models.User.id == user.user_id).first()
-        ):
-            creator_id = user.user_id
 
         room_rec = models.RoomRecording(
             event_id=event_id,
@@ -2657,16 +2613,15 @@ async def attach_room_recording(
     # Validate media file & probe duration
     try:
 
-        def _probe_media(p: Path) -> tuple[float | None, str | None]:
+        def _probe_media(p: Path) -> tuple[float | None, datetime | None]:
             validate_media_file(p)
             with av.open(str(p)) as container:
-                dur = container_duration_seconds(container)
-                c_time = container.metadata.get('creation_time')
-                if not c_time and container.streams.video:
-                    c_time = container.streams.video[0].metadata.get('creation_time')
-                return dur, c_time
+                return (
+                    container_duration_seconds(container),
+                    container_creation_time(container),
+                )
 
-        duration, creation_time_str = await anyio.to_thread.run_sync(
+        duration, creation_time = await anyio.to_thread.run_sync(
             _probe_media, staged_path
         )
     except IngestPathRejectedError as exc:
@@ -2714,22 +2669,16 @@ async def attach_room_recording(
 
     # Filter talks by schedule window if recording_start is specified
     rec_start = recording_start
-    if rec_start is None and creation_time_str:
-        try:
-            parsed_dt = datetime.fromisoformat(creation_time_str)
-            if parsed_dt.tzinfo is None:
-                parsed_dt = parsed_dt.replace(tzinfo=UTC)
-            cand_end = parsed_dt + timedelta(seconds=duration)
-            if any(
-                (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
-                < cand_end
-                and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
-                > parsed_dt
-                for t in eligible_talks
-            ):
-                rec_start = parsed_dt
-        except ValueError, TypeError:
-            pass
+    if rec_start is None and creation_time is not None:
+        cand_end = creation_time + timedelta(seconds=duration)
+        if any(
+            (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
+            < cand_end
+            and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
+            > creation_time
+            for t in eligible_talks
+        ):
+            rec_start = creation_time
 
     if rec_start is None:
         rec_start = min(
@@ -2749,6 +2698,9 @@ async def attach_room_recording(
         and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end) > rec_start
     ]
     if not matched_talks:
+        if is_ephemeral_upload:
+            # storage-boundary-exempt: upload staging cleanup
+            staged_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
             detail='Recording does not overlap any eligible talks',
@@ -2758,13 +2710,6 @@ async def attach_room_recording(
     talk_ids = []
     staged_keys = []
     replaced_backups: dict[str, str] = {}
-    creator_id = None
-    if (
-        user
-        and user.user_id
-        and db.query(models.User.id).filter(models.User.id == user.user_id).first()
-    ):
-        creator_id = user.user_id
 
     room_rec = models.RoomRecording(
         event_id=event_id,
@@ -2836,7 +2781,7 @@ async def attach_room_recording(
                 talk.cut_end = min(
                     (talk_end_utc - talk_start_utc).total_seconds(), duration
                 )
-                talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
+            talk.cut_segments = [{'start': talk.cut_start, 'end': talk.cut_end}]
 
             talk_ids.append(talk.id)
 

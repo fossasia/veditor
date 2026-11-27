@@ -654,7 +654,6 @@ window.submitAttachRoomRecording = async function() {
   const startTimeVal = startTimeInput && startTimeInput.value ? startTimeInput.value.trim() : '';
   if (startTimeVal && !targetDate) {
     await Modal.alert({ title: 'Validation Error', message: 'Select a recording date before setting a start time.' });
-    setBtnBusy(btn, false);
     return;
   }
 

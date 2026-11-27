@@ -15,13 +15,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   var recordingId = form.dataset.recordingId;
   var videoPlayer = document.getElementById('rec-video-player');
-  var bumperUploadsInProgress = 0;
-
-  function updateUploadButtonState() {
-    if (btnApprove) {
-      btnApprove.disabled = bumperUploadsInProgress > 0;
-    }
-  }
+  var isUploadingBumper = false;
 
   function seekVideoToPointer(seconds) {
     if (!videoPlayer || isNaN(seconds)) return;
@@ -66,98 +60,14 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
-  // Bumper Controls Setup (Intro & Outro)
-  ['intro', 'outro'].forEach(function (type) {
-    var toggle = document.getElementById('check-include-' + type);
-    var wrap = document.getElementById(type + '-options-wrap');
-    if (toggle && wrap) {
-      toggle.addEventListener('change', function () {
-        wrap.classList.toggle('is-hidden', !toggle.checked);
-      });
-    }
-
-    var radios = document.querySelectorAll('input[name="' + type + '_source"]');
-    var customWrap = document.getElementById(type + '-custom-wrap');
-    var fileInput = document.getElementById('custom-' + type + '-file');
-    var pathInput = document.getElementById('custom-' + type + '-path');
-    var dropzone = document.getElementById(type + '-dropzone');
-    var fileName = document.getElementById(type + '-file-name');
-
-    radios.forEach(function (r) {
-      r.addEventListener('change', function () {
-        radios.forEach(function (rad) {
-          rad.closest('.bumper-segment')?.classList.toggle('is-active', rad.checked);
-        });
-        if (customWrap) {
-          customWrap.classList.toggle('is-visible', r.value === 'custom' && r.checked);
-        }
-      });
+  if (typeof window.initBumperControls === 'function') {
+    window.initBumperControls('/studio/recordings/' + recordingId + '/bumpers/upload', {
+      onUploadStateChange: function (uploading) {
+        isUploadingBumper = uploading;
+        btnApprove.disabled = uploading;
+      },
     });
-
-    async function handleBumperUpload(file) {
-      if (!file) return;
-      if (pathInput) pathInput.value = '';
-      bumperUploadsInProgress += 1;
-      updateUploadButtonState();
-      if (fileName) {
-        fileName.textContent = file.name + ' (Uploading...)';
-      }
-      try {
-        var fd = new FormData();
-        fd.append('file', file);
-        fd.append('kind', type);
-        var fetchFn = window.authFetch || fetch;
-        var res = await fetchFn('/studio/recordings/' + recordingId + '/bumpers/upload', {
-          method: 'POST',
-          body: fd
-        });
-        if (!res.ok) {
-          var err = await res.json().catch(function () { return {}; });
-          throw new Error(err.detail || 'Upload failed');
-        }
-        var data = await res.json();
-        if (pathInput) pathInput.value = data.path;
-        if (fileName) fileName.textContent = file.name + ' ✓';
-      } catch (err) {
-        if (pathInput) pathInput.value = '';
-        if (fileName) fileName.textContent = 'Upload failed: ' + err.message;
-      } finally {
-        bumperUploadsInProgress = Math.max(0, bumperUploadsInProgress - 1);
-        updateUploadButtonState();
-      }
-    }
-
-    if (fileInput) {
-      fileInput.addEventListener('change', function () {
-        if (fileInput.files && fileInput.files[0]) {
-          handleBumperUpload(fileInput.files[0]);
-        }
-      });
-    }
-
-    if (dropzone) {
-      ['dragenter', 'dragover'].forEach(function (evt) {
-        dropzone.addEventListener(evt, function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          dropzone.classList.add('drag-over');
-        });
-      });
-      ['dragleave', 'drop'].forEach(function (evt) {
-        dropzone.addEventListener(evt, function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          dropzone.classList.remove('drag-over');
-        });
-      });
-      dropzone.addEventListener('drop', function (e) {
-        var dt = e.dataTransfer;
-        if (dt && dt.files && dt.files.length) {
-          handleBumperUpload(dt.files[0]);
-        }
-      });
-    }
-  });
+  }
 
   // Handoff Card & Action Button Text Synchronization
   var chkHandoff = document.getElementById('chk-handoff');
@@ -214,7 +124,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var customOutroPath = document.getElementById('custom-outro-path')?.value || null;
     var handoff = !!document.getElementById('chk-handoff')?.checked;
 
-    if (bumperUploadsInProgress > 0) {
+    if (isUploadingBumper) {
       setStatus('Please wait for custom bumper uploads to finish.', true);
       return;
     }
@@ -272,7 +182,7 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (err) {
       setStatus('Failed to approve talks: ' + err.message, true);
       btnApprove.disabled = false;
-      btnApprove.textContent = 'Approve & Handoff Selected';
+      updateHandoffState();
     }
   });
 

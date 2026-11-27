@@ -1,0 +1,65 @@
+<div class="bumper-studio-card" id="card-bumper-options">
+  <div class="bumper-studio-title">EVENT BRANDING &amp; BUMPERS</div>
+
+  {% for kind, label, inc, src, custom_path in [
+    (
+      'intro',
+      'Opening Intro',
+      bumper_cfg.include_intro if bumper_cfg else false,
+      bumper_cfg.intro_source if bumper_cfg else 'generated',
+      bumper_cfg.custom_intro_path if bumper_cfg else '',
+    ),
+    (
+      'outro',
+      'Closing Outro',
+      bumper_cfg.include_outro if bumper_cfg else false,
+      bumper_cfg.outro_source if bumper_cfg else 'generated',
+      bumper_cfg.custom_outro_path if bumper_cfg else '',
+    ),
+  ] %}
+  <div class="bumper-group">
+    <div class="bumper-group-header">
+      <span class="bumper-group-title">{{ label }}</span>
+      <label class="bumper-toggle-label" for="check-include-{{ kind }}" title="Enable {{ label }}">
+        <input type="checkbox" id="check-include-{{ kind }}" name="include_{{ kind }}" class="toggle-checkbox" {% if inc %}checked{% endif %}>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="bumper-nested-options {% if not inc %}is-hidden{% endif %}" id="{{ kind }}-options-wrap">
+      <div class="bumper-segmented-control">
+        <label class="bumper-segment {% if src != 'custom' %}is-active{% endif %}">
+          <input type="radio" name="{{ kind }}_source" value="generated" class="bumper-radio-input" {% if src != 'custom' %}checked{% endif %}>
+          <span>Generated Title</span>
+        </label>
+        <label class="bumper-segment {% if src == 'custom' %}is-active{% endif %}">
+          <input type="radio" name="{{ kind }}_source" value="custom" class="bumper-radio-input" {% if src == 'custom' %}checked{% endif %}>
+          <span>Custom Video</span>
+        </label>
+      </div>
+
+      <div class="bumper-custom-wrap {% if src == 'custom' %}is-visible{% endif %}" id="{{ kind }}-custom-wrap">
+        <label for="custom-{{ kind }}-file" class="bumper-dropzone" id="{{ kind }}-dropzone" title="Click or drag &amp; drop custom {{ kind }} clip">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <div class="bumper-dropzone-text">
+            <span class="bumper-dropzone-title">Drop video here or <u>browse</u></span>
+            <span class="bumper-file-name" id="{{ kind }}-file-name">{% if custom_path %}{{ custom_path.split('/')[-1] }}{% else %}Supports MP4, WebM, MOV{% endif %}</span>
+          </div>
+        </label>
+        <input type="file" id="custom-{{ kind }}-file" class="custom-bumper-file-input" accept="video/mp4,video/*">
+        <input type="hidden" id="custom-{{ kind }}-path" value="{{ custom_path or '' }}">
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if show_bumper_proceed %}
+  <button class="btn btn-primary w-full btn-step-spacing" id="btn-proceed-handoff" type="button" data-edit-control="true">
+    Proceed &rarr;
+  </button>
+  {% endif %}
+</div>

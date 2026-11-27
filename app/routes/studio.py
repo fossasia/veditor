@@ -32,7 +32,7 @@ from ..ingest import (
     stage_custom_clip,
     validate_media_file,
 )
-from ..pipeline.detect import match_talks_to_recording
+from ..pipeline.detect import TalkMatch, match_talks_to_recording
 from ..queue import light_queue
 from ..security import SSOTokenPayload, decode_sso_token
 from ..states import TRANSITIONS, advance
@@ -1391,22 +1391,32 @@ def delete_studio_event(
     return RedirectResponse(url='/studio/events', status_code=HTTPStatus.SEE_OTHER)
 
 
+def _resolve_studio_sso(request: Request) -> SSOTokenPayload | None:
+    raw_sso = request.query_params.get('sso_token') or request.cookies.get(
+        'veditor_session'
+    )
+    return decode_sso_token(raw_sso) if raw_sso else None
+
+
 def _authorize_studio_recording(
     recording_id: int,
     request: Request,
     db: Session,
     *,
     require_human: bool = False,
+    resolved_auth: tuple[models.User | None, SSOTokenPayload | None] | None = None,
 ) -> tuple[models.RoomRecording, models.User | None]:
     """Authorize access to a RoomRecording row."""
-    user = _get_authenticated_user_from_cookie(request, db)
-    client = get_optional_ui_client(request, db)
+    if resolved_auth is not None:
+        user, sso_payload = resolved_auth
+    else:
+        user = _get_authenticated_user_from_cookie(request, db)
+        sso_payload = _resolve_studio_sso(request)
 
-    recording = (
-        db.query(models.RoomRecording)
+    recording = db.scalar(
+        select(models.RoomRecording)
         .options(selectinload(models.RoomRecording.event))
-        .filter(models.RoomRecording.id == recording_id)
-        .first()
+        .where(models.RoomRecording.id == recording_id)
     )
     if not recording:
         raise HTTPException(
@@ -1414,10 +1424,6 @@ def _authorize_studio_recording(
             detail='Recording not found',
         )
 
-    raw_sso = request.query_params.get('sso_token') or request.cookies.get(
-        'veditor_session'
-    )
-    sso_payload = decode_sso_token(raw_sso) if raw_sso else None
     if sso_payload and sso_payload.scope_type == SSOScopeType.EVENT:
         if sso_payload.scope_id == recording.event_id and sso_payload.role in (
             AuthRole.ORGANIZER,
@@ -1432,16 +1438,18 @@ def _authorize_studio_recording(
     if user:
         if user.role == AuthRole.ADMIN:
             return recording, user
-        if user.role in (AuthRole.ORGANIZER, AuthRole.USER):
-            if recording.event and recording.event.created_by_user_id == user.id:
-                return recording, user
-            if recording.created_by_user_id == user.id:
-                return recording, user
+        if user.role in (AuthRole.ORGANIZER, AuthRole.USER) and (
+            (recording.event and recording.event.created_by_user_id == user.id)
+            or recording.created_by_user_id == user.id
+        ):
+            return recording, user
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail='Not authorized to access this recording',
         )
-    elif client:
+
+    client = get_optional_ui_client(request, db)
+    if client:
         if require_human:
             raise HTTPException(
                 status_code=HTTPStatus.FORBIDDEN,
@@ -1468,17 +1476,12 @@ class BulkApproveTalksRequest(schemas.IntroOutroRequest):
 def get_recording_match_context(
     recording: models.RoomRecording,
     room_talks: list[models.Talk],
-) -> tuple[datetime | None, float | None, list]:
+) -> tuple[datetime | None, float | None, list[TalkMatch]]:
     rec_start = recording.recording_start
     if not rec_start and room_talks:
         rec_start = min(talk.start for talk in room_talks)
 
     duration = recording.duration_seconds
-    if duration is None and room_talks:
-        first_talk = min(talk.start for talk in room_talks)
-        last_talk = max(talk.end for talk in room_talks)
-        duration = max(3600.0, (last_talk - first_talk).total_seconds())
-
     matches = (
         match_talks_to_recording(
             room_talks,
@@ -1500,39 +1503,42 @@ def get_recording_studio(
 ) -> Response:
     """Centralised recording studio page — review video, select talks, approve + handoff."""
     user = _get_authenticated_user_from_cookie(request, db)
-    raw_sso = request.query_params.get('sso_token') or request.cookies.get(
-        'veditor_session'
-    )
-    has_sso = bool(raw_sso and decode_sso_token(raw_sso))
-    if not user and not has_sso:
+    sso_payload = _resolve_studio_sso(request)
+    if not user and not sso_payload:
         return RedirectResponse(
             url=f'/login?next=/studio/recordings/{recording_id}',
             status_code=HTTPStatus.FOUND,
         )
 
-    recording, _ = _authorize_studio_recording(recording_id, request, db)
+    recording, _ = _authorize_studio_recording(
+        recording_id,
+        request,
+        db,
+        resolved_auth=(user, sso_payload),
+    )
 
     eligible_statuses = (
         TalkStatus.WAITING_FILES,
         TalkStatus.DETECTING,
         TalkStatus.BROKEN,
     )
-    room_talks = (
-        db.query(models.Talk)
-        .filter(
-            models.Talk.event_id == recording.event_id,
-            models.Talk.room == recording.room,
-            models.Talk.status.in_(eligible_statuses),
+    room_talks = list(
+        db.scalars(
+            select(models.Talk)
+            .where(
+                models.Talk.event_id == recording.event_id,
+                models.Talk.room == recording.room,
+                models.Talk.status.in_(eligible_statuses),
+            )
+            .order_by(models.Talk.start)
         )
-        .order_by(models.Talk.start)
-        .all()
     )
     if recording.target_date:
+        event_tz = recording.event.event_tz if recording.event else UTC
         room_talks = [
             talk
             for talk in room_talks
-            if _talk_local_date(talk, talk.event.event_tz if talk.event else UTC)
-            == recording.target_date
+            if _talk_local_date(talk, event_tz) == recording.target_date
         ]
 
     _, _, matched = get_recording_match_context(recording, room_talks)
@@ -1560,32 +1566,26 @@ def stream_recording_video(
     """Stream recording video for HTML5 playback."""
     recording, _ = _authorize_studio_recording(recording_id, request, db)
 
+    media_key: str | None = None
     if recording.storage_key and storage.exists(recording.storage_key):
-        path = storage.get(recording.storage_key)
-        return FileResponse(
-            path,
-            media_type='video/mp4',
-            headers={'Cache-Control': 'no-store'},
+        media_key = recording.storage_key
+    else:
+        talk = db.scalar(
+            select(models.Talk).where(models.Talk.room_recording_id == recording.id)
+        )
+        if talk and storage.exists(f'{talk.id}/raw/raw.mp4'):
+            media_key = f'{talk.id}/raw/raw.mp4'
+
+    if media_key is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='Recording video not found or not yet available',
         )
 
-    talk = (
-        db.query(models.Talk)
-        .filter(models.Talk.room_recording_id == recording.id)
-        .first()
-    )
-    if talk:
-        talk_raw_key = f'{talk.id}/raw/raw.mp4'
-        if storage.exists(talk_raw_key):
-            path = storage.get(talk_raw_key)
-            return FileResponse(
-                path,
-                media_type='video/mp4',
-                headers={'Cache-Control': 'no-store'},
-            )
-
-    raise HTTPException(
-        status_code=HTTPStatus.NOT_FOUND,
-        detail='Recording video not found or not yet available',
+    return FileResponse(
+        storage.get(media_key),
+        media_type='video/mp4',
+        headers={'Cache-Control': 'no-store'},
     )
 
 
@@ -1613,20 +1613,23 @@ def upload_recording_bumper_file(
 
     max_size = settings.max_bumper_upload_size_bytes
     size = 0
-    # storage-boundary-exempt: bumper staging
-    with open(staged_path, 'wb') as f_out:
-        while chunk := file.file.read(65536):
-            size += len(chunk)
-            if size > max_size:
-                # storage-boundary-exempt: bumper staging cleanup
-                staged_path.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                    detail=f'Bumper file exceeds maximum allowed size of {max_size} bytes',
-                )
-            f_out.write(chunk)
-
     try:
+        for previous_path in staging_dir.glob(f'rec_bumper_{recording_id}_{kind}_*'):
+            if previous_path != staged_path and previous_path.is_file():
+                # storage-boundary-exempt: remove superseded recording bumper staging upload
+                previous_path.unlink()
+
+        # storage-boundary-exempt: bumper staging
+        with open(staged_path, 'wb') as f_out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONTENT_TOO_LARGE,
+                        detail=f'Bumper file exceeds maximum allowed size of {max_size} bytes',
+                    )
+                f_out.write(chunk)
+
         validate_media_file(staged_path)
     except IngestPathRejectedError as exc:
         # storage-boundary-exempt: bumper staging cleanup
@@ -1635,8 +1638,12 @@ def upload_recording_bumper_file(
             status_code=HTTPStatus.BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except Exception:
+        # storage-boundary-exempt: bumper staging cleanup
+        staged_path.unlink(missing_ok=True)
+        raise
 
-    return {'path': str(staged_path)}
+    return {'path': f'bumpers/{staged_path.name}'}
 
 
 @router.post('/recordings/{recording_id}/bulk-approve')
@@ -1666,26 +1673,20 @@ def bulk_approve_recording(
             detail='At least one talk must be selected',
         )
 
-    if recording.status == RecordingStatus.ATTACHED:
-        raise HTTPException(
-            status_code=HTTPStatus.CONFLICT,
-            detail='Recording is already attached',
-        )
-
     eligible_statuses = (
         TalkStatus.WAITING_FILES,
         TalkStatus.DETECTING,
         TalkStatus.PENDING_APPROVAL,
         TalkStatus.PENDING_INTRO_OUTRO,
     )
-    room_talks = (
-        db.query(models.Talk)
-        .filter(
-            models.Talk.event_id == recording.event_id,
-            models.Talk.room == recording.room,
-            models.Talk.status.in_(eligible_statuses),
+    room_talks = list(
+        db.scalars(
+            select(models.Talk).where(
+                models.Talk.event_id == recording.event_id,
+                models.Talk.room == recording.room,
+                models.Talk.status.in_(eligible_statuses),
+            )
         )
-        .all()
     )
 
     _, duration, matches = get_recording_match_context(recording, room_talks)
@@ -1696,35 +1697,30 @@ def bulk_approve_recording(
         )
     matches_by_id = {match.talk_id: match for match in matches}
     room_talks_by_id = {talk.id: talk for talk in room_talks}
+    recording_path = storage.get(recording.storage_key)
+    is_eventyay_synced = bool(recording.event and recording.event.is_eventyay_synced)
 
-    approved_ids: list[int] = []
-    now = datetime.now(UTC)
-
+    approved_talks: list[models.Talk] = []
     skipped_ids: list[int] = []
     seen_ids: set[int] = set()
+    now = datetime.now(UTC)
+
     for talk_id in payload.talk_ids:
         if talk_id in seen_ids:
             skipped_ids.append(talk_id)
             continue
         seen_ids.add(talk_id)
+
         talk = room_talks_by_id.get(talk_id)
-        if not talk:
-            skipped_ids.append(talk_id)
-            continue
-        if (
-            talk.event_id != recording.event_id
-            or talk.room != recording.room
-            or talk.status not in eligible_statuses
-            or talk_id not in matches_by_id
-        ):
+        match = matches_by_id.get(talk_id)
+        if not talk or not match:
             skipped_ids.append(talk_id)
             continue
 
         talk.room_recording_id = recording.id
         talk.raw_duration_seconds = duration
-
-        talk.cut_start = matches_by_id[talk_id].cut_start_offset
-        talk.cut_end = matches_by_id[talk_id].cut_end_offset
+        talk.cut_start = match.cut_start_offset
+        talk.cut_end = match.cut_end_offset
 
         talk.include_intro = payload.include_intro
         talk.include_outro = payload.include_outro
@@ -1732,38 +1728,50 @@ def bulk_approve_recording(
         talk.outro_source = payload.outro_source if payload.include_outro else None
         talk.custom_intro_path = None
         talk.custom_outro_path = None
-        if payload.include_intro and payload.intro_source == 'custom':
-            if not payload.custom_intro_path:
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail='Custom intro is required',
-                )
-            talk.custom_intro_path = stage_custom_clip(
-                talk.id, payload.custom_intro_path, 'intro', storage
-            )
-        if payload.include_outro and payload.outro_source == 'custom':
-            if not payload.custom_outro_path:
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_REQUEST,
-                    detail='Custom outro is required',
-                )
-            talk.custom_outro_path = stage_custom_clip(
-                talk.id, payload.custom_outro_path, 'outro', storage
-            )
+        for kind, inc, src, custom_path, attr in (
+            (
+                'intro',
+                payload.include_intro,
+                payload.intro_source,
+                payload.custom_intro_path,
+                'custom_intro_path',
+            ),
+            (
+                'outro',
+                payload.include_outro,
+                payload.outro_source,
+                payload.custom_outro_path,
+                'custom_outro_path',
+            ),
+        ):
+            if inc and src == 'custom' and custom_path:
+                try:
+                    setattr(
+                        talk,
+                        attr,
+                        stage_custom_clip(
+                            talk.id,
+                            custom_path,
+                            kind,
+                            storage,
+                            recording_id=recording.id,
+                        ),
+                    )
+                except IngestPathRejectedError as exc:
+                    raise HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST,
+                        detail=f'{kind.title()} clip rejected: {exc}',
+                    ) from exc
 
-        # Ensure raw media exists in talk storage if recording file exists
-        raw_key = f'{talk.id}/raw/raw.mp4'
-        if recording.storage_key and storage.exists(recording.storage_key):
-            storage.link_or_copy(raw_key, storage.get(recording.storage_key))
+        storage.link_or_copy(f'{talk.id}/raw/raw.mp4', recording_path)
 
-        # Advance status cleanly
         for step in (
             TalkStatus.DETECTING,
             TalkStatus.PENDING_APPROVAL,
             TalkStatus.PENDING_INTRO_OUTRO,
             TalkStatus.PENDING_BOUNDS,
         ):
-            if talk.status in TRANSITIONS and step in TRANSITIONS[talk.status]:
+            if step in TRANSITIONS.get(talk.status, ()):
                 advance(talk, step)
 
         if payload.handoff and talk.handed_off_at is None:
@@ -1771,24 +1779,21 @@ def bulk_approve_recording(
             if user:
                 talk.handed_off_by_user_id = user.id
 
-        approved_ids.append(talk.id)
+        approved_talks.append(talk)
 
-    if not approved_ids:
+    if not approved_talks:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
             detail='No valid talks could be approved',
         )
 
     recording.status = RecordingStatus.ATTACHED
+    approved_ids = [talk.id for talk in approved_talks]
     db.commit()
-    for talk_id in approved_ids:
-        talk = db.get(models.Talk, talk_id)
-        if talk is None:
-            continue
-        if payload.handoff and talk.speaker_email:
-            event = db.get(models.Event, talk.event_id)
-            if not (event and event.is_eventyay_synced):
-                light_queue.enqueue(job_send_speaker_handoff_email, talk.id)
+
+    for talk in approved_talks:
+        if payload.handoff and talk.speaker_email and not is_eventyay_synced:
+            light_queue.enqueue(job_send_speaker_handoff_email, talk.id)
         dispatch_talk_webhook('talk.bounds_pending', talk, db)
 
     return {

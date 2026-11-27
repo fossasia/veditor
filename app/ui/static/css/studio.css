@@ -1856,7 +1856,8 @@ a.breadcrumb-event:hover {
   }
 }
 
-.rec-player-card {
+.rec-player-card,
+.rec-panel-card {
   background: var(--v-bg-surface);
   border: 1px solid var(--v-border-subtle);
   border-radius: 8px;
@@ -1865,11 +1866,6 @@ a.breadcrumb-event:hover {
 }
 
 .rec-panel-card {
-  background: var(--v-bg-surface);
-  border: 1px solid var(--v-border-subtle);
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   position: sticky;
   top: 1rem;
   max-height: calc(100vh - 2rem);
@@ -2130,31 +2126,6 @@ a.breadcrumb-event:hover {
   background: var(--v-bg-panel);
 }
 
-.rec-panel-card .bumper-group {
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-}
-
-.rec-panel-card .bumper-group:last-child {
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-
-.rec-panel-card .bumper-group-title {
-  font-size: 0.78rem;
-}
-
-.rec-panel-card .bumper-nested-options {
-  padding: 6px;
-  margin-top: 6px;
-  gap: 6px;
-}
-
-.rec-panel-card .bumper-segment {
-  padding: 5px 8px;
-  font-size: 0.72rem;
-}
-
 /* Enhanced Speaker Handoff Card */
 .rec-handoff-card {
   background: var(--v-bg-panel);
@@ -2199,12 +2170,6 @@ a.breadcrumb-event:hover {
   min-width: 0;
 }
 
-.rec-handoff-title-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .rec-handoff-title {
   font-size: 0.8rem;
   font-weight: 600;
@@ -2237,20 +2202,23 @@ a.breadcrumb-event:hover {
 .rec-status-banner {
   margin-top: 0.5rem;
   font-size: 0.82rem;
-  padding: 0;
   border-radius: 4px;
 }
 
-.rec-status-banner.is-success {
+.rec-status-banner.is-success,
+.rec-status-banner.is-error {
   padding: 0.5rem 0.75rem;
+  border: 1px solid;
+}
+
+.rec-status-banner.is-success {
   background: #dcfce7;
   color: #166534;
-  border: 1px solid #bbf7d0;
+  border-color: #bbf7d0;
 }
 
 .rec-status-banner.is-error {
-  padding: 0.5rem 0.75rem;
   background: #fee2e2;
   color: #991b1b;
-  border: 1px solid #fecaca;
+  border-color: #fecaca;
 }
