@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
-from .consts import AuthRole, JobKind, JobStatus, TalkStatus
+from .consts import AuthRole, JobKind, JobStatus, RecordingStatus, TalkStatus
 from .db import Base
 from .retention import validate_retention_overrides
 
@@ -229,6 +229,41 @@ class Room(Base):
     event: Mapped[Event] = relationship(back_populates='rooms')
 
 
+class RoomRecording(Base):
+    __tablename__ = 'room_recordings'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey('events.id', ondelete='CASCADE'), nullable=False, index=True
+    )
+    room: Mapped[str] = mapped_column(String(255), nullable=False)
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recording_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[RecordingStatus] = mapped_column(
+        SAEnum(RecordingStatus, native_enum=False, validate_strings=True),
+        nullable=False,
+        default=RecordingStatus.READY,
+        server_default=text("'ready'"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey('users.id', ondelete='SET NULL'), nullable=True
+    )
+
+    event: Mapped[Event] = relationship()
+    talks: Mapped[list[Talk]] = relationship(back_populates='room_recording')
+
+
 class Client(Base):
     __tablename__ = 'clients'
 
@@ -306,6 +341,15 @@ class Talk(Base):
     outro_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     custom_intro_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     custom_outro_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    room_recording_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            'room_recordings.id',
+            ondelete='SET NULL',
+            name='fk_talks_room_recording_id',
+        ),
+        nullable=True,
+        index=True,
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -327,6 +371,7 @@ class Talk(Base):
     approved_cuts: Mapped[list[ApprovedCut]] = relationship(
         back_populates='talk', cascade='all, delete-orphan'
     )
+    room_recording: Mapped[RoomRecording | None] = relationship(back_populates='talks')
 
     @validates('speaker_email')
     def _validate_speaker_email(self, key: str, value: str | None) -> str | None:

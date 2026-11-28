@@ -41,7 +41,14 @@ from ..auth import (
     require_role,
 )
 from ..config import get_setting, settings
-from ..consts import AuthRole, JobKind, JobStatus, SSOScopeType, TalkStatus
+from ..consts import (
+    AuthRole,
+    JobKind,
+    JobStatus,
+    RecordingStatus,
+    SSOScopeType,
+    TalkStatus,
+)
 from ..db import get_db
 from ..ingest import (
     IngestPathRejectedError,
@@ -53,7 +60,7 @@ from ..ingest import (
     validate_media_file,
 )
 from ..models import Talk
-from ..pipeline.detect import container_duration_seconds
+from ..pipeline.detect import container_creation_time, container_duration_seconds
 from ..queue import heavy_queue, light_queue
 from ..schemas import (
     JobRead,
@@ -2277,6 +2284,7 @@ async def attach_room_recording(
     source_path: Annotated[str | None, Form()] = None,
     recording_start: Annotated[datetime | None, Form()] = None,
     target_date: Annotated[date | None, Form()] = None,
+    stage_only: Annotated[bool, Form()] = False,
 ) -> RoomRecordingAttachResponse:
     """Attach a continuous room recording to scheduled sessions in that room.
 
@@ -2289,6 +2297,11 @@ async def attach_room_recording(
             detail='Room name is required',
         )
     room = room.strip()
+    creator_id = (
+        db.scalar(select(models.User.id).where(models.User.id == user.user_id))
+        if (not user.is_machine and not user.is_sso and user.user_id is not None)
+        else None
+    )
 
     # Resolve and authorize event
     if event_id is not None:
@@ -2328,6 +2341,12 @@ async def attach_room_recording(
             detail=f'Event {event_id} not found',
         )
     tz = event.event_tz
+    if recording_start is not None:
+        recording_start = (
+            recording_start.replace(tzinfo=tz)
+            if recording_start.tzinfo is None
+            else recording_start.astimezone(tz)
+        ).astimezone(UTC)
 
     all_room_talks = list(
         db.scalars(
@@ -2415,6 +2434,54 @@ async def attach_room_recording(
                 detail='video_url must start with http:// or https://',
             )
 
+        room_rec = models.RoomRecording(
+            event_id=event_id,
+            room=room,
+            source_url=clean_url,
+            recording_start=recording_start,
+            target_date=target_date,
+            status=RecordingStatus.PENDING_ANALYSIS,
+            created_by_user_id=creator_id,
+        )
+        db.add(room_rec)
+        db.commit()
+        db.refresh(room_rec)
+
+        rec_start_iso = recording_start.isoformat() if recording_start else None
+
+        if stage_only:
+            try:
+                heavy_queue.enqueue(
+                    job_ingest_room_url,
+                    event_id,
+                    room,
+                    clean_url,
+                    recording_start_iso=rec_start_iso,
+                    talk_ids=[],
+                    recording_id=room_rec.id,
+                    stage_only=True,
+                    target_date=target_date,
+                    job_timeout=STAGE_CONFIG[JobKind.INGEST]['job_timeout'],
+                )
+            except (OSError, RedisError, RuntimeError) as exc:
+                logger.error('Failed to enqueue room URL ingest job: %s', exc)
+                room_rec.status = RecordingStatus.BROKEN
+                db.commit()
+                raise HTTPException(
+                    status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                    detail='Background ingest queue is temporarily unavailable',
+                ) from exc
+
+            return schemas.RoomRecordingAttachResponse(
+                attached_count=0,
+                room=room,
+                event_id=event_id,
+                talk_ids=[],
+                recording_duration_seconds=None,
+                target_date=target_date,
+                recording_id=room_rec.id,
+            )
+
         talk_ids = [t.id for t in eligible_talks]
         talks_to_cancel = [
             t.id for t in eligible_talks if t.status == TalkStatus.DETECTING
@@ -2427,7 +2494,6 @@ async def attach_room_recording(
             talk.status = TalkStatus.DETECTING
         db.commit()
 
-        rec_start_iso = recording_start.isoformat() if recording_start else None
         try:
             heavy_queue.enqueue(
                 job_ingest_room_url,
@@ -2436,12 +2502,14 @@ async def attach_room_recording(
                 clean_url,
                 recording_start_iso=rec_start_iso,
                 talk_ids=talk_ids,
+                recording_id=room_rec.id,
                 job_timeout=3600,
             )
         except (OSError, RedisError, RuntimeError) as exc:
             logger.error('Failed to enqueue room URL ingest job: %s', exc)
             for talk in eligible_talks:
                 talk.status = prev_statuses.get(talk.id, TalkStatus.WAITING_FILES)
+            room_rec.status = RecordingStatus.BROKEN
             db.commit()
             raise HTTPException(
                 status_code=HTTPStatus.SERVICE_UNAVAILABLE,
@@ -2463,6 +2531,7 @@ async def attach_room_recording(
             talk_ids=talk_ids,
             recording_duration_seconds=None,
             target_date=target_date,
+            recording_id=room_rec.id,
         )
 
     # Stage media
@@ -2548,16 +2617,15 @@ async def attach_room_recording(
     # Validate media file & probe duration
     try:
 
-        def _probe_media(p: Path) -> tuple[float | None, str | None]:
+        def _probe_media(p: Path) -> tuple[float | None, datetime | None]:
             validate_media_file(p)
             with av.open(str(p)) as container:
-                dur = container_duration_seconds(container)
-                c_time = container.metadata.get('creation_time')
-                if not c_time and container.streams.video:
-                    c_time = container.streams.video[0].metadata.get('creation_time')
-                return dur, c_time
+                return (
+                    container_duration_seconds(container),
+                    container_creation_time(container),
+                )
 
-        duration, creation_time_str = await anyio.to_thread.run_sync(
+        duration, creation_time = await anyio.to_thread.run_sync(
             _probe_media, staged_path
         )
     except IngestPathRejectedError as exc:
@@ -2605,22 +2673,16 @@ async def attach_room_recording(
 
     # Filter talks by schedule window if recording_start is specified
     rec_start = recording_start
-    if rec_start is None and creation_time_str:
-        try:
-            parsed_dt = datetime.fromisoformat(creation_time_str)
-            if parsed_dt.tzinfo is None:
-                parsed_dt = parsed_dt.replace(tzinfo=UTC)
-            cand_end = parsed_dt + timedelta(seconds=duration)
-            if any(
-                (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
-                < cand_end
-                and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
-                > parsed_dt
-                for t in eligible_talks
-            ):
-                rec_start = parsed_dt
-        except ValueError, TypeError:
-            pass
+    if rec_start is None and creation_time is not None:
+        cand_end = creation_time + timedelta(seconds=duration)
+        if any(
+            (t.start.replace(tzinfo=UTC) if t.start.tzinfo is None else t.start)
+            < cand_end
+            and (t.end.replace(tzinfo=UTC) if t.end.tzinfo is None else t.end)
+            > creation_time
+            for t in eligible_talks
+        ):
+            rec_start = creation_time
 
     if rec_start is None:
         rec_start = min(
@@ -2644,17 +2706,47 @@ async def attach_room_recording(
             # storage-boundary-exempt: upload staging cleanup
             staged_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"No scheduled talks in room '{room}' match recording window ({rec_start} to {rec_end})",
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording does not overlap any eligible talks',
         )
 
     # Zero-copy stage into each talk's storage & advance state
     talk_ids = []
     staged_keys = []
     replaced_backups: dict[str, str] = {}
-    talks_to_cancel = [t.id for t in matched_talks if t.status == TalkStatus.DETECTING]
 
-    # Cancel previous detection jobs before modifying or overwriting storage assets
+    room_rec = models.RoomRecording(
+        event_id=event_id,
+        room=room,
+        recording_start=rec_start,
+        target_date=target_date,
+        duration_seconds=duration,
+        status=RecordingStatus.READY,
+        created_by_user_id=creator_id,
+    )
+    db.add(room_rec)
+    db.flush()
+    room_rec.storage_key = f'recordings/{room_rec.id}/recording.mp4'
+    await anyio.to_thread.run_sync(
+        storage.link_or_copy, room_rec.storage_key, staged_path
+    )
+
+    if stage_only:
+        db.commit()
+        if is_ephemeral_upload:
+            # storage-boundary-exempt: upload staging cleanup
+            staged_path.unlink(missing_ok=True)
+        return schemas.RoomRecordingAttachResponse(
+            attached_count=0,
+            room=room,
+            event_id=event_id,
+            talk_ids=[],
+            recording_duration_seconds=duration,
+            target_date=target_date,
+            recording_id=room_rec.id,
+        )
+
+    talks_to_cancel = [t.id for t in matched_talks if t.status == TalkStatus.DETECTING]
     for tid in talks_to_cancel:
         _cancel_talk_jobs(tid)
 
@@ -2671,6 +2763,7 @@ async def attach_room_recording(
             await anyio.to_thread.run_sync(storage.link_or_copy, raw_key, staged_path)
             staged_keys.append(raw_key)
 
+            talk.room_recording_id = room_rec.id
             talk.status = TalkStatus.DETECTING
             talk.raw_duration_seconds = duration
 
@@ -2687,11 +2780,12 @@ async def attach_room_recording(
             if offset_end > offset_start:
                 talk.cut_start = offset_start
                 talk.cut_end = offset_end
-                talk.cut_segments = [{'start': offset_start, 'end': offset_end}]
             else:
-                talk.cut_start = None
-                talk.cut_end = None
-                talk.cut_segments = None
+                talk.cut_start = 0.0
+                talk.cut_end = min(
+                    (talk_end_utc - talk_start_utc).total_seconds(), duration
+                )
+            talk.cut_segments = [{'start': talk.cut_start, 'end': talk.cut_end}]
 
             talk_ids.append(talk.id)
 
@@ -2774,4 +2868,5 @@ async def attach_room_recording(
         talk_ids=talk_ids,
         recording_duration_seconds=duration,
         target_date=target_date,
+        recording_id=room_rec.id,
     )

@@ -1,5 +1,6 @@
 import logging
 import urllib.parse
+import uuid
 from datetime import UTC, date, datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -9,9 +10,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     Form,
     HTTPException,
     Request,
+    UploadFile,
 )
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from redis.exceptions import RedisError
@@ -21,15 +24,29 @@ from sqlalchemy.orm import Session, selectinload
 from .. import models, schemas
 from ..auth import CurrentUser, hash_api_key
 from ..config import get_setting, settings
-from ..consts import AuthRole, SSOScopeType, TalkStatus
+from ..consts import AuthRole, RecordingStatus, SSOScopeType, TalkStatus
 from ..db import get_db
+from ..ingest import (
+    IngestPathRejectedError,
+    get_bumper_staging_dir,
+    stage_custom_clip,
+    validate_media_file,
+)
+from ..pipeline.detect import TalkMatch, match_talks_to_recording
 from ..queue import light_queue
 from ..security import SSOTokenPayload, decode_sso_token
+from ..states import TRANSITIONS, advance
 from ..storage import StorageBackend, get_storage_backend
-from ..tasks import job_waveform
+from ..tasks import job_send_speaker_handoff_email, job_waveform
 from ..ui.templating import templates
+from ..webhook import dispatch_talk_webhook
 from .auth import _get_authenticated_user_from_cookie
-from .talks import _cancel_talk_jobs, attach_room_recording, get_room_days
+from .talks import (
+    _cancel_talk_jobs,
+    _talk_local_date,
+    attach_room_recording,
+    get_room_days,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1372,6 +1389,445 @@ def delete_studio_event(
     db.delete(event)
     db.commit()
     return RedirectResponse(url='/studio/events', status_code=HTTPStatus.SEE_OTHER)
+
+
+def _resolve_studio_sso(request: Request) -> SSOTokenPayload | None:
+    raw_sso = request.query_params.get('sso_token') or request.cookies.get(
+        'veditor_session'
+    )
+    return decode_sso_token(raw_sso) if raw_sso else None
+
+
+def _authorize_studio_recording(
+    recording_id: int,
+    request: Request,
+    db: Session,
+    *,
+    require_human: bool = False,
+    resolved_auth: tuple[models.User | None, SSOTokenPayload | None] | None = None,
+) -> tuple[models.RoomRecording, models.User | None]:
+    """Authorize access to a RoomRecording row."""
+    if resolved_auth is not None:
+        user, sso_payload = resolved_auth
+    else:
+        user = _get_authenticated_user_from_cookie(request, db)
+        sso_payload = _resolve_studio_sso(request)
+
+    recording = db.scalar(
+        select(models.RoomRecording)
+        .options(selectinload(models.RoomRecording.event))
+        .where(models.RoomRecording.id == recording_id)
+    )
+    if not recording:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='Recording not found',
+        )
+
+    if sso_payload and sso_payload.scope_type == SSOScopeType.EVENT:
+        if sso_payload.scope_id == recording.event_id and sso_payload.role in (
+            AuthRole.ORGANIZER,
+            AuthRole.ADMIN,
+        ):
+            return recording, None
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='Not authorized to access this recording',
+        )
+
+    if user:
+        if user.role == AuthRole.ADMIN:
+            return recording, user
+        if user.role in (AuthRole.ORGANIZER, AuthRole.USER) and (
+            (recording.event and recording.event.created_by_user_id == user.id)
+            or recording.created_by_user_id == user.id
+        ):
+            return recording, user
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='Not authorized to access this recording',
+        )
+
+    client = get_optional_ui_client(request, db)
+    if client:
+        if require_human:
+            raise HTTPException(
+                status_code=HTTPStatus.FORBIDDEN,
+                detail='A human organizer or administrator is required',
+            )
+        if recording.event_id in client.event_ids:
+            return recording, None
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail='Not authorized to access this recording',
+        )
+
+    raise HTTPException(
+        status_code=HTTPStatus.UNAUTHORIZED,
+        detail='Authentication required',
+    )
+
+
+class BulkApproveTalksRequest(schemas.IntroOutroRequest):
+    talk_ids: list[int]
+    handoff: bool = True
+
+
+def get_recording_match_context(
+    recording: models.RoomRecording,
+    room_talks: list[models.Talk],
+) -> tuple[datetime | None, float | None, list[TalkMatch]]:
+    rec_start = recording.recording_start
+    if not rec_start and room_talks:
+        rec_start = min(talk.start for talk in room_talks)
+
+    duration = recording.duration_seconds
+    matches = (
+        match_talks_to_recording(
+            room_talks,
+            rec_start,
+            duration,
+            min_overlap_fraction=0.01,
+        )
+        if rec_start and duration
+        else []
+    )
+    return rec_start, duration, matches
+
+
+@router.get('/recordings/{recording_id}', response_class=HTMLResponse)
+def get_recording_studio(
+    recording_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    """Centralised recording studio page — review video, select talks, approve + handoff."""
+    user = _get_authenticated_user_from_cookie(request, db)
+    sso_payload = _resolve_studio_sso(request)
+    if not user and not sso_payload:
+        return RedirectResponse(
+            url=f'/login?next=/studio/recordings/{recording_id}',
+            status_code=HTTPStatus.FOUND,
+        )
+
+    recording, _ = _authorize_studio_recording(
+        recording_id,
+        request,
+        db,
+        resolved_auth=(user, sso_payload),
+    )
+
+    eligible_statuses = (
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
+        TalkStatus.BROKEN,
+    )
+    room_talks = list(
+        db.scalars(
+            select(models.Talk)
+            .where(
+                models.Talk.event_id == recording.event_id,
+                models.Talk.room == recording.room,
+                models.Talk.status.in_(eligible_statuses),
+            )
+            .order_by(models.Talk.start)
+        )
+    )
+    if recording.target_date:
+        event_tz = recording.event.event_tz if recording.event else UTC
+        room_talks = [
+            talk
+            for talk in room_talks
+            if _talk_local_date(talk, event_tz) == recording.target_date
+        ]
+
+    _, _, matched = get_recording_match_context(recording, room_talks)
+    matched_by_id = {m.talk_id: m for m in matched}
+
+    return templates.TemplateResponse(
+        request,
+        'recording_studio.html.jinja',
+        {
+            'user': user,
+            'recording': recording,
+            'room_talks': room_talks,
+            'matched_by_id': matched_by_id,
+        },
+    )
+
+
+@router.get('/recordings/{recording_id}/stream')
+def stream_recording_video(
+    recording_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+) -> Response:
+    """Stream recording video for HTML5 playback."""
+    recording, _ = _authorize_studio_recording(recording_id, request, db)
+
+    media_key: str | None = None
+    if recording.storage_key and storage.exists(recording.storage_key):
+        media_key = recording.storage_key
+    else:
+        talk = db.scalar(
+            select(models.Talk).where(models.Talk.room_recording_id == recording.id)
+        )
+        if talk and storage.exists(f'{talk.id}/raw/raw.mp4'):
+            media_key = f'{talk.id}/raw/raw.mp4'
+
+    if media_key is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail='Recording video not found or not yet available',
+        )
+
+    return FileResponse(
+        storage.get(media_key),
+        media_type='video/mp4',
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@router.post('/recordings/{recording_id}/bumpers/upload')
+def upload_recording_bumper_file(
+    recording_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    file: Annotated[UploadFile, File()],
+    kind: Annotated[str, Form()] = 'intro',
+) -> dict[str, str]:
+    """Upload a custom bumper file for this recording session."""
+    _authorize_studio_recording(recording_id, request, db, require_human=True)
+    if kind not in ('intro', 'outro'):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail="Bumper kind must be 'intro' or 'outro'",
+        )
+
+    staging_dir = get_bumper_staging_dir()
+    ext = Path(file.filename or 'bumper.mp4').suffix or '.mp4'
+    staged_path = (
+        staging_dir / f'rec_bumper_{recording_id}_{kind}_{uuid.uuid4().hex}{ext}'
+    ).resolve()
+
+    max_size = settings.max_bumper_upload_size_bytes
+    size = 0
+    try:
+        for previous_path in staging_dir.glob(f'rec_bumper_{recording_id}_{kind}_*'):
+            if previous_path != staged_path and previous_path.is_file():
+                # storage-boundary-exempt: remove superseded recording bumper staging upload
+                previous_path.unlink()
+
+        # storage-boundary-exempt: bumper staging
+        with open(staged_path, 'wb') as f_out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(
+                        status_code=HTTPStatus.CONTENT_TOO_LARGE,
+                        detail=f'Bumper file exceeds maximum allowed size of {max_size} bytes',
+                    )
+                f_out.write(chunk)
+
+        validate_media_file(staged_path)
+    except IngestPathRejectedError as exc:
+        # storage-boundary-exempt: bumper staging cleanup
+        staged_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception:
+        # storage-boundary-exempt: bumper staging cleanup
+        staged_path.unlink(missing_ok=True)
+        raise
+
+    return {'path': f'bumpers/{staged_path.name}'}
+
+
+@router.post('/recordings/{recording_id}/bulk-approve')
+def bulk_approve_recording(
+    recording_id: int,
+    payload: BulkApproveTalksRequest,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(get_storage_backend)],
+) -> dict[str, object]:
+    """Approve recording, set cut bounds, configure bumpers, and handoff to speakers in one go."""
+    recording, user = _authorize_studio_recording(
+        recording_id, request, db, require_human=True
+    )
+    if (
+        recording.status != RecordingStatus.READY
+        or not recording.storage_key
+        or not storage.exists(recording.storage_key)
+    ):
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording media is not ready yet',
+        )
+    if not payload.talk_ids:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail='At least one talk must be selected',
+        )
+
+    eligible_statuses = (
+        TalkStatus.WAITING_FILES,
+        TalkStatus.DETECTING,
+        TalkStatus.PENDING_APPROVAL,
+        TalkStatus.PENDING_INTRO_OUTRO,
+    )
+    room_talks = list(
+        db.scalars(
+            select(models.Talk).where(
+                models.Talk.event_id == recording.event_id,
+                models.Talk.room == recording.room,
+                models.Talk.status.in_(eligible_statuses),
+            )
+        )
+    )
+
+    _, duration, matches = get_recording_match_context(recording, room_talks)
+    if duration is None:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording duration is unavailable',
+        )
+    matches_by_id = {match.talk_id: match for match in matches}
+    room_talks_by_id = {talk.id: talk for talk in room_talks}
+    recording_path = storage.get(recording.storage_key)
+    is_eventyay_synced = bool(recording.event and recording.event.is_eventyay_synced)
+
+    approved_talks: list[models.Talk] = []
+    skipped_ids: list[int] = []
+    seen_ids: set[int] = set()
+    now = datetime.now(UTC)
+
+    for talk_id in payload.talk_ids:
+        if talk_id in seen_ids:
+            skipped_ids.append(talk_id)
+            continue
+        seen_ids.add(talk_id)
+
+        talk = room_talks_by_id.get(talk_id)
+        match = matches_by_id.get(talk_id)
+        if not talk or not match:
+            skipped_ids.append(talk_id)
+            continue
+
+        talk.room_recording_id = recording.id
+        talk.raw_duration_seconds = duration
+        talk.cut_start = match.cut_start_offset
+        talk.cut_end = match.cut_end_offset
+
+        talk.include_intro = payload.include_intro
+        talk.include_outro = payload.include_outro
+        talk.intro_source = payload.intro_source if payload.include_intro else None
+        talk.outro_source = payload.outro_source if payload.include_outro else None
+        talk.custom_intro_path = None
+        talk.custom_outro_path = None
+        for kind, inc, src, custom_path, attr in (
+            (
+                'intro',
+                payload.include_intro,
+                payload.intro_source,
+                payload.custom_intro_path,
+                'custom_intro_path',
+            ),
+            (
+                'outro',
+                payload.include_outro,
+                payload.outro_source,
+                payload.custom_outro_path,
+                'custom_outro_path',
+            ),
+        ):
+            if inc and src == 'custom' and custom_path:
+                try:
+                    setattr(
+                        talk,
+                        attr,
+                        stage_custom_clip(
+                            talk.id,
+                            custom_path,
+                            kind,
+                            storage,
+                            recording_id=recording.id,
+                        ),
+                    )
+                except IngestPathRejectedError as exc:
+                    raise HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST,
+                        detail=f'{kind.title()} clip rejected: {exc}',
+                    ) from exc
+
+        storage.link_or_copy(f'{talk.id}/raw/raw.mp4', recording_path)
+
+        for step in (
+            TalkStatus.DETECTING,
+            TalkStatus.PENDING_APPROVAL,
+            TalkStatus.PENDING_INTRO_OUTRO,
+            TalkStatus.PENDING_BOUNDS,
+        ):
+            if step in TRANSITIONS.get(talk.status, ()):
+                advance(talk, step)
+
+        if payload.handoff and talk.handed_off_at is None:
+            talk.handed_off_at = now
+            if user:
+                talk.handed_off_by_user_id = user.id
+
+        approved_talks.append(talk)
+
+    if not approved_talks:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='No valid talks could be approved',
+        )
+
+    recording.status = RecordingStatus.ATTACHED
+    approved_ids = [talk.id for talk in approved_talks]
+    db.commit()
+
+    for talk in approved_talks:
+        if payload.handoff and talk.speaker_email and not is_eventyay_synced:
+            light_queue.enqueue(job_send_speaker_handoff_email, talk.id)
+        dispatch_talk_webhook('talk.bounds_pending', talk, db)
+
+    return {
+        'status': 'ok',
+        'approved_count': len(approved_ids),
+        'talk_ids': approved_ids,
+        'skipped_talk_ids': skipped_ids,
+        'recording_id': recording_id,
+    }
+
+
+@router.post('/recordings/{recording_id}/reject')
+def reject_recording(
+    recording_id: int,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    """Mark recording as rejected."""
+    recording, _ = _authorize_studio_recording(
+        recording_id, request, db, require_human=True
+    )
+    if recording.status == RecordingStatus.PENDING_ANALYSIS:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording is still being staged',
+        )
+    if recording.status == RecordingStatus.ATTACHED:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail='Recording is already attached',
+        )
+    recording.status = RecordingStatus.REJECTED
+    db.commit()
+    return {'status': 'ok', 'recording_id': recording_id}
 
 
 router.add_api_route(

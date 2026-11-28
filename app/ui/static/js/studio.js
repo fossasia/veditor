@@ -1806,103 +1806,10 @@ function initRightPanelCollapse() {
 
 // ── Bumper Studio Controls ───────────────────────────────────────
 function initBumperStudio() {
-  ['intro', 'outro'].forEach(type => {
-    const toggle = document.getElementById(`check-include-${type}`);
-    const wrap = document.getElementById(`${type}-options-wrap`);
-    if (toggle && wrap) {
-      toggle.addEventListener('change', () => wrap.classList.toggle('is-hidden', !toggle.checked));
-    }
-
-    const radios = document.querySelectorAll(`input[name="${type}_source"]`);
-    const customWrap = document.getElementById(`${type}-custom-wrap`);
-    const file = document.getElementById(`custom-${type}-file`);
-    const path = document.getElementById(`custom-${type}-path`);
-    const dropzone = document.getElementById(`${type}-dropzone`);
-    const fileName = document.getElementById(`${type}-file-name`);
-    let currentUploadGen = 0;
-
-    radios.forEach(r => {
-      r.addEventListener('change', () => {
-        radios.forEach(rad => rad.closest('.bumper-segment')?.classList.toggle('is-active', rad.checked));
-        if (customWrap) customWrap.classList.toggle('is-visible', r.value === 'custom' && r.checked);
-      });
-    });
-
-    async function handleSelectedFile(selected) {
-      if (!selected) return;
-      const uploadGen = ++currentUploadGen;
-      if (fileName) {
-        fileName.textContent = `${selected.name} (Uploading...)`;
-        fileName.classList.remove('is-ready');
-      }
-      if (path) path.value = selected.name;
-      try {
-        const fd = new FormData();
-        fd.append('file', selected);
-        fd.append('kind', type);
-        const res = await (window.authFetch || fetch)(`/talks/${getTalkId()}/bumpers/upload`, {
-          method: 'POST',
-          body: fd,
-        });
-        if (uploadGen !== currentUploadGen) return;
-        if (res.ok) {
-          const data = await res.json();
-          if (uploadGen !== currentUploadGen) return;
-          if (data.path) {
-            if (path) path.value = data.path;
-            if (fileName) {
-              fileName.textContent = `${selected.name} ✓`;
-              fileName.classList.add('is-ready');
-            }
-          }
-        }
-      } catch (_) {
-        if (uploadGen === currentUploadGen && fileName) {
-          fileName.textContent = selected.name;
-        }
-      }
-    }
-
-    if (file) {
-      file.addEventListener('change', () => {
-        const selected = file.files?.[0];
-        if (selected) handleSelectedFile(selected);
-      });
-    }
-
-    if (dropzone) {
-      ['dragenter', 'dragover'].forEach(name => {
-        dropzone.addEventListener(name, (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          dropzone.classList.add('drag-over');
-        });
-      });
-      ['dragleave', 'drop'].forEach(name => {
-        dropzone.addEventListener(name, (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          dropzone.classList.remove('drag-over');
-        });
-      });
-      dropzone.addEventListener('drop', (e) => {
-        const dt = e.dataTransfer;
-        const dropped = dt?.files?.[0];
-        if (dropped) {
-          if (file) {
-            try {
-              file.files = dt.files;
-            } catch (_) {}
-          }
-          handleSelectedFile(dropped);
-        }
-      });
-    }
-
-    if (path?.value && fileName && path.value.trim() !== '') {
-      fileName.classList.add('is-ready');
-    }
-  });
+  const talkId = getTalkId();
+  if (talkId && typeof window.initBumperControls === 'function') {
+    window.initBumperControls(`/talks/${talkId}/bumpers/upload`);
+  }
 }
 
 let studioPollInterval = null;

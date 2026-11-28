@@ -133,7 +133,12 @@ def get_bumper_staging_dir() -> Path:
 
 
 def stage_custom_clip(
-    talk_id: int, path_str: str, stage: str, backend: StorageBackend
+    talk_id: int,
+    path_str: str,
+    stage: str,
+    backend: StorageBackend,
+    *,
+    recording_id: int | None = None,
 ) -> str:
     """Validate a custom clip path against ingest roots and media constraints,
 
@@ -145,6 +150,11 @@ def stage_custom_clip(
     roots = [Path(r).resolve() for r in settings.ingest_roots]
     resolved_path = None
     target_path = Path(path_str)
+    staged_prefix = (
+        f'rec_bumper_{recording_id}_{stage}_'
+        if recording_id is not None
+        else f'bumper_{talk_id}_{stage}_'
+    )
     if target_path.is_absolute():
         try:
             candidate = target_path.resolve(strict=True)
@@ -157,7 +167,7 @@ def stage_custom_clip(
     elif (
         len(target_path.parts) == 2
         and target_path.parts[0] == 'bumpers'
-        and target_path.name.startswith(f'bumper_{talk_id}_{stage}_')
+        and target_path.name.startswith(staged_prefix)
     ):
         bumper_root = get_bumper_staging_dir().parent.resolve()
         try:
