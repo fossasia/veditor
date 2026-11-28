@@ -2297,7 +2297,11 @@ async def attach_room_recording(
             detail='Room name is required',
         )
     room = room.strip()
-    creator_id = user.user_id if (not user.is_machine and not user.is_sso) else None
+    creator_id = (
+        db.scalar(select(models.User.id).where(models.User.id == user.user_id))
+        if (not user.is_machine and not user.is_sso and user.user_id is not None)
+        else None
+    )
 
     # Resolve and authorize event
     if event_id is not None:

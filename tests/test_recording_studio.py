@@ -308,7 +308,7 @@ def test_stage_only_and_bulk_approval_attaches_only_selected_talks(
                     'room': 'Room 101',
                     'event_id': str(event.id),
                     'stage_only': 'true',
-                    'recording_start': '2026-10-30T08:30:00Z',
+                    'recording_start': '2026-10-30T09:00:00Z',
                 },
                 files={'file': ('morning_raw.mp4', f_vid, 'video/mp4')},
             )

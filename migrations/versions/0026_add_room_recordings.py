@@ -23,6 +23,7 @@ def upgrade() -> None:
         sa.Column('storage_key', sa.Text(), nullable=True),
         sa.Column('source_url', sa.Text(), nullable=True),
         sa.Column('recording_start', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('target_date', sa.Date(), nullable=True),
         sa.Column('duration_seconds', sa.Float(), nullable=True),
         sa.Column(
             'status',
